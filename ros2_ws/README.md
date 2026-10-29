@@ -17,14 +17,14 @@ MicroXRCEAgent udp4 --port 8888
 ### Terminal 2: PX4 SITL + Gazebo
 Launch PX4 Software-In-The-Loop with the standard quadcopter model:
 ```bash
-cd ~/Tools/PX4-Autopilot
+cd ~/path/PX4-Autopilot
 make px4_sitl gz_x500
 ```
 
 ### Terminal 3: Precision Landing ROS 2 Node
 Source the compiled workspace and run your landing controller node:
 ```bash
-cd ~/Projects/Engineering/University/UAV-Oscillating-Platform-Landing/codebase/ros2_ws
+cd ~/uav-oscillating-platform-landing/ros2_ws
 source install/setup.bash
 ros2 run precision_landing landing_node
 ```
