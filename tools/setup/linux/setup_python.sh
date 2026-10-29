@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-# Get project root directory relative to this script
+# Get project root directory relative to this script location (3 levels up)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ROOT_DIR="$SCRIPT_DIR/.."
+ROOT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
 
-echo "=== Setting up Python Environment ==="
+echo "=== Setting up Python Environment (Linux) ==="
 cd "$ROOT_DIR"
 
 # 1. Create .venv if it does not exist
@@ -23,7 +23,7 @@ source "$VENV_DIR/bin/activate"
 
 # 3. Upgrade pip
 echo "Upgrading pip..."
-pip install --upgrade pip
+python3 -m pip install --upgrade pip
 
 # 4. Install requirements if file exists
 if [ -f "requirements.txt" ]; then
