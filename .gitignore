@@ -1,15 +1,4 @@
 # ==========================================
-# ROS 2 Build Artifacts (Huge Folders)
-# ==========================================
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
-
-# Third-party / External ROS packages cloned inside src
-# (Users will clone px4_msgs following your README instructions)
-ros2_ws/src/px4_msgs/
-
-# ==========================================
 # Python & Virtual Environments
 # ==========================================
 .venv/
@@ -30,6 +19,17 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ==========================================
+# ROS 2 Build Artifacts
+# ==========================================
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Third-party / External ROS packages cloned inside src
+# (Users will clone px4_msgs following your README instructions)
+ros2_ws/src/px4_msgs/
 
 # ==========================================
 # Sensitive Configuration Files
