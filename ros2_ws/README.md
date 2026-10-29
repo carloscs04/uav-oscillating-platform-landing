@@ -2,6 +2,11 @@
 
 This document contains the terminal setup and execution instructions for running the PX4 SITL, Gazebo Harmonic simulation, Micro-XRCE-DDS bridge, and custom ROS 2 nodes.
 
+> **Automated Execution:** You can automatically launch the entire simulation stack (Micro-XRCE-DDS Agent, PX4 SITL + Gazebo, and ROS 2 nodes) using the provided launch script from the repository root:
+> ```bash
+> ./tools/launch/ros_simulation.sh
+> ```
+
 ---
 
 ## 1. Multi-Terminal Execution Workflow
