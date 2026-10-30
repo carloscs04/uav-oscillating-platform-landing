@@ -1,0 +1,9 @@
+# Build & Setup Tooling
+setuptools>=68.0.0
+wheel>=0.42.0
+
+# Core Project Dependencies
+pymavlink>=2.4.40
+PyYAML>=6.0
+opencv-python>=4.8.0
+numpy>=1.24.0

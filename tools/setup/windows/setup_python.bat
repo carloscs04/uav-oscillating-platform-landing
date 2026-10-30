@@ -15,15 +15,20 @@ if not exist "%ROOT_DIR%\.venv" (
     echo Existing .venv directory found.
 )
 
-REM 2. Activate virtual environment into current terminal session
+REM 2. Enforce strict isolation (disable system site packages)
+if exist "%ROOT_DIR%\.venv\pyvenv.cfg" (
+    py -3.12 -c "import pathlib; p = pathlib.Path(r'%ROOT_DIR%\.venv\pyvenv.cfg'); p.write_text(p.read_text().replace('include-system-site-packages = true', 'include-system-site-packages = false'))"
+)
+
+REM 3. Activate virtual environment into current terminal session
 echo Activating virtual environment...
 call "%ROOT_DIR%\.venv\Scripts\activate.bat"
 
-REM 3. Upgrade pip
+REM 4. Upgrade pip
 echo Upgrading pip...
 python -m pip install --upgrade pip
 
-REM 4. Install requirements if file exists
+REM 5. Install requirements if file exists
 if exist "%ROOT_DIR%\requirements.txt" (
     echo Installing Python dependencies from requirements.txt...
     pip install -r "%ROOT_DIR%\requirements.txt"
@@ -31,7 +36,7 @@ if exist "%ROOT_DIR%\requirements.txt" (
     echo requirements.txt not found, skipping...
 )
 
-REM 5. Install codebase in editable mode
+REM 6. Install codebase in editable mode
 if exist "%ROOT_DIR%\setup.py" (
     echo Installing project root in editable mode...
     pip install -e . --config-settings editable_mode=compat
@@ -39,7 +44,7 @@ if exist "%ROOT_DIR%\setup.py" (
     echo Root setup.py not found, skipping...
 )
 
-REM 6. Clean build artifacts (.egg-info)
+REM 7. Clean build artifacts (.egg-info)
 echo Cleaning up .egg-info directories...
 for /d %%i in ("%ROOT_DIR%\*.egg-info") do rmdir /s /q "%%i"
 

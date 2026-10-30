@@ -17,15 +17,20 @@ else
     echo "Existing .venv directory found."
 fi
 
-# 2. Activate virtual environment
+# 2. Enforce strict isolation (disable system site packages)
+if [ -f "$ROOT_DIR/.venv/pyvenv.cfg" ]; then
+    sed -i 's/include-system-site-packages = true/include-system-site-packages = false/g' "$ROOT_DIR/.venv/pyvenv.cfg"
+fi
+
+# 3. Activate virtual environment
 echo "Activating virtual environment (.venv)..."
 source "$VENV_DIR/bin/activate"
 
-# 3. Upgrade pip
+# 4. Upgrade pip
 echo "Upgrading pip..."
 python3 -m pip install --upgrade pip
 
-# 4. Install requirements if file exists
+# 5. Install requirements if file exists
 if [ -f "requirements.txt" ]; then
     echo "Installing Python dependencies from requirements.txt..."
     pip install -r requirements.txt
@@ -33,7 +38,7 @@ else
     echo "requirements.txt not found, skipping..."
 fi
 
-# 5. Install codebase in editable mode
+# 6. Install codebase in editable mode
 if [ -f "setup.py" ]; then
     echo "Installing project root in editable mode (pip install -e .)..."
     pip install -e . --config-settings editable_mode=compat
@@ -41,7 +46,7 @@ else
     echo "Root setup.py not found, skipping..."
 fi
 
-# 6. Clean build artifacts (.egg-info)
+# 7. Clean build artifacts (.egg-info)
 echo "Cleaning up .egg-info directories..."
 rm -rf *.egg-info
 
