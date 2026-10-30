@@ -17,7 +17,7 @@ Initializes a standardized Python virtual environment (`.venv`) for Linux develo
 
 ### Usage
 ```bash
-./tools/setup/linux/setup_python.sh
+source tools/setup/linux/setup_python.sh
 ```
 
 ---
@@ -34,6 +34,6 @@ Initializes, synchronizes, and builds the ROS 2 workspace (`ros2_ws`) to guarant
 
 ### Usage
 ```bash
-./tools/setup/linux/setup_ros.sh
+bash tools/setup/linux/setup_ros.sh
 ```
 

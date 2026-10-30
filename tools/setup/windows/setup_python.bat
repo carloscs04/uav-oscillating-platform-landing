@@ -1,5 +1,4 @@
 @echo off
-setlocal enabledelayedexpansion
 
 :: Get root directory relative to script (3 levels up from tools\setup\windows)
 set "SCRIPT_DIR=%~dp0"
@@ -16,7 +15,7 @@ if not exist "%ROOT_DIR%\.venv" (
     echo Existing .venv directory found.
 )
 
-:: 2. Activate virtual environment
+:: 2. Activate virtual environment into current terminal session
 echo Activating virtual environment (.venv)...
 call "%ROOT_DIR%\.venv\Scripts\activate.bat"
 
@@ -35,10 +34,9 @@ if exist "%ROOT_DIR%\requirements.txt" (
 :: 5. Install codebase in editable mode
 if exist "%ROOT_DIR%\setup.py" (
     echo Installing project root in editable mode (pip install -e .)...
-    pip install -e .
+    pip install -e . --config-settings editable_mode=compat
 ) else (
     echo Root setup.py not found, skipping...
 )
 
 echo === Python Setup Complete! Virtual environment is active. ===
-pause

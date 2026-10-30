@@ -36,7 +36,7 @@ fi
 # 5. Install codebase in editable mode
 if [ -f "setup.py" ]; then
     echo "Installing project root in editable mode (pip install -e .)..."
-    pip install -e .
+    pip install -e . --config-settings editable_mode=compat
 else
     echo "Root setup.py not found, skipping..."
 fi
