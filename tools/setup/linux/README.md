@@ -20,20 +20,3 @@ Initializes a standardized Python virtual environment (`.venv`) for Linux develo
 source tools/setup/linux/setup_python.sh
 ```
 
----
-
-## 2. `setup_ros.sh`
-
-### Purpose
-Initializes, synchronizes, and builds the ROS 2 workspace (`ros2_ws`) to guarantee uORB message definition compatibility between PX4 SITL and ROS 2 nodes.
-
-### What It Does
-- **Clones `px4_msgs`:** Checks if `ros2_ws/src/px4_msgs` exists; clones the official repository if missing.
-- **Synchronizes Message Definitions:** Copies `.msg` files directly from `$HOME/Tools/PX4-Autopilot/msg/` (and its `versioned/` directory) into `px4_msgs/msg/`. This aligns message struct layouts (such as 96-byte payload matches) between PX4 SITL firmware and ROS 2 topics.
-- **Clean Build:** Purges old build artifacts (`build/`, `install/`, `log/`) to eliminate CMake cache conflicts, then compiles the workspace using `colcon build`.
-
-### Usage
-```bash
-bash tools/setup/linux/setup_ros.sh
-```
-

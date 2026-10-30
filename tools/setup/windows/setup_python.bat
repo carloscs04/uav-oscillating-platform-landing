@@ -39,4 +39,8 @@ if exist "%ROOT_DIR%\setup.py" (
     echo Root setup.py not found, skipping...
 )
 
+:: 6. Clean build artifacts (.egg-info)
+echo Cleaning up .egg-info directories...
+for /d %%i in ("%ROOT_DIR%\*.egg-info") do rmdir /s /q "%%i"
+
 echo === Python Setup Complete! Virtual environment is active. ===

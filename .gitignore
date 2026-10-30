@@ -27,10 +27,6 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 
-# Third-party / External ROS packages cloned inside src
-# (Users will clone px4_msgs following your README instructions)
-ros2_ws/src/px4_msgs/
-
 # ==========================================
 # Sensitive Configuration Files
 # ==========================================

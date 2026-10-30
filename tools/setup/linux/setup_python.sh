@@ -41,4 +41,8 @@ else
     echo "Root setup.py not found, skipping..."
 fi
 
+# 6. Clean build artifacts (.egg-info)
+echo "Cleaning up .egg-info directories..."
+rm -rf *.egg-info
+
 echo "=== Python Setup Complete! Virtual environment is active. ==="
