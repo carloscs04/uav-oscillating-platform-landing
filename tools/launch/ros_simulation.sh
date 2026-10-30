@@ -31,14 +31,3 @@ launch_gnome "1. Micro-XRCE-DDS Agent" \
 # 2. Terminal 2: PX4 SITL + Gazebo
 launch_gnome "2. PX4 SITL Gazebo" \
 "echo '[2/3] Starting PX4 SITL & Gazebo...'; cd '$PX4_DIR' && make px4_sitl gz_x500"
-
-# Allow PX4 SITL and Gazebo server to initialize
-sleep 6
-
-# 3. Terminal 3: ROS 2 Precision Landing Node
-launch_gnome "3. ROS 2 Landing Node" \
-"echo '[3/3] Sourcing ROS 2, building workspace & launching node...'; \
-if [ -f /opt/ros/humble/setup.bash ]; then source /opt/ros/humble/setup.bash; \
-elif [ -f /opt/ros/jazzy/setup.bash ]; then source /opt/ros/jazzy/setup.bash; \
-elif [ -f ~/.bashrc ]; then source ~/.bashrc; fi; \
-cd '$WS_DIR' && colcon build --symlink-install && source install/setup.bash && ros2 run precision_landing landing_node"
