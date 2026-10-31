@@ -1,6 +1,6 @@
 # src/main.py
 import time
-from src.interfaces.hardware.mavlink.launcher import MAVLinkLauncher
+from interfaces.hardware.mavlink.manager import MAVLinkLauncher
 
 def boot():
     print("=== Testing MAVLink Connection with PX4 SITL ===")

@@ -1,6 +1,4 @@
 mavlink:
-  active_mode: "SIMULATION" # Options: "SIMULATION" or "HARDWARE"
-  
   targets:
     SIMULATION:
       uri: "udp:127.0.0.1:14540"
@@ -10,5 +8,5 @@ mavlink:
       baud_rate: 921600
 
   settings:
-    heartbeat_timeout: 5.0
-    max_connection_retries: 3
+    heartbeat_timeout: 3.0
+    max_connection_retries: 15
