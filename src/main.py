@@ -1,29 +1,29 @@
 import time
-from src.core.drone_state import DroneState
-from src.modules.vision.tracker import TargetTracker
-from src.modules.control.pid_controller import PlatformTrackingController
+import signal
+import sys
+from logic.master.master_node import MasterNode
+
 
 def main():
-    print("==================================================")
-    print(" Starting UAV OPL Pure Python Testing Engine")
-    print("==================================================")
-    
-    state = DroneState(timestamp=time.time(), x=0.0, y=0.0, z=3.0, armed=True)
-    tracker = TargetTracker()
-    controller = PlatformTrackingController(kp_xy=0.8, kp_z=0.5)
+    print("=== [LAUNCHER] Booting Onboard Raspberry Pi Stack ===")
 
-    # Simulated loop execution without ROS
-    target = tracker.process_frame(raw_data=b"mock_frame_bytes", width=640, height=480)
-    cmd = controller.compute_velocities(
-        drone_z=state.z,
-        target_x=target['x'],
-        target_y=target['y']
-    )
+    # Instantiate and start Master Node supervisor
+    master = MasterNode()
+    master.start()
 
-    print(f"[STATE] Drone Altitude: {state.z}m")
-    print(f"[VISION] Relative Target Position: {target}")
-    print(f"[CONTROL] Calculated Output Setpoints: {cmd}")
-    print("==================================================")
+    # Graceful shutdown handler
+    def handle_shutdown(sig, frame):
+        print("\n=== [LAUNCHER] Shutdown signal caught. Stopping Master Node... ===")
+        master.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # Launcher thread stays alive while master node is active
+    while master.is_running:
+        time.sleep(1.0)
+
 
 if __name__ == "__main__":
     main()
