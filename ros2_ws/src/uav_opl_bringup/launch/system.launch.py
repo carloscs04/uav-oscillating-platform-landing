@@ -1,33 +1,49 @@
+import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch_ros.actions import Node
+from launch.actions import ExecuteProcess
 
 
 def generate_launch_description():
-    use_sim_arg = DeclareLaunchArgument(
-        'use_sim',
-        default_value='true',
-        description='Launch in simulation mode (true) or real hardware mode (false)'
+    uav_mode = os.environ.get('UAV_MODE', 'HARDWARE')
+    px4_dir = os.environ.get('PX4_DIR', os.path.expanduser('~/Tools/PX4-Autopilot'))
+    
+    # Absolute path to current workspace setup script
+    ws_setup = os.path.abspath('install/setup.bash')
+
+    # Environment isolation wrapper to prevent GTK/GSettings crashes
+    clean_env_prefix = [
+        'env',
+        'XDG_DATA_DIRS=/usr/share/ubuntu:/usr/local/share:/usr/share',
+        'GSETTINGS_SCHEMA_DIR=',
+        'GTK_PATH=',
+        'gnome-terminal'
+    ]
+
+    actions = []
+
+    # 1. Terminal 1: Master Node Terminal (BOTH SIMULATION and HARDWARE)
+    master_terminal_cmd = ExecuteProcess(
+        cmd=clean_env_prefix + [
+            '--title=System Master Console',
+            '--',
+            'bash', '-c', f'source /opt/ros/jazzy/setup.bash && source "{ws_setup}" && ros2 run system_master master_node; exec bash'
+        ],
+        output='screen'
     )
+    actions.append(master_terminal_cmd)
+    
 
-    use_sim = LaunchConfiguration('use_sim')
+    # 2. Terminal 2: Gazebo SITL (SIMULATION ONLY)
+    if uav_mode == 'SIMULATION':
+        gazebo_terminal_cmd = ExecuteProcess(
+            cmd=clean_env_prefix + [
+                '--title=PX4 SITL Gazebo',
+                '--',
+                'bash', '-c', f'cd "{px4_dir}" && make px4_sitl gz_x500; exec bash'
+            ],
+            output='screen'
+        )
+        actions.append(gazebo_terminal_cmd)
 
-    mode_param = PythonExpression([
-        "'SIMULATION' if '", use_sim, "'.lower() == 'true' else 'HARDWARE'"
-    ])
-
-    px4_mavlink_node = Node(
-        package='px4_mavlink',
-        executable='px4_node',
-        name='px4_node',
-        output='screen',
-        parameters=[{
-            'mode': mode_param
-        }]
-    )
-
-    return LaunchDescription([
-        use_sim_arg,
-        px4_mavlink_node,
-    ])
+    
+    return LaunchDescription(actions)

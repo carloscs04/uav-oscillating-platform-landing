@@ -4,7 +4,7 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
 # Import Manager from pure Python core
-from src.interfaces.hardware.mavlink.manager import MAVLinkManager
+from interfaces.mavlink.manager import MAVLinkManager
 
 
 class PX4Node(Node):
