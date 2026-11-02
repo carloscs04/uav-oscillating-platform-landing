@@ -4,7 +4,7 @@ mavlink:
       uri: "udp:127.0.0.1:14540"
       baud_rate: 921600
     HARDWARE:
-      uri: "/dev/ttyAMA0"
+      uri: "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
       baud_rate: 921600
 
   settings:
