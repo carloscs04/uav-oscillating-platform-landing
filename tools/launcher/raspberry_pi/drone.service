@@ -1,0 +1,14 @@
+[Unit]
+Description=Autonomous Drone Onboard System
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/codebase
+ExecStart=/home/pi/codebase/tools/launcher/raspberry_pi/run_pi.sh
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

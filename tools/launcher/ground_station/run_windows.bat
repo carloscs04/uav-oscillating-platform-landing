@@ -1,9 +1,9 @@
 @echo off
 setlocal
 
-# Get root directory (1 level up from launch\)
+:: Get root directory (3 levels up from tools\launcher\ground_station\)
 set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%.."
+cd /d "%SCRIPT_DIR%..\..\.."
 set "ROOT_DIR=%CD%"
 
 echo ==================================================

@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e
 
+# Resolve repository root (3 levels up from tools/launcher/ground_station)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ROOT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
+ROOT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
+
+cd "$ROOT_DIR"
 
 # Default to hardware mode
 MODE="real"
