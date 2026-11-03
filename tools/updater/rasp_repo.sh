@@ -16,7 +16,7 @@ if [ ! -d "$TARGET_DIR/.git" ]; then
     cd "$TARGET_DIR"
     
     # Define EXACTLY which folders/files should exist on the Raspberry Pi
-    git sparse-checkout set src tools requirements.txt setup.py
+    git sparse-checkout set src tools
 else
     echo "[+] Repository found. Pulling latest changes..."
     # If it already exists, simply pull the latest changes
