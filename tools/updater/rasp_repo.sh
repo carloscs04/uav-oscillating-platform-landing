@@ -2,7 +2,7 @@
 set -e
 
 REPO_URL="${1:-https://github.com/carloscs04/uav-oscillating-platform-landing.git}"
-TARGET_DIR="/home/pi/codebase"
+TARGET_DIR="/home/pi/uav-opl"
 
 echo "=================================================="
 echo " Syncing Production Codebase from GitHub"
@@ -30,5 +30,4 @@ rm -rf "$TARGET_DIR/.git" "$TARGET_DIR/ros2_ws"
 
 echo "=================================================="
 echo " Sync Complete! Clean production codebase ready."
-echo " Verified: No .git history | No ros2_ws"
 echo "=================================================="

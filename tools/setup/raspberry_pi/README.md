@@ -12,10 +12,10 @@ Execute these commands inside your physical Raspberry Pi terminal or inside an a
 # 1. Install base OS package dependencies and prepare project target directory
 SUDO=$(command -v sudo || true)
 $SUDO apt-get update &&$SUDO apt-get install -y git curl
-mkdir -p /home/pi/codebase && cd /home/pi/codebase
+mkdir -p /home/pi/uav-opl && cd /home/pi/uav-opl
 
 # 2. Fetch lightweight updater logic to /tmp and pull clean production codebase
-curl -sSL [https://raw.githubusercontent.com/carloscs04/uav-oscillating-platform-landing/main/tools/updater/rasp_repo.sh](https://raw.githubusercontent.com/carloscs04/uav-oscillating-platform-landing/main/tools/updater/rasp_repo.sh) -o /tmp/rasp_repo.sh
+curl -sSL https://raw.githubusercontent.com/carloscs04/uav-oscillating-platform-landing/main/tools/updater/rasp_repo.sh -o /tmp/rasp_repo.sh
 chmod +x /tmp/rasp_repo.sh
 /tmp/rasp_repo.sh
 
