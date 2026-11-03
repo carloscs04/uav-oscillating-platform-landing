@@ -12,16 +12,22 @@ echo "=================================================="
 mkdir -p "$TARGET_DIR"
 cd "$TARGET_DIR"
 
-# 1. Initial sparse clone if repository does not exist
+# 1. Initialize git repo if not present (works in non-empty folders)
 if [ ! -d ".git" ]; then
-    echo "[+] Initializing sparse clone from GitHub..."
-    git clone --filter=blob:none --no-checkout "$REPO_URL" .
+    echo "[+] Initializing Git repo in target directory..."
+    git init
+    git remote add origin "$REPO_URL" 2>/dev/null || git remote set-url origin "$REPO_URL"
 fi
 
-# 2. Enforce non-cone sparse checkout (pulls ONLY src, tools, requirements.txt, setup.py)
+# 2. Set sparse-checkout patterns (--no-cone mode)
 echo "[+] Setting production sparse-checkout patterns..."
+git config core.sparseCheckout true
 git sparse-checkout set --no-cone "src/*" "tools/*" "requirements.txt" "setup.py"
-git checkout main || git checkout master
+
+# 3. Fetch latest main branch and force checkout
+echo "[+] Fetching latest codebase from GitHub..."
+git fetch --filter=blob:none origin main
+git checkout -f main
 
 echo "=================================================="
 echo " GitHub Sync Complete!"
