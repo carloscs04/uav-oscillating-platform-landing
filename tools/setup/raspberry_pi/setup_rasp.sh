@@ -28,8 +28,11 @@ UPDATER_SCRIPT="$ROOT_DIR/tools/updater/rasp_repo.sh"
 if [ -f "$UPDATER_SCRIPT" ]; then
     echo "[+] Executing repo sync via rasp_repo.sh..."
     bash "$UPDATER_SCRIPT"
+elif [ -f "/tmp/rasp_repo.sh" ]; then
+    echo "[+] Executing repo sync via /tmp/rasp_repo.sh..."
+    bash "/tmp/rasp_repo.sh"
 else
-    echo "[!] Warning: rasp_repo.sh not found at $UPDATER_SCRIPT. Skipping Git sync."
+    echo "[!] Warning: rasp_repo.sh not found. Skipping Git sync."
 fi
 
 # 4. Create Python virtual environment (.venv)
@@ -42,14 +45,20 @@ VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 $VENV_PYTHON -m pip install --upgrade pip
 
 if [ -f "requirements.txt" ]; then
+    echo "[+] Installing dependencies from requirements.txt..."
     $VENV_PYTHON -m pip install -r requirements.txt
 fi
 
-if [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
-    $VENV_PYTHON -m pip install -e .
+if [ -f "setup.py" ]; then
+    echo "[+] Installing project in editable compat mode..."
+    $VENV_PYTHON -m pip install -e . --config-settings editable_mode=compat
 fi
 
-# 5. Register systemd auto-start service
+# 5. Clean build artifacts (.egg-info)
+echo "[+] Cleaning up .egg-info build artifacts..."
+rm -rf *.egg-info build/ dist/
+
+# 6. Register systemd auto-start service
 SERVICE_SRC="$ROOT_DIR/tools/launcher/raspberry_pi/drone.service"
 if [ -f "$SERVICE_SRC" ]; then
     echo "[+] Registering drone.service..."
