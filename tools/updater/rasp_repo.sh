@@ -1,34 +1,32 @@
 #!/bin/bash
 set -e
 
-# 1. Cambiado a conexión SSH para aprovechar la Deploy Key
 REPO_URL="${1:-git@github.com:carloscs04/uav-oscillating-platform-landing.git}"
 TARGET_DIR="/home/pi/uav-opl"
 
 echo "=================================================="
-echo " Syncing Production Codebase from GitHub"
-echo " Target Directory: $TARGET_DIR"
+echo " Syncing Production Codebase (Sparse) from GitHub"
 echo "=================================================="
 
-mkdir -p "$TARGET_DIR"
+# Initialize the repository if it does not exist
+if [ ! -d "$TARGET_DIR/.git" ]; then
+    echo "[+] Cloning repository with sparse-checkout enabled..."
+    # Clone the basic structure without downloading files yet
+    git clone --filter=blob:none --sparse "$REPO_URL" "$TARGET_DIR"
+    cd "$TARGET_DIR"
+    
+    # Define EXACTLY which folders/files should exist on the Raspberry Pi
+    git sparse-checkout set src tools requirements.txt setup.py
+else
+    echo "[+] Repository found. Pulling latest changes..."
+    # If it already exists, simply pull the latest changes
+    cd "$TARGET_DIR"
+    git pull origin main
+fi
 
-# Fetch to temporary staging folder
-TMP_DIR=$(mktemp -d)
-echo "[+] Fetching fresh production archive to staging..."
-# Quitamos --depth 1 temporalmente para tener el historial completo y poder hacer push
-git clone "$REPO_URL" "$TMP_DIR"
-
-echo "[+] Transferring production files..."
-cp -r "$TMP_DIR/src" "$TARGET_DIR/" 2>/dev/null || true
-cp -r "$TMP_DIR/tools" "$TARGET_DIR/" 2>/dev/null || true
-[ -f "$TMP_DIR/requirements.txt" ] && cp "$TMP_DIR/requirements.txt" "$TARGET_DIR/"
-[ -f "$TMP_DIR/setup.py" ] && cp "$TMP_DIR/setup.py" "$TARGET_DIR/"
-cp -r "$TMP_DIR/.git" "$TARGET_DIR/" 2>/dev/null || true
-
-# Clean up staging area and enforce strict folder exclusion
-rm -rf "$TMP_DIR"
+# Clean up local build directories (this does not affect Git)
 rm -rf "$TARGET_DIR/ros2_ws"
 
 echo "=================================================="
-echo " Sync Complete! Clean production codebase ready."
+echo " Sync Complete! Sparse production codebase ready."
 echo "=================================================="
