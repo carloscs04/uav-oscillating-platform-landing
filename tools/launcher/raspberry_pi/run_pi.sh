@@ -1,27 +1,23 @@
 #!/bin/bash
 set -e
 
+# Get project root directory (3 levels up from tools/launcher/raspberry_pi)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROOT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
 
-cd "$ROOT_DIR"
+echo "=== Launching UAV Main Script on Raspberry Pi ==="
+echo "[+] Project Root: $ROOT_DIR"
 
-echo "=================================================="
-echo " Starting Raspberry Pi Application"
-echo "=================================================="
-
-# 1. Call dedicated updater to pull newest GitHub code
-UPDATER_SCRIPT="$ROOT_DIR/tools/updater/rasp_repo.sh"
-if [ -f "$UPDATER_SCRIPT" ]; then
-    bash "$UPDATER_SCRIPT"
-fi
-
-# 2. Activate virtual environment and run main entrypoint
-if [ -d ".venv" ]; then
-    source .venv/bin/activate
-    echo "[+] Launching application..."
-    python3 src/main.py
+# 1. Activate virtual environment
+if [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
+    source "$ROOT_DIR/.venv/bin/activate"
+    echo "[+] Virtual environment activated."
 else
-    echo "[!] Virtual environment missing. Please run setup_rasp.sh first."
+    echo "[!] Error: .venv not found at $ROOT_DIR/.venv"
     exit 1
 fi
+
+# 2. Run the main Python entrypoint
+# (Adjust src/main.py if your entrypoint file has a different name)
+echo "[+] Starting Python application..."
+python3 "$ROOT_DIR/src/main.py"
