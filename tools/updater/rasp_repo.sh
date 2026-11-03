@@ -22,7 +22,6 @@ cp -r "$TMP_DIR/src" "$TARGET_DIR/" 2>/dev/null || true
 cp -r "$TMP_DIR/tools" "$TARGET_DIR/" 2>/dev/null || true
 [ -f "$TMP_DIR/requirements.txt" ] && cp "$TMP_DIR/requirements.txt" "$TARGET_DIR/"
 [ -f "$TMP_DIR/setup.py" ] && cp "$TMP_DIR/setup.py" "$TARGET_DIR/"
-[ -f "$TMP_DIR/pyproject.toml" ] && cp "$TMP_DIR/pyproject.toml" "$TARGET_DIR/"
 
 # 3. Clean up staging area and enforce strict folder exclusion
 rm -rf "$TMP_DIR"
