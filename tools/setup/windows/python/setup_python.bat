@@ -1,8 +1,8 @@
 @echo off
 
-REM Get root directory relative to script (3 levels up from tools\setup\windows)
+REM Get root directory relative to script (4 levels up from tools\setup\windows)
 set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%..\..\.."
+cd /d "%SCRIPT_DIR%..\..\..\.."
 set "ROOT_DIR=%CD%"
 
 echo === Setting up Python Environment Windows ===

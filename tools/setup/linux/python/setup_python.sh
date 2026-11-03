@@ -3,7 +3,7 @@ set -e
 
 # Get project root directory relative to this script location (3 levels up)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-ROOT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
+ROOT_DIR="$( cd "$SCRIPT_DIR/../../../.." && pwd )"
 
 echo "=== Setting up Python Environment (Linux) ==="
 cd "$ROOT_DIR"
