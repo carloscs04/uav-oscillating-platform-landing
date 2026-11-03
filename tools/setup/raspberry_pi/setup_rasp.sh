@@ -18,12 +18,12 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
-# 2. Install base OS packages via apt (Incluyendo Python 3.12 y precompilados)
+# 2. Install base OS packages via apt (Regresamos a python3 genérico)
 echo "[+] Installing system packages (apt)..."
 apt-get update -y
-apt-get install -y apt-utils git sudo python3.12 python3.12-venv python3-pip python3-opencv python3-numpy
+apt-get install -y apt-utils git sudo python3 python3-venv python3-pip python3-opencv python3-numpy
 
-# 3. Call dedicated updater to pull/sync repository from GitHub (Usando usuario 'pi' para la llave SSH)
+# 3. Call dedicated updater to pull/sync repository from GitHub
 UPDATER_SCRIPT="$ROOT_DIR/tools/updater/rasp_repo.sh"
 if [ -f "$UPDATER_SCRIPT" ]; then
     echo "[+] Executing repo sync via rasp_repo.sh..."
@@ -35,10 +35,10 @@ else
     echo "[!] Warning: rasp_repo.sh not found. Skipping Git sync."
 fi
 
-# 4. Create Python 3.12 virtual environment con acceso a los binarios del sistema (OpenCV/Numpy)
+# 4. Create Python virtual environment con acceso a los binarios del sistema (OpenCV/Numpy)
 if [ ! -d ".venv" ]; then
-    echo "[+] Creating Python 3.12 virtual environment (.venv)..."
-    python3.12 -m venv --system-site-packages .venv
+    echo "[+] Creating Python virtual environment (.venv)..."
+    python3 -m venv --system-site-packages .venv
 fi
 
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
