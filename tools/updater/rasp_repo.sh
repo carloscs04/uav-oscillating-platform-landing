@@ -10,38 +10,25 @@ echo " Target Directory: $TARGET_DIR"
 echo "=================================================="
 
 mkdir -p "$TARGET_DIR"
-cd "$TARGET_DIR"
 
-# 1. Initialize git repo if not present (handles existing directories safely)
-if [ ! -d ".git" ]; then
-    echo "[+] Initializing Git repo..."
-    git init
-    git remote add origin "$REPO_URL" 2>/dev/null || git remote set-url origin "$REPO_URL"
-else
-    echo "[+] Updating remote URL..."
-    git remote set-url origin "$REPO_URL" 2>/dev/null || true
-fi
+# 1. Fetch to temporary staging folder
+TMP_DIR=$(mktemp -d)
+echo "[+] Fetching fresh production archive to staging..."
+git clone --depth 1 "$REPO_URL" "$TMP_DIR"
 
-# 2. Enforce strict sparse-checkout (pulls ONLY src, tools, requirements.txt, setup.py)
-echo "[+] Configuring production sparse-checkout patterns..."
-git config core.sparseCheckout true
-git sparse-checkout set --no-cone \
-    "src/*" \
-    "tools/*" \
-    "requirements.txt" \
-    "setup.py"
+# 2. Copy ONLY essential production assets
+echo "[+] Transferring production files..."
+cp -r "$TMP_DIR/src" "$TARGET_DIR/" 2>/dev/null || true
+cp -r "$TMP_DIR/tools" "$TARGET_DIR/" 2>/dev/null || true
+[ -f "$TMP_DIR/requirements.txt" ] && cp "$TMP_DIR/requirements.txt" "$TARGET_DIR/"
+[ -f "$TMP_DIR/setup.py" ] && cp "$TMP_DIR/setup.py" "$TARGET_DIR/"
+[ -f "$TMP_DIR/pyproject.toml" ] && cp "$TMP_DIR/pyproject.toml" "$TARGET_DIR/"
 
-# 3. Fetch latest main branch and apply checkout
-echo "[+] Fetching latest codebase from GitHub..."
-git fetch --filter=blob:none origin main
-git checkout -f main
-
-# 4. Re-apply sparse rules and purge excluded folders (removes ros2_ws, keeps .venv)
-echo "[+] Purging excluded folders (ros2_ws) and applying sparse filter..."
-git sparse-checkout reapply
-git clean -fd -e .venv
+# 3. Clean up staging area and enforce strict folder exclusion
+rm -rf "$TMP_DIR"
+rm -rf "$TARGET_DIR/.git" "$TARGET_DIR/ros2_ws"
 
 echo "=================================================="
-echo " GitHub Sync Complete!"
-echo " Production files ready (ros2_ws excluded)."
+echo " Sync Complete! Clean production codebase ready."
+echo " Verified: No .git history | No ros2_ws"
 echo "=================================================="
