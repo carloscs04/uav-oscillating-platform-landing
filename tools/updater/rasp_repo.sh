@@ -5,7 +5,7 @@ REPO_URL="${1:-git@github.com:carloscs04/uav-oscillating-platform-landing.git}"
 TARGET_DIR="/home/pi/uav-opl"
 
 echo "=================================================="
-echo " Syncing Production Codebase (Sparse) from GitHub"
+echo " Syncing Production (Sparse) from GitHub"
 echo "=================================================="
 
 # Initialize the repository if it does not exist
@@ -17,7 +17,7 @@ if [ ! -d "$TARGET_DIR/.git" ]; then
     cd "$TARGET_DIR"
     
     # Disable cone mode and set exact files/folders to include
-    git sparse-checkout set --no-cone /src/ /tools/ /requirements.txt /setup.py
+    git sparse-checkout set --no-cone /src/ /tools/ /tests/ /requirements.txt /setup.py
 else
     echo "[+] Repository found. Pulling latest changes..."
     cd "$TARGET_DIR"
