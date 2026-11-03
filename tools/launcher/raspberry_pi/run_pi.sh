@@ -6,14 +6,22 @@ ROOT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
 
 cd "$ROOT_DIR"
 
-export PYTHONUNBUFFERED=1
-export UAV_MODE="REAL"
+echo "=================================================="
+echo " Starting Raspberry Pi Application"
+echo "=================================================="
 
-if [ -f ".venv/bin/activate" ]; then
-    source .venv/bin/activate
-else
-    echo "[Error] .venv not found! Run tools/setup/raspberry_pi/setup_rasp.sh first."
-    exit 1
+# 1. Call dedicated updater to pull newest GitHub code
+UPDATER_SCRIPT="$ROOT_DIR/tools/updater/rasp_repo.sh"
+if [ -f "$UPDATER_SCRIPT" ]; then
+    bash "$UPDATER_SCRIPT"
 fi
 
-exec python -m src.main
+# 2. Activate virtual environment and run main entrypoint
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+    echo "[+] Launching application..."
+    python3 src/main.py
+else
+    echo "[!] Virtual environment missing. Please run setup_rasp.sh first."
+    exit 1
+fi
