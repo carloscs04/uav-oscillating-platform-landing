@@ -4,5 +4,5 @@ setup(
     name="uav-oscillating-platform-landing",
     version="0.1.0",
     packages=find_namespace_packages(),
-    python_requires=">=3.12, <3.13",
+    python_requires=">=3.11, <3.13",
 )
