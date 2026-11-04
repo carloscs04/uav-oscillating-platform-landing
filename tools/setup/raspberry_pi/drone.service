@@ -1,0 +1,16 @@
+[Unit]
+Description=Drone Onboard Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/uav-opl
+ExecStart=/home/pi/uav-opl/src/launchers/start_onboard.sh
+ExecStop=/home/pi/uav-opl/src/launchers/stop_onboard.sh
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
