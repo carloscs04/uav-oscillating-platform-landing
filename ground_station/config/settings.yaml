@@ -1,0 +1,17 @@
+# Global Ground Station Parameters
+
+network:
+  telemetry_port: 5005
+  command_port: 5006
+  video_port: 8080
+  ping_timeout_sec: 2
+  ping_count: 2
+
+credentials:
+  pi_user: "pi"  #[cite: 4, 8]
+  pi_pass: "123" #[cite: 4, 8]
+  ssh_port: 22
+
+paths:
+  remote_repo: "~/uav-opl"
+  remote_start_script: "~/uav-opl/src/launchers/start .sh"

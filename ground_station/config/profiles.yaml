@@ -1,0 +1,30 @@
+# Ground Station Network Profiles
+
+# Default mode when running launcher with no arguments
+default_profile: "school"
+
+profiles:
+  school:
+    name: "School/Lab Wi-Fi (Default)"
+    pi_ip: "10.22.246.2"     # School lab target IP
+    port_telemetry: 5005
+    port_command: 5006
+    port_video: 8080
+
+  usb:
+    name: "USB Tether / Direct Cable"
+    pi_ip: "10.42.0.51"
+    port_telemetry: 5005
+    port_command: 5006
+    port_video: 8080
+
+  ap:
+    name: "Raspberry Pi Hotspot AP"
+    pi_ip: "192.168.4.1"
+    port_telemetry: 5005
+    port_command: 5006
+    port_video: 8080
+
+  auto:
+    name: "Auto-Discovery Mode"
+    fallback_sequence: ["wifi", "usb", "ap"]
