@@ -13,7 +13,7 @@ class LinkState:
     STOPPED = "STOPPED"
 
 class PiLink:
-    def __init__(self, config_dir: str, mode: str = "wifi"):
+    def __init__(self, config_dir: str, mode: str = "school"):
         self.config_dir = config_dir
         self.requested_mode = mode
         
