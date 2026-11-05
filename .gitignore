@@ -32,3 +32,6 @@ ros2_ws/log/
 # ==========================================
 configs/*.env
 *.log
+
+# Camera test output
+captures/

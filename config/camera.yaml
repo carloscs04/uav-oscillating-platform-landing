@@ -1,0 +1,37 @@
+# Camera settings shared by every script in tools/setup/camera.
+# Change values here, not in the scripts. See tools/setup/camera/README.md for
+# which steps to rerun after a change.
+
+# Full sensor, binned -> full FOV. Changing this requires recalibrating.
+sensor_mode: [1640, 1232]
+output_size: [640, 480]
+
+# Relative to this folder. Created by tools/setup/camera/check_setup.py.
+tuning_file: imx219_noalsc.json
+
+# Starting values, to be tuned in the flight cage.
+# If the image is too dark, add light rather than exposure.
+exposure_us: 4000
+gain: 6.0
+fps: 60
+
+# Landing marker on the platform.
+marker:
+  dictionary: DICT_4X4_50
+  ids: [10, 25, 32]
+  # Must be black edge to black edge, excluding the white border.
+  # 0.12 is unconfirmed: if it includes the border, the black edge is about 0.096.
+  size_m: 0.12
+
+# Calibration board, read from calibracion.pdf page 2. Confirm sizes with a ruler.
+charuco:
+  square_m: 0.02
+  marker_m: 0.015
+  columns: 10
+  rows: 7
+  dictionary: DICT_5X5_50
+
+# Pass marks from the scope statement.
+targets:
+  min_fps: 15
+  min_detection: 0.90

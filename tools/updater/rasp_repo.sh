@@ -17,13 +17,13 @@ if [ ! -d "$TARGET_DIR/.git" ]; then
     cd "$TARGET_DIR"
     
     # Disable cone mode and set exact files/folders to include
-    git sparse-checkout set --no-cone /src/ /tools/ /tests/ /requirements.txt /setup.py
+    git sparse-checkout set --no-cone /src/ /tools/ /tests/ /config/ /.gitignore /requirements.txt /setup.py
 else
     echo "[+] Repository found. Pulling latest changes..."
     cd "$TARGET_DIR"
     
     # Ensure sparse-checkout is strictly set to our required files even on existing repos
-    git sparse-checkout set --no-cone /src/ /tools/ /requirements.txt /setup.py
+    git sparse-checkout set --no-cone /src/ /tools/ /config/ /.gitignore /requirements.txt /setup.py
     
     # Pull latest updates
     git pull origin main
