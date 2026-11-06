@@ -22,6 +22,16 @@ ACCENT_GREEN = "#00e676"
 ACCENT_RED = "#ff5252"
 ACCENT_YELLOW = "#ffb300"
 
+# MATLAB / Trajectory Plot Color Palette
+BG_PLOT_CANVAS = "#050e18"
+COLOR_PLOT_REF = ACCENT_RED       # Target trajectory dotted line (#ff5252)
+COLOR_PLOT_ACT = ACCENT_GREEN     # Actual feedback solid line (#00e676)
+COLOR_PLOT_GRID = "#1a2636"      # Background grid lines
+COLOR_PLOT_AXIS = "#37474f"      # Canvas border axis
+COLOR_PLOT_ZERO = "#263238"      # Zero baseline grid line
+COLOR_PLOT_TEXT = "#546e7a"      # Scale text numbers
+
+
 def draw_canvas_row(text: str, fg=FG_CYAN_ANSI, bg=BG_DARK_BLUE, width: int = 100) -> str:
     """Pads text with spaces to fill full terminal width."""
     padded_text = text.ljust(width)

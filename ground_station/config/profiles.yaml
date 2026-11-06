@@ -17,7 +17,3 @@ profiles:
     port_telemetry: 5005
     port_command: 5006
     port_video: 8080
-
-  auto:
-    name: "Auto-Discovery Mode"
-    fallback_sequence: ["wifi", "usb"]
