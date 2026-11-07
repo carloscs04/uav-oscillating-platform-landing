@@ -29,10 +29,14 @@ class NodeHealthView(tk.LabelFrame):
         self.main_receiver.start_all()
 
         self.status_widgets = {}
-        self.active_inspectors = {}  # Tracks open popup windows: {node_name: {"win": window, "txt": text_widget, "hdr_lbl": label}}
+        self.toggle_buttons = {}      # Guardará referencias a los botones casilla de estado
+        self.node_enabled_states = {} # Controla si el nodo está habilitado {node_name: bool}
+        self.active_inspectors = {}   # Tracks open popup windows
 
         initial_nodes = self.main_receiver.get_all_node_statuses()
         for name, info in initial_nodes.items():
+            self.node_enabled_states[name] = True  # Inicia habilitado por defecto
+
             row = tk.Frame(self, bg=BG_CARD)
             row.pack(fill="x", padx=8, pady=2)
 
@@ -45,12 +49,40 @@ class NodeHealthView(tk.LabelFrame):
             lbl_stat.pack(side="left", padx=(0, 8))
             self.status_widgets[name] = lbl_stat
 
+            # 1. Botón Inspect Data
             btn_inspect = tk.Button(
                 right_subframe, text="Inspect Data", bg="#3949ab", fg="white",
                 font=("Helvetica", 8, "bold"), bd=0, relief="flat", padx=6, pady=2, cursor="hand2",
                 command=lambda n=name: self.open_node_inspector(n)
             )
-            btn_inspect.pack(side="right")
+            btn_inspect.pack(side="left", padx=(0, 6))
+
+            # 2. Cuadro Indicador (Cuadrado perfecto de 14x14 píxeles)
+            btn_toggle = tk.Frame(
+                right_subframe, bg=ACCENT_GREEN, width=10, height=10, cursor="hand2"
+            )
+            btn_toggle.pack_propagate(False)  # Mantiene dimensiones exactas en píxeles
+            btn_toggle.pack(side="left", padx=(4, 0))
+
+            # Asignar evento de clic al Frame
+            btn_toggle.bind("<Button-1>", lambda e, n=name, f=btn_toggle: self.toggle_node_status(n, f))
+            self.toggle_buttons[name] = btn_toggle
+
+    def toggle_node_status(self, node_name: str, btn_widget: tk.Button):
+        """Cambia el estado de activación del nodo (Verde = ON / Blanco = OFF)."""
+        is_enabled = not self.node_enabled_states.get(node_name, True)
+        self.node_enabled_states[node_name] = is_enabled
+
+        # Cambiar únicamente el color de fondo (sin texto/palomita)
+        if is_enabled:
+            btn_widget.config(bg=ACCENT_GREEN)
+        else:
+            btn_widget.config(bg="#FFFFFF")
+
+        # Notificar al receptor correspondiente
+        if hasattr(self.main_receiver, "control_rx") and self.main_receiver.control_rx:
+            if node_name == "3-Axis Control Node":
+                self.main_receiver.control_rx.enabled = is_enabled
 
     def open_node_inspector(self, node_name: str):
         """Opens a live real-time terminal monitor window for the selected node."""
@@ -109,23 +141,29 @@ class NodeHealthView(tk.LabelFrame):
 
         for name, info in node_states.items():
             st = info.get("status", "DISCONNECTED")
+            is_enabled = self.node_enabled_states.get(name, True)
 
             # 1. Update Status Badge Colors in Main Matrix
             if name in self.status_widgets:
-                if st in ["OK", "ONLINE", "STREAMING", "HANDSHAKE_ACK_SENT", "CONNECTED"]:
+                if not is_enabled:
+                    c = "#888888"
+                    display_text = "[DISABLED]"
+                elif st in ["OK", "ONLINE", "STREAMING", "HANDSHAKE_ACK_SENT", "CONNECTED"]:
                     c = ACCENT_GREEN
+                    display_text = f"[{st}]"
                 elif st in ["POOR", "STANDBY", "WAIT_BEACON", "WAITING_FOR_BEACON", "WAITING_FOR_LINK"]:
                     c = ACCENT_YELLOW
+                    display_text = f"[{st}]"
                 else:
                     c = ACCENT_RED
+                    display_text = f"[{st}]"
 
-                self.status_widgets[name].config(text=f"[{st}]", fg=c)
+                self.status_widgets[name].config(text=display_text, fg=c)
 
             # 2. Update Active Inspector Windows with Live Terminal Data
             if name in self.active_inspectors:
                 inspector = self.active_inspectors[name]
                 
-                # Remove stale inspector entry if user closed the window
                 if not inspector["win"].winfo_exists():
                     del self.active_inspectors[name]
                     continue
@@ -135,18 +173,15 @@ class NodeHealthView(tk.LabelFrame):
 
                 # Update Header Badge Status
                 if hdr_lbl:
-                    hdr_color = ACCENT_GREEN if st in ["OK", "ONLINE", "STREAMING", "ACTIVE_STREAM", "CONNECTED"] else ACCENT_YELLOW if st in ["STANDBY", "WAIT_BEACON"] else ACCENT_RED
-                    hdr_lbl.config(
-                        text=f"STATE: [{st}] | PORT: {info.get('port', 5007)} | RATE: {info.get('rate', 20)}Hz",
-                        fg=hdr_color
-                    )
+                    hdr_color = ACCENT_GREEN if (st in ["OK", "ONLINE", "STREAMING", "ACTIVE_STREAM", "CONNECTED"] and is_enabled) else ACCENT_YELLOW if st in ["STANDBY", "WAIT_BEACON"] else ACCENT_RED
+                    status_str = f"STATE: [{st if is_enabled else 'DISABLED'}] | PORT: {info.get('port', 5007)} | RATE: {info.get('rate', 20)}Hz"
+                    hdr_lbl.config(text=status_str, fg=hdr_color)
 
                 telemetry = info.get("telemetry", {})
                 
-                # Detect fresh payload using shallow copy comparison to bypass in-place mutation
+                # Detect fresh payload
                 last_payload = inspector.get("last_payload")
-                if telemetry and telemetry != last_payload:
-                    # Store a copy of dict so future in-place edits don't mutate last_payload
+                if is_enabled and telemetry and telemetry != last_payload:
                     inspector["last_payload"] = dict(telemetry) if isinstance(telemetry, dict) else telemetry
                     timestamp = time.strftime("%H:%M:%S")
 
@@ -163,9 +198,8 @@ class NodeHealthView(tk.LabelFrame):
 
                     if txt:
                         txt.insert("end", line)
-                        txt.see("end")  # Auto-scroll terminal
+                        txt.see("end")
 
-                        # Cap terminal scrollback history to 200 lines
                         line_count = int(txt.index("end-1c").split(".")[0])
                         if line_count > 200:
                             txt.delete("1.0", "2.0")

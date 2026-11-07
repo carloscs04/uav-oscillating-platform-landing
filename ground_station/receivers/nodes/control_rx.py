@@ -10,9 +10,10 @@ from ground_station.comms.pi_bridge import PiLink, LinkState
 
 
 class ControlReceiver(threading.Thread):
-    """
-    Receives 3-axis control telemetry.
-    Registers its live instance to ControlReceiver._active_instance so GUI views can bind automatically.
+    """Receives 3-axis control telemetry.
+
+    Registers its live instance to ControlReceiver._active_instance so GUI
+    views can bind automatically.
     """
 
     _active_instance = None  # Global class reference to active receiver thread
@@ -24,6 +25,7 @@ class ControlReceiver(threading.Thread):
         self.host = host
         self.port = port
         self.running = False
+        self.enabled = True  # Flag de activación individual controlado desde la GUI
 
         self._lock = threading.Lock()
         self.rx_state = "DISCONNECTED"
@@ -36,10 +38,14 @@ class ControlReceiver(threading.Thread):
         self._sock: Optional[socket.socket] = None
 
     def _is_pi_link_connected(self) -> bool:
+        """Directly inspects PiLink._active_instance.
+
+        Returns True ONLY when the active GUI link state is LinkState.CONNECTED
+        and self.enabled is True.
         """
-        Directly inspects PiLink._active_instance.
-        Returns True ONLY when the active GUI link state is LinkState.CONNECTED.
-        """
+        if not self.enabled:
+            return False
+
         active_link = getattr(PiLink, "_active_instance", None)
         if active_link is None:
             return False
@@ -66,17 +72,19 @@ class ControlReceiver(threading.Thread):
             is_connected = self._is_pi_link_connected()
 
             # -----------------------------------------------------------------
-            # 1. GCS IS DISCONNECTED
+            # 1. GCS IS DISCONNECTED OR NODE IS DISABLED
             # -----------------------------------------------------------------
             if not is_connected:
                 with self._lock:
-                    if self.rx_state != "DISCONNECTED":
-                        print("[GCS CONTROL_RX] PiLink state != CONNECTED. Locking state & sending STOP signal.")
+                    target_state = "DISABLED" if not self.enabled else "DISCONNECTED"
+                    if self.rx_state != target_state:
+                        print(f"[GCS CONTROL_RX] Receiver entering state: {target_state}")
                         self._send_stop_signal()
-                        self.rx_state = "DISCONNECTED"
+                        self.rx_state = target_state
                         self.pos_act = [0.0, 0.0, 0.0]
 
                 try:
+                    # Drenar sockets entrantes sin procesar paquetes
                     while True:
                         self._sock.settimeout(0.01)
                         self._sock.recvfrom(2048)
@@ -87,11 +95,11 @@ class ControlReceiver(threading.Thread):
                 continue
 
             # -----------------------------------------------------------------
-            # 2. GCS IS CONNECTED -> ACCEPT BEACONS & STREAM
+            # 2. GCS IS CONNECTED & NODE IS ENABLED -> STREAM TELEMETRY
             # -----------------------------------------------------------------
             with self._lock:
-                if self.rx_state == "DISCONNECTED":
-                    print("[GCS CONTROL_RX] PiLink CONNECTED! Now accepting RPi handshakes...")
+                if self.rx_state in ["DISCONNECTED", "DISABLED"]:
+                    print("[GCS CONTROL_RX] PiLink CONNECTED & Node ENABLED! Accepting handshakes...")
                     self.rx_state = "WAIT_BEACON"
 
             try:
@@ -140,9 +148,9 @@ class ControlReceiver(threading.Thread):
         self._close_socket()
 
     def get_control_data(self) -> Tuple[List[float], List[float]]:
-        """Returns live reference setpoint and actual position vectors whenever non-disconnected."""
+        """Returns live reference setpoint and actual position vectors whenever enabled and connected."""
         with self._lock:
-            if self.rx_state != "DISCONNECTED":
+            if self.enabled and self.rx_state not in ["DISCONNECTED", "DISABLED"]:
                 return list(self.pos_ref), list(self.pos_act)
             return list(self.pos_ref), [0.0, 0.0, 0.0]
 
