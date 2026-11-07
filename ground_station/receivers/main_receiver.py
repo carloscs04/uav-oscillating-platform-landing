@@ -33,37 +33,41 @@ class MainReceiver:
         self.control_rx.stop()
 
     def get_all_node_statuses(self) -> Dict[str, Dict[str, Any]]:
-        """Evaluates heartbeat timeouts across nodes and compiles status matrix."""
+        """Evaluates heartbeat timeouts across nodes and compiles full status matrix."""
         now = time.time()
 
         def check_stat(last_seen: float, timeout: float = 2.0) -> str:
             return "OK" if (now - last_seen < timeout and last_seen > 0) else "DISCONNECTED"
 
-        ref, act = self.control_rx.get_control_data()
+        # Safely query live status info dictionaries from each sub-receiver
+        mav_info = self.mavlink_rx.get_status_info() if hasattr(self.mavlink_rx, "get_status_info") else {}
+        dist_info = self.distance_rx.get_status_info() if hasattr(self.distance_rx, "get_status_info") else {}
+        cam_info = self.camera_rx.get_status_info() if hasattr(self.camera_rx, "get_status_info") else {}
+        ctrl_info = self.control_rx.get_status_info() if hasattr(self.control_rx, "get_status_info") else {}
 
         return {
             "PX4-MAVLink Node": {
-                "status": check_stat(getattr(self.mavlink_rx, "last_seen", 0.0)),
+                "status": check_stat(mav_info.get("last_seen", getattr(self.mavlink_rx, "last_seen", 0.0))),
                 "port": getattr(self.mavlink_rx, "port", 5005),
                 "rate": "10Hz",
-                "telemetry": getattr(self.mavlink_rx, "telemetry", {}),
+                "telemetry": mav_info.get("telemetry", getattr(self.mavlink_rx, "packets", {})),
             },
             "Distance-Sensor Node": {
-                "status": check_stat(getattr(self.distance_rx, "last_seen", 0.0)),
+                "status": check_stat(dist_info.get("last_seen", getattr(self.distance_rx, "last_seen", 0.0))),
                 "port": getattr(self.distance_rx, "port", 5008),
                 "rate": "5Hz",
-                "telemetry": {"distance": getattr(self.distance_rx, "distance", 0.0)},
+                "telemetry": dist_info.get("telemetry", getattr(self.distance_rx, "packets", {})),
             },
             "Aruco-Perception Node": {
-                "status": check_stat(getattr(self.camera_rx, "last_seen", 0.0)),
+                "status": check_stat(cam_info.get("last_seen", getattr(self.camera_rx, "last_seen", 0.0))),
                 "port": getattr(self.camera_rx, "port", 8080),
                 "rate": "30fps",
-                "telemetry": {},
+                "telemetry": cam_info.get("telemetry", getattr(self.camera_rx, "packets", {})),
             },
             "3-Axis Control Node": {
-                "status": check_stat(getattr(self.control_rx, "last_seen", 0.0)),
+                "status": check_stat(ctrl_info.get("last_seen", getattr(self.control_rx, "last_seen", 0.0))),
                 "port": getattr(self.control_rx, "port", 5007),
                 "rate": "20Hz",
-                "telemetry": {"ref": ref, "act": act},
+                "telemetry": ctrl_info.get("telemetry", getattr(self.control_rx, "packets", {})),
             },
         }
