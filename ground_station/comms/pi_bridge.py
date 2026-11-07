@@ -141,6 +141,30 @@ class PiLink:
         except Exception as e:
             print(f"[PiLink_ERR] Error enviando handshake a {self.active_ip}: {e}")
 
+    def send_command(self, cmd: str, extra_payload: dict = None) -> bool:
+        """Envía un comando UDP arbitrario hacia PCBridgeListener en la Raspberry Pi."""
+        with self._lock:
+            target_ip = self.active_ip
+            target_port = self.port_control
+
+        if target_ip in ["N/A", "127.0.0.1", "localhost"] or not target_ip:
+            return False
+
+        payload = {"cmd": cmd, "timestamp": time.time()}
+        if extra_payload:
+            payload.update(extra_payload)
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg = json.dumps(payload).encode("utf-8")
+            sock.sendto(msg, (target_ip, target_port))
+            sock.close()
+            print(f"[PiLink] Comando '{cmd}' enviado a RPi ({target_ip}:{target_port})")
+            return True
+        except Exception as e:
+            print(f"[PiLink_ERR] Error enviando comando '{cmd}' a {target_ip}: {e}")
+            return False
+
     def _worker_loop(self):
         """Background thread monitoring network quality."""
         while self.running:
@@ -161,7 +185,6 @@ class PiLink:
                     else:
                         self.health_state = HealthState.DEGRADED
                 else:
-                    # Si el ping falla en Wi-Fi escolar pero queremos forzar envío de handshake
                     self.latency_ms = -1.0
                     self.consecutive_failures += 1
                     self.health_state = HealthState.OFFLINE
@@ -171,7 +194,6 @@ class PiLink:
                     else:
                         self.link_state = LinkState.RECONNECTING
 
-            # Se envía el handshake SIEMPRE que PiLink esté activo para asegurar el registro
             self._send_handshake()
             time.sleep(1.0)
 

@@ -8,6 +8,7 @@ from ground_station.utils.colors import (
     ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW
 )
 from ground_station.receivers.main_receiver import MainReceiver
+from ground_station.comms.pi_bridge import PiLink
 
 
 class NodeHealthView(tk.LabelFrame):
@@ -29,7 +30,7 @@ class NodeHealthView(tk.LabelFrame):
         self.main_receiver.start_all()
 
         self.status_widgets = {}
-        self.toggle_buttons = {}      # Guardará referencias a los botones casilla de estado
+        self.toggle_buttons = {}      # Guardará referencias a los cuadros de estado
         self.node_enabled_states = {} # Controla si el nodo está habilitado {node_name: bool}
         self.active_inspectors = {}   # Tracks open popup windows
 
@@ -57,32 +58,37 @@ class NodeHealthView(tk.LabelFrame):
             )
             btn_inspect.pack(side="left", padx=(0, 6))
 
-            # 2. Cuadro Indicador (Cuadrado perfecto de 14x14 píxeles)
+            # 2. Cuadro Indicador (Cuadrado de 14x14 píxeles, Verde/Blanco)
             btn_toggle = tk.Frame(
-                right_subframe, bg=ACCENT_GREEN, width=10, height=10, cursor="hand2"
+                right_subframe, bg=ACCENT_GREEN, width=14, height=14, cursor="hand2"
             )
-            btn_toggle.pack_propagate(False)  # Mantiene dimensiones exactas en píxeles
+            btn_toggle.pack_propagate(False)
             btn_toggle.pack(side="left", padx=(4, 0))
 
-            # Asignar evento de clic al Frame
             btn_toggle.bind("<Button-1>", lambda e, n=name, f=btn_toggle: self.toggle_node_status(n, f))
             self.toggle_buttons[name] = btn_toggle
 
-    def toggle_node_status(self, node_name: str, btn_widget: tk.Button):
-        """Cambia el estado de activación del nodo (Verde = ON / Blanco = OFF)."""
+    def toggle_node_status(self, node_name: str, frame_widget: tk.Frame):
+        """Cambia el estado de activación del nodo (Verde = ON / Blanco = OFF) y notifica a la RPi."""
         is_enabled = not self.node_enabled_states.get(node_name, True)
         self.node_enabled_states[node_name] = is_enabled
 
-        # Cambiar únicamente el color de fondo (sin texto/palomita)
+        # 1. Actualizar apariencia visual
         if is_enabled:
-            btn_widget.config(bg=ACCENT_GREEN)
+            frame_widget.config(bg=ACCENT_GREEN)
         else:
-            btn_widget.config(bg="#FFFFFF")
+            frame_widget.config(bg="#FFFFFF")
 
-        # Notificar al receptor correspondiente
+        # 2. Notificar al receptor local en la Laptop (ControlReceiver)
         if hasattr(self.main_receiver, "control_rx") and self.main_receiver.control_rx:
             if node_name == "3-Axis Control Node":
                 self.main_receiver.control_rx.enabled = is_enabled
+
+        # 3. Notificar a la Raspberry Pi usando la instancia activa de PiLink
+        active_link = self.pi_link or getattr(PiLink, "_active_instance", None)
+        if active_link:
+            cmd = "START_STREAM" if is_enabled else "STOP_STREAM"
+            active_link.send_command(cmd, {"node": node_name})
 
     def open_node_inspector(self, node_name: str):
         """Opens a live real-time terminal monitor window for the selected node."""

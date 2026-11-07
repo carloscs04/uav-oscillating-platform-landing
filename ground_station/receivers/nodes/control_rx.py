@@ -79,7 +79,6 @@ class ControlReceiver(threading.Thread):
                     target_state = "DISABLED" if not self.enabled else "DISCONNECTED"
                     if self.rx_state != target_state:
                         print(f"[GCS CONTROL_RX] Receiver entering state: {target_state}")
-                        self._send_stop_signal()
                         self.rx_state = target_state
                         self.pos_act = [0.0, 0.0, 0.0]
 
@@ -99,8 +98,9 @@ class ControlReceiver(threading.Thread):
             # -----------------------------------------------------------------
             with self._lock:
                 if self.rx_state in ["DISCONNECTED", "DISABLED"]:
-                    print("[GCS CONTROL_RX] PiLink CONNECTED & Node ENABLED! Accepting handshakes...")
+                    print("[GCS CONTROL_RX] PiLink CONNECTED & Node ENABLED! Re-initiating stream...")
                     self.rx_state = "WAIT_BEACON"
+                    self._send_start_signal()  # <-- Notifica automáticamente a la RPi para reanudar el envío
 
             try:
                 data, addr = self._sock.recvfrom(2048)
@@ -148,7 +148,6 @@ class ControlReceiver(threading.Thread):
         self._close_socket()
 
     def get_control_data(self) -> Tuple[List[float], List[float]]:
-        """Returns live reference setpoint and actual position vectors whenever enabled and connected."""
         with self._lock:
             if self.enabled and self.rx_state not in ["DISCONNECTED", "DISABLED"]:
                 return list(self.pos_ref), list(self.pos_act)
@@ -167,16 +166,43 @@ class ControlReceiver(threading.Thread):
                 "last_seen": self.last_seen
             }
 
-    def _send_stop_signal(self):
+    def _send_start_signal(self):
+        """Envia la orden START_STREAM a la RPi al reconectar si el nodo está habilitado."""
         if self._sock:
-            stop_pkt = json.dumps({"cmd": "STOP_STREAM"}).encode("utf-8")
-            target = self.rpi_address or ((self.last_rpi_ip, self.port) if self.last_rpi_ip else None)
-            if target:
+            start_pkt = json.dumps({
+                "cmd": "START_STREAM",
+                "node": "3-Axis Control Node"
+            }).encode("utf-8")
+            
+            # Obtener IP de la RPi de múltiples fuentes posibles
+            active_link = getattr(PiLink, "_active_instance", None)
+            target_ip = self.last_rpi_ip or (self.rpi_address[0] if self.rpi_address else None)
+            if not target_ip and active_link:
+                target_ip = getattr(active_link, "active_ip", None)
+
+            if target_ip and target_ip not in ["N/A", "127.0.0.1", "localhost"]:
                 try:
-                    self._sock.sendto(stop_pkt, target)
-                    print(f"[GCS CONTROL_RX] Sent 'STOP_STREAM' command to RPi at {target[0]}:{target[1]}")
-                except Exception:
-                    pass
+                    self._sock.sendto(start_pkt, (target_ip, self.port))
+                    print(f"[GCS CONTROL_RX] Sent 'START_STREAM' reconnect signal to RPi at {target_ip}:{self.port}")
+                except Exception as e:
+                    print(f"[GCS CONTROL_RX_ERR] Error enviando START_STREAM a {target_ip}: {e}")
+
+    def _send_stop_signal(self):
+        """Envia la orden STOP_STREAM directamente al puerto 5007 de la Raspberry Pi."""
+        if self._sock:
+            stop_pkt = json.dumps({
+                "cmd": "STOP_STREAM",
+                "node": "3-Axis Control Node"
+            }).encode("utf-8")
+            
+            target_ip = self.last_rpi_ip or (self.rpi_address[0] if self.rpi_address else None)
+            
+            if target_ip:
+                try:
+                    self._sock.sendto(stop_pkt, (target_ip, self.port))
+                    print(f"[GCS CONTROL_RX] Sent 'STOP_STREAM' command to RPi at {target_ip}:{self.port}")
+                except Exception as e:
+                    print(f"[GCS CONTROL_RX_ERR] Error enviando STOP_STREAM a {target_ip}: {e}")
 
     def _close_socket(self):
         if self._sock:
