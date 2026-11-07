@@ -1,0 +1,11 @@
+active_mode: "wifi"
+
+profiles:
+  wifi:
+    local_ip: "10.22.246.2"      # RPi Wi-Fi IP (wlan0)
+    gcs_ip: "10.22.233.15"       # Laptop GCS Wi-Fi IP
+    port: 5007
+  ethernet:
+    local_ip: "10.42.0.51"      # RPi Ethernet IP (eth0)
+    gcs_ip: "10.42.0.1"         # Laptop GCS Ethernet IP
+    port: 5007
