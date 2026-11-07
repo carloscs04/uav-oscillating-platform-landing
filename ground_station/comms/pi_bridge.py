@@ -4,6 +4,8 @@ import os
 import time
 import subprocess
 import threading
+import socket
+import json
 from ground_station.utils.yaml_loader import get_profile_data, load_yaml
 
 
@@ -49,12 +51,14 @@ class PiLink:
 
         self.active_mode = mode
         self.active_ip = "N/A"
+        self.handshake = False
         self.latency_ms = -1.0
         self.consecutive_failures = 0
         self.max_failures_before_reconnect = 2
 
         self.port_telemetry = 5005
         self.port_command = 5006
+        self.port_control = 5007
         self.port_video = 8080
 
         self.running = False
@@ -81,6 +85,7 @@ class PiLink:
         with self._lock:
             self.link_state = LinkState.STOPPED
             self.health_state = HealthState.OFFLINE
+            self.handshake = False
 
     def load_profile(self, new_mode: str):
         """Loads profile configuration directly from YAML and updates network targets without helper functions."""
@@ -94,11 +99,13 @@ class PiLink:
             self.active_ip = prof.get("pi_ip", "10.22.246.2")
             self.port_telemetry = prof.get("port_telemetry", 5005)
             self.port_command = prof.get("port_command", 5006)
+            self.port_control = prof.get("port_control", 5007)
             self.port_video = prof.get("port_video", 8080)
 
             if not self.running:
                 self.link_state = LinkState.DISCONNECTED
             self.health_state = HealthState.OFFLINE
+            self.handshake = False
 
     def _ping(self) -> float:
         """Measures ICMP ping latency in milliseconds."""
@@ -117,6 +124,23 @@ class PiLink:
 
         return -1.0
 
+    def _send_handshake(self):
+        """Notifica a la Raspberry Pi la IP de esta laptop enviando un paquete UDP."""
+        if self.active_ip in ["N/A", "127.0.0.1", "localhost"]:
+            return
+
+        if not self.handshake:  
+            print(f"[PiLink] Handshake enviado a RPi ({self.active_ip}:{self.port_control})")
+            self.handshake = True
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg = json.dumps({"cmd": "GCS_CONNECT"}).encode("utf-8")
+            sock.sendto(msg, (self.active_ip, self.port_control))
+            sock.close()
+        except Exception as e:
+            print(f"[PiLink_ERR] Error enviando handshake a {self.active_ip}: {e}")
+
     def _worker_loop(self):
         """Background thread monitoring network quality."""
         while self.running:
@@ -130,24 +154,25 @@ class PiLink:
                     self.latency_ms = latency
                     self.consecutive_failures = 0
                     self.has_ever_connected = True
-
                     self.link_state = LinkState.CONNECTED
+
                     if latency <= self.LATENCY_THRESHOLD_MS:
                         self.health_state = HealthState.HEALTHY
                     else:
                         self.health_state = HealthState.DEGRADED
                 else:
+                    # Si el ping falla en Wi-Fi escolar pero queremos forzar envío de handshake
                     self.latency_ms = -1.0
                     self.consecutive_failures += 1
                     self.health_state = HealthState.OFFLINE
 
                     if not self.has_ever_connected:
-                        # 1. First run: Keep state as CONNECTING until first successful link
                         self.link_state = LinkState.CONNECTING
                     else:
-                        # 2. Subsequent connection drop: Shift immediately to RECONNECTING
                         self.link_state = LinkState.RECONNECTING
 
+            # Se envía el handshake SIEMPRE que PiLink esté activo para asegurar el registro
+            self._send_handshake()
             time.sleep(1.0)
 
     def get_health(self) -> dict:
@@ -164,6 +189,7 @@ class PiLink:
                 "ports": {
                     "telemetry": self.port_telemetry,
                     "command": self.port_command,
+                    "control": self.port_control,
                     "video": self.port_video,
                 },
             }
