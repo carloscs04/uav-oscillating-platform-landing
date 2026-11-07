@@ -8,9 +8,9 @@ from typing import Callable, Optional, Dict, Any
 
 
 class PCBridgeListener(threading.Thread):
-    """Escucha el heartbeat y comandos UDP desde la Laptop GCS.
+    """Listens for UDP command heartbeats and packets from the GCS Laptop.
 
-    Detecta caídas de conexión por timeout y notifica a MasterTelecom.
+    Monitors link timeouts and notifies MasterTelecom when GCS disconnects.
     """
 
     def __init__(
@@ -43,20 +43,20 @@ class PCBridgeListener(threading.Thread):
         try:
             self.sock.bind(("0.0.0.0", self.port))
         except Exception as e:
-            print(f"[PC_BRIDGE_ERR] No se pudo vincular al puerto {self.port}: {e}")
+            print(f"[PC_BRIDGE_ERR] Failed to bind to port {self.port}: {e}")
             return
 
         self.sock.settimeout(0.5)
-        print(f"[PC_BRIDGE] Escuchando comandos y heartbeat en 0.0.0.0:{self.port}...")
+        print(f"[PC_BRIDGE] Listening for incoming GCS commands and heartbeats on 0.0.0.0:{self.port}...")
 
         while self.running:
             now = time.time()
 
-            # Verificación de Timeout de Conexión Global
+            # Connection Timeout Evaluation
             with self._lock:
                 if self.is_gcs_connected and (now - self.last_heartbeat > self.timeout_sec):
                     self.is_gcs_connected = False
-                    print(f"[PC_BRIDGE] ¡Conexión con GCS perdida por timeout! (> {self.timeout_sec}s)")
+                    print(f"[PC_BRIDGE] GCS Connection lost due to timeout (> {self.timeout_sec}s)")
                     if self.on_connection_lost:
                         self.on_connection_lost()
 
@@ -78,17 +78,17 @@ class PCBridgeListener(threading.Thread):
                             self.active_gcs_ip = discovered_ip
 
                         if (ip_changed or not was_connected) and self.on_ip_discovered:
-                            print(f"[PC_BRIDGE] Conexión establecida desde Laptop GCS IP: {discovered_ip}")
+                            print(f"[PC_BRIDGE] Connection established from Laptop GCS IP: {discovered_ip}")
                             self.on_ip_discovered(discovered_ip)
 
-                    # Notificar comandos
+                    # Forward command payload to MasterTelecom callback handler
                     if self.on_command_received and cmd:
                         self.on_command_received(cmd, payload, discovered_ip)
 
             except socket.timeout:
                 pass
             except Exception as e:
-                print(f"[PC_BRIDGE_ERR] Error procesando paquete: {e}")
+                print(f"[PC_BRIDGE_ERR] Error processing packet: {e}")
 
         if self.sock:
             self.sock.close()
