@@ -27,8 +27,11 @@ class PiLink:
     """Low-level network engine tracking connection state and quality metrics independently."""
 
     LATENCY_THRESHOLD_MS = 150.0
+    _active_instance = None  # Holds global reference to the live GUI instance
 
     def __init__(self, config_dir: str, mode: str = "wifi"):
+        PiLink._active_instance = self  # Register this live instance globally
+
         self.config_dir = config_dir
         self.requested_mode = mode
 
