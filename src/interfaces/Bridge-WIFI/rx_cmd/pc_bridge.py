@@ -4,23 +4,34 @@ import json
 import socket
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 
 
 class PCBridgeListener(threading.Thread):
-    """Escucha el handshake UDP enviado por pi_bridge.py desde la laptop GCS.
+    """Escucha el heartbeat y comandos UDP desde la Laptop GCS.
 
-    Captura automáticamente la dirección IP de la computadora y la reporta al
-    master_telecom.
+    Detecta caídas de conexión por timeout y notifica a MasterTelecom.
     """
 
-    def __init__(self, port: int = 5007, on_ip_discovered: Optional[Callable[[str], None]] = None):
+    def __init__(
+        self, 
+        port: int = 5007, 
+        timeout_sec: float = 3.0,
+        on_ip_discovered: Optional[Callable[[str], None]] = None,
+        on_connection_lost: Optional[Callable[[], None]] = None,
+        on_command_received: Optional[Callable[[str, Dict[str, Any], str], None]] = None
+    ):
         super().__init__(daemon=True)
         self.port = port
+        self.timeout_sec = timeout_sec
         self.on_ip_discovered = on_ip_discovered
+        self.on_connection_lost = on_connection_lost
+        self.on_command_received = on_command_received
 
         self.running = False
         self.active_gcs_ip: Optional[str] = None
+        self.last_heartbeat: float = 0.0
+        self.is_gcs_connected: bool = False
         self.sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
 
@@ -36,26 +47,43 @@ class PCBridgeListener(threading.Thread):
             return
 
         self.sock.settimeout(0.5)
-        print(f"[PC_BRIDGE] Escuchando handshake en 0.0.0.0:{self.port}...")
+        print(f"[PC_BRIDGE] Escuchando comandos y heartbeat en 0.0.0.0:{self.port}...")
 
         while self.running:
+            now = time.time()
+
+            # Verificación de Timeout de Conexión Global
+            with self._lock:
+                if self.is_gcs_connected and (now - self.last_heartbeat > self.timeout_sec):
+                    self.is_gcs_connected = False
+                    print(f"[PC_BRIDGE] ¡Conexión con GCS perdida por timeout! (> {self.timeout_sec}s)")
+                    if self.on_connection_lost:
+                        self.on_connection_lost()
+
             try:
                 data, addr = self.sock.recvfrom(1024)
                 if data:
                     payload = json.loads(data.decode("utf-8"))
                     cmd = payload.get("cmd")
+                    discovered_ip = addr[0]
+
+                    with self._lock:
+                        self.last_heartbeat = now
+                        was_connected = self.is_gcs_connected
+                        self.is_gcs_connected = True
 
                     if cmd == "GCS_CONNECT":
-                        discovered_ip = addr[0]
-
                         with self._lock:
                             ip_changed = self.active_gcs_ip != discovered_ip
                             self.active_gcs_ip = discovered_ip
 
-                        if ip_changed:
-                            print(f"[PC_BRIDGE] Handshake recibido desde Laptop GCS IP: {discovered_ip}")
-                            if self.on_ip_discovered:
-                                self.on_ip_discovered(discovered_ip)
+                        if (ip_changed or not was_connected) and self.on_ip_discovered:
+                            print(f"[PC_BRIDGE] Conexión establecida desde Laptop GCS IP: {discovered_ip}")
+                            self.on_ip_discovered(discovered_ip)
+
+                    # Notificar comandos
+                    if self.on_command_received and cmd:
+                        self.on_command_received(cmd, payload, discovered_ip)
 
             except socket.timeout:
                 pass
@@ -66,7 +94,6 @@ class PCBridgeListener(threading.Thread):
             self.sock.close()
 
     def get_active_ip(self) -> Optional[str]:
-        """Retorna la última IP registrada de forma thread-safe."""
         with self._lock:
             return self.active_gcs_ip
 

@@ -15,22 +15,33 @@ class ControlTransmitter(threading.Thread):
         port: int = 5007,
         control_node: Optional[Any] = None,
         data_provider: Optional[Callable[[], Tuple[List[float], List[float]]]] = None,
-        **kwargs  # Previene errores si se pasan argumentos adicionales
+        **kwargs
     ):
         super().__init__(daemon=True)
-        # Si master_telecom pasa broadcast_ip por compatibilidad, lo asigna a target_ip
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
         self.control_node = control_node
         self.data_provider = data_provider
 
         self.running = False
+        self.streaming = True  # Bandera para pausar/reanudar la transmisión
         self._sock: Optional[socket.socket] = None
 
     def update_target_ip(self, new_ip: str):
-        """Permite a master_telecom actualizar la IP objetivo dinámicamente."""
         self.target_ip = new_ip
         print(f"[CONTROL_TX] Nueva IP objetivo asignada: {self.target_ip}")
+
+    def pause_stream(self):
+        """Pausa el envío de paquetes UDP."""
+        if self.streaming:
+            self.streaming = False
+            print("[CONTROL_TX] Transmisión PAUSADA por orden del GCS.")
+
+    def resume_stream(self):
+        """Reanuda el envío de paquetes UDP."""
+        if not self.streaming:
+            self.streaming = True
+            print("[CONTROL_TX] Transmisión REANUDADA por orden del GCS.")
 
     def run(self):
         self.running = True
@@ -41,7 +52,8 @@ class ControlTransmitter(threading.Thread):
         t_start = time.time()
 
         while self.running:
-            if not self.target_ip:
+            # Si no hay IP objetivo o la transmisión está pausada, esperamos sin enviar paquetes
+            if not self.target_ip or not self.streaming:
                 time.sleep(0.1)
                 continue
 
@@ -76,7 +88,6 @@ class ControlTransmitter(threading.Thread):
             except Exception as e:
                 print(f"[CONTROL_TX_ERR] Error en control_node.get_current_state(): {e}")
 
-        # Fallback senoidal por defecto
         ref_x = math.sin(elapsed * 0.8)
         ref_y = math.cos(elapsed * 0.8)
         ref_z = 1.5
@@ -90,3 +101,4 @@ class ControlTransmitter(threading.Thread):
 
     def stop(self):
         self.running = False
+        self.streaming = False
