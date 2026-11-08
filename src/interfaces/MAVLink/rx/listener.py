@@ -5,7 +5,7 @@ from src.interfaces.MAVLink.state.vehicle_state import VehicleState
 
 
 class MAVLinkRXListener:
-    """Non-blocking high-frequency MAVLink listener loop updating VehicleState with watchdog metrics."""
+    """Non-blocking MAVLink listener tracking message throughput (Hz) and connection watchdog."""
 
     def __init__(self, state: VehicleState):
         self.state = state
@@ -14,9 +14,15 @@ class MAVLinkRXListener:
         self._thread: Optional[threading.Thread] = None
         self.last_recv_time: float = 0.0
 
+        # Métrica de rendimiento Hz
+        self._msg_counter: int = 0
+        self._last_rate_calc: float = time.time()
+        self.current_rate_hz: float = 0.0
+
     def set_master(self, master: Any):
         self.master = master
         self.last_recv_time = time.time()
+        self._msg_counter = 0
 
     def wait_for_heartbeat(self, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
         if not self.master:
@@ -35,6 +41,8 @@ class MAVLinkRXListener:
             return
         self._stop_event.clear()
         self.last_recv_time = time.time()
+        self._last_rate_calc = time.time()
+        self._msg_counter = 0
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
 
@@ -55,7 +63,17 @@ class MAVLinkRXListener:
 
                     if pkt_type and pkt_type != "BAD_DATA":
                         self.last_recv_time = time.time()
+                        self._msg_counter += 1
                         self.state.update_packet(pkt_type, data)
+
+                # Cálculo de Hz cada 1.0 segundo
+                now = time.time()
+                elapsed = now - self._last_rate_calc
+                if elapsed >= 1.0:
+                    self.current_rate_hz = round(self._msg_counter / elapsed, 1)
+                    self._msg_counter = 0
+                    self._last_rate_calc = now
+
             except Exception:
                 time.sleep(0.05)
 

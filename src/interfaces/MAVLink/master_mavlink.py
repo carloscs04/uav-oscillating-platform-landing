@@ -143,6 +143,39 @@ class MAVLinkManager:
     def is_healthy(self) -> bool:
         return self.connected
 
+    def export_telemetry_package(self) -> dict:
+        """Facade helper exporting live telemetry + isolated node_health status packet."""
+        if not self.connected:
+            return {
+                "node_health": {
+                    "status": "RECONNECTING",
+                    "rate_hz": 0.0,
+                    "battery_pct": -1,
+                    "voltage_v": 0.0
+                }
+            }
+
+        # 1. Obtiene los paquetes puros de VehicleState (velocity, attitude, etc.)
+        package = self.state.export_telemetry_package()
+
+        # 2. Calcula métricas de red y lee datos de batería
+        rate_hz = self.rx_listener.current_rate_hz
+        health_status = "HEALTHY" if rate_hz >= 7.0 else ("POOR" if rate_hz > 0.0 else "RECONNECTING")
+
+        sys_status = self.state.get_packet("SYS_STATUS") or {}
+        voltage_v = round(sys_status.get("voltage_battery", 0) / 1000.0, 2)
+        battery_pct = sys_status.get("battery_remaining", -1)
+
+        # 3. Adjunta "node_health" como un paquete más en la raíz
+        package["node_health"] = {
+            "status": health_status,
+            "rate_hz": rate_hz,
+            "battery_pct": battery_pct,
+            "voltage_v": voltage_v
+        }
+
+        return package
+
     def stop(self):
         """Gracefully halts supervisor, turns off streams, and terminates connections."""
         self.running = False
