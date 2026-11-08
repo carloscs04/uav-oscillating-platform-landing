@@ -102,26 +102,34 @@ class MAVLinkTXDriver:
             return False
 
     def force_arm(self) -> bool:
-        """Forces motor arming by setting parameter overrides and sending force arm magic number."""
         if not self.master:
             return False
         try:
-            self.disable_arming_checks()
+            # Desactivar chequeos, autodesarmado y el interruptor físico de seguridad
+            params = [
+                (b"ARMING_CHECK", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
+                (b"DISARM_DELAY", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
+                (b"BRD_SAFETYENABLE", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32),
+            ]
             
-            # Pausa de 200ms para asegurar que ArduPilot procese los parámetros antes del armado
-            import time
-            time.sleep(0.2)
-
+            for name, val, ptype in params:
+                self.master.mav.param_set_send(
+                    self.master.target_system,
+                    self.master.target_component,
+                    name,
+                    val,
+                    ptype
+                )
+            
+            # Enviar comando de armado
             self.master.mav.command_long_send(
                 self.master.target_system,
                 self.master.target_component,
                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
                 0,
-                1.0,      # 1.0 = Arm
-                21196.0,  # Número mágico de armado forzado
-                0, 0, 0, 0, 0
+                1.0, 21196.0, 0, 0, 0, 0, 0
             )
-            print("[TX Driver] 'FORCE ARM' command sent.")
+            print("[TX Driver] Sent parameter overrides & FORCE ARM command.")
             return True
         except Exception as e:
             print(f"[TX Driver Error] Failed to force arm: {e}")

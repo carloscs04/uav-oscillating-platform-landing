@@ -101,7 +101,7 @@ def _run_interactive_cli(manager: MAVLinkManager):
             # 2. Continuous 2Hz RC Override pulse to prevent Radio Failsafe
             now = time.time()
             if now - last_rc_time >= 0.5:
-                manager.tx_driver.send_rc_override(pitch=1500, roll=1500, throttle=1200, yaw=1500)
+                manager.tx_driver.send_rc_override(pitch=1500, roll=1500, throttle=1500, yaw=1500)
                 last_rc_time = now
 
             time.sleep(0.005)  # Fast 200Hz loop
