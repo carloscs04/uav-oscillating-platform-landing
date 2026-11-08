@@ -1,5 +1,3 @@
-# ground_station/panel/views/header_view.py
-
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -20,7 +18,6 @@ class HeaderView(tk.Frame):
         self.auto_connect: bool = True
         self.is_connecting: bool = False
 
-        # Dynamically load profiles list directly from profiles.yaml
         profiles_path = os.path.join(self.config_dir, "profiles.yaml")
         profiles_data = load_yaml(profiles_path)
         profiles_dict = profiles_data.get("profiles", {})
@@ -67,22 +64,14 @@ class HeaderView(tk.Frame):
     def on_connect_button_click(self):
         is_connected = self.link.get_health().get("state") == LinkState.CONNECTED
 
-        if self.auto_connect == True:
-            self.logic_panel.emit_log(f"[SAFETY_WARN] Auto-Connect Activated")
+        if self.auto_connect:
+            self.logic_panel.emit_log(f"[SAFETY_WARN] Auto-Connect is active. Toggle dot to disable.")
             return
 
         if is_connected or self.is_connecting:
             approved, msg = self.logic_panel.logic("disconnect")
             if not approved:
                 self.logic_panel.emit_log(f"[SAFETY_WARN] {msg}")
-                return
-            
-            self.auto_connect = False
-            if self.is_connecting:
-                self.is_connecting = False
-                self.link.stop()
-                self.logic_panel.master_state = "DISCONNECTED"
-                self.logic_panel.emit_log(f"[NET] Canceling connection with '{self.selected_profile.get()}' profile")
                 return
             
             self.is_connecting = False
@@ -103,7 +92,7 @@ class HeaderView(tk.Frame):
         self.auto_connect = not self.auto_connect
         if self.auto_connect:
             self.logic_panel.emit_log("[NET] Auto-Connect ENABLED.")
-            if self.link.get_health().get("state") != LinkState.CONNECTED:
+            if self.link.get_health().get("state") != LinkState.CONNECTED and not self.is_connecting:
                 self.is_connecting = True
                 self.link.start()
         else:
@@ -112,27 +101,25 @@ class HeaderView(tk.Frame):
             self.logic_panel.emit_log("[NET] Auto-Connect DISABLED.")
 
     def on_profile_dropdown_change(self, new_mode: str):
-        """Stops existing connection attempts, sets new profile, and auto-connects if enabled."""
         approved, msg = self.logic_panel.logic("select_profile", payload=new_mode)
         if not approved:
             self.logic_panel.emit_log(f"[SAFETY_WARN] {msg}")
             self.selected_profile.set(self.link.active_mode)
             return
 
-        # 1. Immediately stop current connection/monitoring loop
-        self.link.stop()
-
-        # 2. Update network variables to target profile
-        self.link.load_profile(new_mode)
-
-        # 3. Connect automatically if auto_reconnect is True; otherwise remain stopped
+        # Pre-lock connecting state to avoid UI refresh flicker during profile transition
         if self.auto_connect:
             self.is_connecting = True
+
+        self.link.stop()
+        self.link.load_profile(new_mode)
+
+        if self.auto_connect:
             self.link.start()
             self.logic_panel.emit_log(f"[NET] Profile switched to '{new_mode}'. Auto-connecting...")
         else:
             self.is_connecting = False
-            self.logic_panel.emit_log(f"[NET] Profile switched to '{new_mode}'. Connection stopped (Manual mode).")
+            self.logic_panel.emit_log(f"[NET] Profile switched to '{new_mode}'. Connection stopped.")
 
     def update_header_ui(self):
         health = self.link.get_health()
@@ -142,9 +129,12 @@ class HeaderView(tk.Frame):
         if self.logic_panel.is_armed or self.logic_panel.in_flight:
             self.auto_connect = True
 
+        # Gating loop to prevent socket collisions and UI flicker during transitional states
         if conn_state == LinkState.CONNECTED:
             self.is_connecting = False
             self.logic_panel.master_state = "ACTIVE"
+        elif conn_state in [LinkState.CONNECTING, LinkState.RECONNECTING] or self.is_connecting:
+            self.logic_panel.master_state = "DISCONNECTED"
         else:
             self.logic_panel.master_state = "DISCONNECTED"
             if self.auto_connect and not self.is_connecting:

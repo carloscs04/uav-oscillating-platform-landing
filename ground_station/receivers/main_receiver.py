@@ -46,7 +46,7 @@ class MainReceiver:
         ctrl_info = self.control_rx.get_status_info() if hasattr(self.control_rx, "get_status_info") else {}
 
         return {
-            "PX4-MAVLink Node": {
+            "MAVLink Node": {
                 "status": check_stat(mav_info.get("last_seen", getattr(self.mavlink_rx, "last_seen", 0.0))),
                 "port": getattr(self.mavlink_rx, "port", 5005),
                 "rate": "10Hz",
@@ -58,13 +58,13 @@ class MainReceiver:
                 "rate": "5Hz",
                 "telemetry": dist_info.get("telemetry", getattr(self.distance_rx, "packets", {})),
             },
-            "Aruco-Perception Node": {
+            "Camera-Aruco Node": {
                 "status": check_stat(cam_info.get("last_seen", getattr(self.camera_rx, "last_seen", 0.0))),
                 "port": getattr(self.camera_rx, "port", 8080),
                 "rate": "30fps",
                 "telemetry": cam_info.get("telemetry", getattr(self.camera_rx, "packets", {})),
             },
-            "3-Axis Control Node": {
+            "Control Node": {
                 "status": check_stat(ctrl_info.get("last_seen", getattr(self.control_rx, "last_seen", 0.0))),
                 "port": getattr(self.control_rx, "port", 5007),
                 "rate": "20Hz",

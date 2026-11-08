@@ -1,5 +1,3 @@
-# ground_station/receivers/nodes/mavlink_rx.py
-
 import json
 import socket
 import threading
@@ -27,13 +25,17 @@ class MavlinkReceiver(threading.Thread):
         self.rx_state = "DISCONNECTED"
         self.last_seen: float = 0.0
 
-        # Pre-initialize packet repository for immediate GUI tab rendering
-        self.packets: Dict[str, Any] = {
-            "velocity": {"vx": 0.0, "vy": 0.0, "vz": 0.0},
-            "distance_sensor": {"distance": 0.0, "min_distance": 0.2, "max_distance": 4.0}
+        self.packets: Dict[str, Any] = {}
+        self.velocity: Dict[str, float] = {}
+        self.distance_sensor: Dict[str, float] = {}
+
+        # Isolated health metadata
+        self.health_info: Dict[str, Any] = {
+            "status": "OFFLINE",
+            "rate_hz": 0.0,
+            "battery_pct": -1,
+            "voltage_v": 0.0
         }
-        self.velocity: Dict[str, float] = {"vx": 0.0, "vy": 0.0, "vz": 0.0}
-        self.distance_sensor: Dict[str, float] = {"distance": 0.0, "min_distance": 0.2, "max_distance": 4.0}
 
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
@@ -47,33 +49,39 @@ class MavlinkReceiver(threading.Thread):
         with self._lock:
             return dict(self.packets)
 
-    def get_status_info(self) -> Dict[str, Any]:
-        """Provides health metrics and packet dictionary to NodeHealthView GUI."""
+    def get_health_info(self) -> Dict[str, Any]:
+        """Thread-safe getter for node health metadata."""
         with self._lock:
+            if self.last_seen == 0.0 or (time.time() - self.last_seen > 2.5) or not self.enabled:
+                return {
+                    "status": "OFFLINE",
+                    "rate_hz": 0.0,
+                    "battery_pct": -1,
+                    "voltage_v": 0.0
+                }
+            info = dict(self.health_info)
+            if info.get("status") in ["OFFLINE", "DISCONNECTED", None]:
+                info["status"] = "HEALTHY"
+            return info
+
+    def get_status_info(self) -> Dict[str, Any]:
+        with self._lock:
+            is_active = (time.time() - self.last_seen <= 2.5) and self.enabled
             return {
-                "status": self.rx_state,
+                "status": "STREAMING" if is_active else "OFFLINE",
                 "port": self.port,
-                "rate": 20,
+                "rate": self.health_info.get("rate_hz", 0.0),
                 "telemetry": dict(self.packets),
                 "last_seen": self.last_seen
             }
 
-    def _is_pi_link_connected(self) -> bool:
-        if not self.enabled:
-            return False
-        active_link = getattr(PiLink, "_active_instance", None)
-        if active_link is None:
-            return False
-        try:
-            return active_link.link_state == LinkState.CONNECTED
-        except Exception:
-            return False
-
     def _send_start_signal(self):
+        """Sends stream activation signal targeting both legacy and updated node names."""
         if self._sock:
             start_pkt = json.dumps({
                 "cmd": "START_STREAM",
-                "node": "PX4-MAVLink Node"
+                "node": "MAVLink Node",
+                "legacy_node": "PX4-MAVLink Node"
             }).encode("utf-8")
             active_link = getattr(PiLink, "_active_instance", None)
             target_ip = self.last_rpi_ip or (active_link.active_ip if active_link else None)
@@ -97,33 +105,38 @@ class MavlinkReceiver(threading.Thread):
             return
 
         while self.running:
-            is_connected = self._is_pi_link_connected()
-
-            if not is_connected:
+            if not self.enabled:
                 with self._lock:
-                    self.rx_state = "DISABLED" if not self.enabled else "DISCONNECTED"
+                    self.rx_state = "DISABLED"
                 time.sleep(0.2)
                 continue
-
-            with self._lock:
-                if self.rx_state in ["DISCONNECTED", "DISABLED"]:
-                    self.rx_state = "STREAMING"
-                    self._send_start_signal()
 
             try:
                 data, addr = self._sock.recvfrom(4096)
                 if not data:
                     continue
 
-                payload = json.loads(data.decode("utf-8"))
+                try:
+                    payload = json.loads(data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                if not isinstance(payload, dict) or "packets" not in payload or not isinstance(payload["packets"], dict):
+                    continue
+
                 self.rpi_address = addr
                 self.last_rpi_ip = addr[0]
 
                 with self._lock:
                     self.rx_state = "STREAMING"
                     self.last_seen = time.time()
-                    incoming_packets = payload.get("packets", {})
+                    incoming_packets = payload["packets"]
 
+                    # Extract node_health cleanly without polluting telemetry inspection tables
+                    if "node_health" in incoming_packets:
+                        self.health_info = incoming_packets.pop("node_health")
+
+                    # Populate remaining telemetry packets dynamically
                     for pkt_type, pkt_data in incoming_packets.items():
                         self.packets[pkt_type] = pkt_data
                         if pkt_type == "velocity":
@@ -133,7 +146,7 @@ class MavlinkReceiver(threading.Thread):
 
             except socket.timeout:
                 continue
-            except Exception:
+            except Exception as e:
                 if self.running:
                     time.sleep(0.05)
 
@@ -144,5 +157,4 @@ class MavlinkReceiver(threading.Thread):
         self.running = False
 
 
-# Backward compatibility alias
 MAVLinkReceiver = MavlinkReceiver

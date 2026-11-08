@@ -1,13 +1,13 @@
-# ground_station/panel/views/nodes/camera_view.py
-
 import base64
 import io
 import tkinter as tk
 from ground_station.utils.colors import (
-    BG_CARD, BG_DARK, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED,
+    BG_CARD, BG_DARK, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
     COLOR_PLOT_AXIS, COLOR_PLOT_TEXT
 )
 from ground_station.receivers.nodes.camera_rx import CameraReceiver
+from ground_station.receivers.nodes.mavlink_rx import MavlinkReceiver
+from ground_station.comms.pi_bridge import PiLink, LinkState
 
 try:
     from PIL import Image, ImageTk
@@ -58,6 +58,7 @@ class CameraView(tk.LabelFrame):
     def update_view(self):
         rx = self.camera_rx or getattr(CameraReceiver, "_active_instance", None)
         if not rx:
+            self._render_battery_overlay()
             return
 
         # 1. Fetch ArUco Target Coordinates
@@ -80,7 +81,6 @@ class CameraView(tk.LabelFrame):
                 img_bytes = base64.b64decode(raw_b64)
                 img = Image.open(io.BytesIO(img_bytes))
                 
-                # Resize image dynamically to fit canvas bounds
                 cw = self.canvas.winfo_width() or 320
                 ch = self.canvas.winfo_height() or 240
                 img = img.resize((cw, ch), Image.Resampling.LANCZOS)
@@ -97,3 +97,52 @@ class CameraView(tk.LabelFrame):
                 cw, ch, text="[NO LIVE VIDEO STREAM]",
                 fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold")
             )
+
+        # 3. Render Drone Battery Overlay ONLY when MAVLink telemetry is actively present
+        self._render_battery_overlay()
+
+    def _render_battery_overlay(self):
+        """Draws subtle drone battery overlay ONLY when MAVLink receiver is active and master link is CONNECTED."""
+        self.canvas.delete("bat_overlay")
+
+        # Instant disconnect override: clear battery text immediately if master link drops
+        active_link = getattr(PiLink, "_active_instance", None)
+        if not active_link or not hasattr(active_link, "get_health"):
+            return
+        if active_link.get_health().get("state") != LinkState.CONNECTED:
+            return
+
+        mav_rx = getattr(MavlinkReceiver, "_active_instance", None)
+        if not mav_rx or not hasattr(mav_rx, "get_health_info"):
+            return
+
+        health_info = mav_rx.get_health_info()
+        h_status = health_info.get("status", "OFFLINE")
+
+        if h_status not in ["HEALTHY", "POOR"]:
+            return
+
+        cw = self.canvas.winfo_width() or 320
+        ch = self.canvas.winfo_height() or 240
+
+        battery_pct = health_info.get("battery_pct", -1)
+        voltage_v = health_info.get("voltage_v", 0.0)
+
+        if battery_pct >= 0 and voltage_v > 0:
+            bat_str = f"BAT: {battery_pct}% ({voltage_v}V)"
+            color = ACCENT_GREEN if battery_pct > 50 else (ACCENT_YELLOW if battery_pct > 20 else ACCENT_RED)
+        elif battery_pct >= 0:
+            bat_str = f"BAT: {battery_pct}%"
+            color = ACCENT_GREEN if battery_pct > 50 else (ACCENT_YELLOW if battery_pct > 20 else ACCENT_RED)
+        elif voltage_v > 0:
+            bat_str = f"BAT: {voltage_v}V"
+            color = ACCENT_GREEN
+        else:
+            bat_str = "BAT: DISCONNECTED"
+            color = ACCENT_RED
+
+        self.canvas.create_text(
+            cw - 12, ch - 12, text=bat_str, anchor="se",
+            fill=color, font=("Consolas", 9, "bold"), tags="bat_overlay"
+        )
+        self.canvas.tag_raise("bat_overlay")
