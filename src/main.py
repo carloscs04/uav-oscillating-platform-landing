@@ -1,28 +1,54 @@
-import time
-import signal
 import sys
-from logic.master.master_node import MasterNode
+import time
+from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
+from src.interfaces.Bridge_WIFI.master_wifi import MasterWIFI
 
 
 def main():
-    print("=== [LAUNCHER] Booting Onboard Raspberry Pi Stack ===")
+    """Main entry point for the Raspberry Pi onboard system with self-healing nodes."""
+    mavlink_node = None
+    bridge_wifi = None
 
-    # Instantiate and start Master Node supervisor
-    master = MasterNode()
-    master.start()
+    print("[MAIN] Starting self-healing subsystem nodes...")
 
-    # Graceful shutdown handler
-    def handle_shutdown(sig, frame):
-        print("\n=== [LAUNCHER] Shutdown signal caught. Stopping Master Node... ===")
-        master.stop()
-        sys.exit(0)
+    # 1. Instantiate and start MAVLink hardware node (Supervised non-blocking reconnect)
+    mavlink_node = MAVLinkManager()
+    mavlink_node.start(mode="HARDWARE")
 
-    signal.signal(signal.SIGINT, handle_shutdown)
-    signal.signal(signal.SIGTERM, handle_shutdown)
+    try:
+        print("[MAIN] Starting MasterWIFI telecom bridge...")
 
-    # Launcher thread stays alive while master node is active
-    while master.is_running:
-        time.sleep(1.0)
+        # 2. Instantiate MasterWIFI passing live nodes
+        bridge_wifi = MasterWIFI(
+            handshake_port=5007,
+            mavlink_node=mavlink_node
+        )
+
+        # 3. Start WiFi telecom orchestrator (Blocks main thread for system logs)
+        bridge_wifi.start()
+
+    except KeyboardInterrupt:
+        print("\n[MAIN] KeyboardInterrupt (Ctrl+C) detected. Initiating shutdown...")
+    except Exception as e:
+        print(f"\n[MAIN Error] Unexpected system execution error: {e}")
+    finally:
+        print("[MAIN] Safely terminating all active onboard subsystem nodes...")
+
+        if bridge_wifi is not None:
+            try:
+                bridge_wifi.stop()
+                print("[MAIN] MasterWIFI telecom bridge stopped cleanly.")
+            except Exception as e:
+                print(f"[MAIN Warning] Exception during MasterWIFI shutdown: {e}")
+
+        if mavlink_node is not None:
+            try:
+                mavlink_node.stop()
+                print("[MAIN] MAVLink hardware manager node stopped cleanly.")
+            except Exception as e:
+                print(f"[MAIN Warning] Exception during MAVLink shutdown: {e}")
+
+        print("[MAIN] All onboard nodes terminated safely. System offline.")
 
 
 if __name__ == "__main__":
