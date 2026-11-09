@@ -112,12 +112,28 @@ class PiLink:
         if self.active_ip in ["N/A", "127.0.0.1", "localhost"]:
             return 5.0
 
+        is_windows = os.name == "nt"
+
         try:
             start_t = time.time()
-            cmd = ["ping", "-c", "1", "-W", str(self.ping_timeout), self.active_ip]
-            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if is_windows:
+                # Windows: -n <count>, -w <timeout in ms>
+                cmd = ["ping", "-n", "1", "-w", str(int(self.ping_timeout * 1000)), self.active_ip]
+            else:
+                # Linux/macOS: -c <count>, -W <timeout in s>
+                cmd = ["ping", "-c", "1", "-W", str(self.ping_timeout), self.active_ip]
 
-            if res.returncode == 0:
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=self.ping_timeout + 2,
+            )
+
+            # Windows ping may return 0 on "Destination host unreachable"; require a real reply (TTL=)
+            ok = res.returncode == 0 and (not is_windows or "TTL=" in res.stdout.upper())
+            if ok:
                 return (time.time() - start_t) * 1000.0
         except Exception:
             pass
