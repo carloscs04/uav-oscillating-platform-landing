@@ -1,24 +1,61 @@
-# ground_station/panel/views/master_node_view.py
+# ground_station/panel/views/nodes/master_status_view.py
 
 import tkinter as tk
-from ground_station.utils.colors import BG_CARD, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW
+from ground_station.utils.colors import (
+    BG_CARD, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW
+)
+from ground_station.comms.pi_bridge import PiLink, LinkState, HealthState
+
 
 class MasterNodeView(tk.LabelFrame):
-    """System Master Node badge and stage display."""
-    
-    def __init__(self, parent, controller, **kwargs):
-        super().__init__(parent, text=" System Master Node ", font=("Helvetica", 10, "bold"),
-                         fg=FG_CYAN, bg=BG_CARD, bd=2, relief="groove", pady=4, **kwargs)
-        self.controller = controller
+    """Global Master Telecom Connection & Health Status Widget."""
 
-        self.lbl_stage = tk.Label(self, text=f"Active Stage : {self.controller.current_stage}", font=("Consolas", 9, "bold"), fg=FG_WHITE, bg=BG_CARD, anchor="w")
-        self.lbl_stage.pack(fill="x", padx=8)
-        
-        self.lbl_master_state = tk.Label(self, text="Master State : [ DISCONNECTED ]", font=("Consolas", 9), fg=ACCENT_RED, bg=BG_CARD, anchor="w")
-        self.lbl_master_state.pack(fill="x", padx=8)
+    def __init__(self, parent, pi_link=None, **kwargs):
+        super().__init__(
+            parent, text=" Master Node Telecom ", font=("Helvetica", 10, "bold"),
+            fg=FG_CYAN, bg=BG_CARD, bd=2, relief="groove", pady=4, padx=8, **kwargs
+        )
+        self.pi_link = pi_link
+
+        row = tk.Frame(self, bg=BG_CARD)
+        row.pack(fill="x")
+
+        tk.Label(row, text="MASTER LINK:", font=("Consolas", 9, "bold"), fg=FG_WHITE, bg=BG_CARD).pack(side="left")
+        self.lbl_status = tk.Label(row, text="[OFFLINE]", font=("Consolas", 9, "bold"), fg=ACCENT_RED, bg=BG_CARD)
+        self.lbl_status.pack(side="left", padx=6)
+
+        self.lbl_metrics = tk.Label(row, text="IP: N/A | Ping: -- ms", font=("Consolas", 9), fg=FG_WHITE, bg=BG_CARD)
+        self.lbl_metrics.pack(side="right")
+
+        self._start_loop()
+
+    def _start_loop(self):
+        self.update_status()
+        self.after(500, self._start_loop)
 
     def update_view(self):
-        self.lbl_stage.config(text=f"Active Stage : {self.controller.current_stage}")
-        m_state = self.controller.master_state
-        m_color = ACCENT_GREEN if m_state in ["ACTIVE", "OK"] else (ACCENT_YELLOW if m_state in ["POOR", "CONNECTING"] else ACCENT_RED)
-        self.lbl_master_state.config(text=f"Master State : [ {m_state} ]", fg=m_color)
+        """Primary update interface called by MasterPanel GUI loop."""
+        self.update_status()
+
+    def update_status(self):
+        active_link = self.pi_link if hasattr(self.pi_link, "get_health") else getattr(PiLink, "_active_instance", None)
+        
+        if not active_link or not hasattr(active_link, "get_health"):
+            self.lbl_status.config(text="[OFFLINE]", fg=ACCENT_RED)
+            self.lbl_metrics.config(text="IP: N/A | Ping: -- ms")
+            return
+
+        health = active_link.get_health()
+        st = health.get("state", LinkState.DISCONNECTED)
+        quality = health.get("health", HealthState.OFFLINE)
+        ip = health.get("ip", "N/A")
+        latency = health.get("latency_ms", "N/A")
+
+        if st == LinkState.CONNECTED and quality == HealthState.HEALTHY:
+            self.lbl_status.config(text="[MASTER ACTIVE / HEALTHY]", fg=ACCENT_GREEN)
+        elif st == LinkState.CONNECTED:
+            self.lbl_status.config(text="[DEGRADED]", fg=ACCENT_YELLOW)
+        else:
+            self.lbl_status.config(text="[DISCONNECTED]", fg=ACCENT_RED)
+
+        self.lbl_metrics.config(text=f"IP: {ip} | Ping: {latency} ms")

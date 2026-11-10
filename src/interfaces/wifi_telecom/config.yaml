@@ -1,4 +1,0 @@
-port: 5005
-video_port: 8080
-stream_rate_hz: 20
-enable_broadcast_fallback: true   # Streams to 255.255.255.255 until a PC connects

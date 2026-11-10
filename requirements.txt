@@ -6,6 +6,7 @@ wheel>=0.42.0
 pymavlink>=2.4.40
 pyserial>=3.5
 PyYAML>=6.0
+Pillow>=10.0.0
 
 # numpy<2 matches ROS 2 Jazzy's cv_bridge; opencv-python>=4.12 requires numpy 2
 opencv-python>=4.8.0,<4.12
