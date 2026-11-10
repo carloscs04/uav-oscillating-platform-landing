@@ -2,7 +2,7 @@
 ChArUco board definition, shared by capture and calibrate, plus a generator
 for the printable board.
 
-    python3 -m calibration.board            # writes calibration/charuco_<...>.pdf and .png
+    python3 -m calibration.board            # writes calibration/files/charuco_<...>.pdf and .png
     python3 -m calibration.board --dpi 300
 
 Print the PDF at 100% / "actual size" (NOT "fit to page"), glue it flat to
@@ -135,8 +135,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="path to config.yaml")
     ap.add_argument("--dpi", type=int, default=600)
-    ap.add_argument("--out", default=str(Path(__file__).resolve().parent),
-                    help="output folder (default: calibration/)")
+    ap.add_argument("--out", default=str(Path(__file__).resolve().parent / "files"),
+                    help="output folder (default: calibration/files/)")
     args = ap.parse_args()
 
     bcfg = board_config(args.config)

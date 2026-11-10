@@ -5,7 +5,7 @@
 # A calibration is only valid for one camera at one resolution and sensor
 # mode, so do not change `resolution` / `sensor_mode` after calibrating.
 
-active_camera: csi_imx219 # SWITCHABLE!!
+active_camera: usb_0bdc_8088 # SWITCHABLE!!
 
 # If the active camera fails to open, try the other cameras below in order.
 fallback: true
@@ -34,8 +34,8 @@ cameras:
 charuco_board:
   squares_x: 9                 # squares across
   squares_y: 6                 # squares down -> 8 x 5 = 40 inner corners
-  square_mm: 30.0              # chessboard square side
-  marker_mm: 22.0              # ArUco marker side inside the white squares
+  square_mm: 29.0              # chessboard square side (measured on the print: designed 30.0)
+  marker_mm: 21.3              # ArUco marker side (designed 22.0, same 96.7% print scale)
   dictionary: DICT_5X5_100     # different from the flight markers, so they never get mixed up
   paper: A4                    # A4 or A3 (landscape), only used for the printable file
 
