@@ -1,0 +1,6 @@
+# Images produced while testing / calibrating (large, regenerated on demand).
+captures/
+test_frames/
+calibration/images/
+# Keep calibration/params/*.yaml (results), but not the visual check images.
+calibration/params/*_check.jpg
