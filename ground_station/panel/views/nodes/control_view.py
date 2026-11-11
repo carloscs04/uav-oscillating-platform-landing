@@ -1,4 +1,4 @@
-# ground_station/panel/views/nodes/control_view.py
+# File: ground_station/panel/views/nodes/control_view.py
 
 import tkinter as tk
 from collections import deque
@@ -53,16 +53,16 @@ class ControlView3Axis(tk.LabelFrame):
             )
             btn_expand.pack(side="right", padx=(2, 0))
 
-        # Start autonomous 20Hz (50ms) canvas redraw loop
+        # Loop autónomo de redibujo a 20Hz (50ms)
         self._start_auto_update()
 
     def _start_auto_update(self):
-        """Self-contained 50ms timer loop to fetch telemetry and redraw plots."""
+        """Timer loop de 50ms para actualizar telemetría y redibujar."""
         self.update_view()
         self.after(50, self._start_auto_update)
 
     def open_expanded_axis_view(self, axis: str):
-        """Opens high-resolution popup window for single axis trajectory inspection."""
+        """Abre ventana modal popup en alta resolución para inspección de eje único."""
         if axis in self.active_popups:
             popup_info = self.active_popups[axis]
             if popup_info["window"].winfo_exists():
@@ -109,16 +109,17 @@ class ControlView3Axis(tk.LabelFrame):
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
     def update_view(self):
-        """Fetches latest telemetry from active ControlReceiver instance and updates position buffers."""
+        """Consulta la telemetría del ControlReceiver y actualiza buffers."""
         rx = self.control_rx or getattr(ControlReceiver, "_active_instance", None)
         if rx is None:
             return
 
-        pos_ref, pos_act = rx.get_control_data()
-        self.update_position(pos_ref, pos_act)
+        if hasattr(rx, "get_control_data"):
+            pos_ref, pos_act = rx.get_control_data()
+            self.update_position(pos_ref, pos_act)
 
     def update_position(self, pos_ref: list, pos_act: list):
-        """Appends telemetry vectors and redraws both inline and popup canvases."""
+        """Añade vectores de telemetría y redibuja los canvas inline y popups."""
         if len(pos_ref) >= 3 and len(pos_act) >= 3:
             for idx, axis in enumerate(["X", "Y", "Z"]):
                 ref_val = float(pos_ref[idx])
@@ -127,10 +128,10 @@ class ControlView3Axis(tk.LabelFrame):
                 self.history[axis]["ref"].append(ref_val)
                 self.history[axis]["act"].append(act_val)
 
-                # Render inline canvas
+                # Renderizar inline canvas
                 self._render_axis_canvas(self.canvases[axis], axis)
 
-                # Render open popup canvas if present
+                # Renderizar popup abierto
                 if axis in self.active_popups:
                     popup = self.active_popups[axis]
                     if popup["window"].winfo_exists():
@@ -141,7 +142,7 @@ class ControlView3Axis(tk.LabelFrame):
                         self._render_axis_canvas(popup["canvas"], axis, is_expanded=True)
 
     def _render_axis_canvas(self, canvas: tk.Canvas, axis: str, is_expanded: bool = False):
-        """Shared plotting engine with MATLAB dark grid lines and trajectory splines."""
+        """Motor de graficado estilo MATLAB con grilla oscura y curvas de trayectoria."""
         canvas.delete("all")
 
         w = canvas.winfo_width()
@@ -163,7 +164,7 @@ class ControlView3Axis(tk.LabelFrame):
         range_val = max_val - min_val
         dx = w / (self.max_history - 1)
 
-        # Background Grid Lines
+        # Grilla de fondo
         y_divs = 8 if is_expanded else 4
         x_divs = 12 if is_expanded else 6
 
@@ -175,12 +176,12 @@ class ControlView3Axis(tk.LabelFrame):
             gx = (w / x_divs) * i
             canvas.create_line(gx, 0, gx, h, fill=COLOR_PLOT_GRID, dash=(2, 4))
 
-        # Zero Baseline Line
+        # Línea de referencia Cero
         if min_val <= 0.0 <= max_val:
             zero_y = h - ((0.0 - min_val) / range_val * h)
             canvas.create_line(0, zero_y, w, zero_y, fill=COLOR_PLOT_ZERO, width=1.5)
 
-        # Reference Trajectory (Dotted Red Line)
+        # Trayectoria Setpoint (Línea punteada roja)
         ref_pts = []
         for i, val in enumerate(ref_data):
             x = i * dx
@@ -190,7 +191,7 @@ class ControlView3Axis(tk.LabelFrame):
         if len(ref_pts) >= 4:
             canvas.create_line(ref_pts, fill=COLOR_PLOT_REF, width=2.0 if is_expanded else 1.5, dash=(4, 3))
 
-        # Actual Telemetry Trajectory (Solid Green Line)
+        # Telemetría Real (Línea sólida verde)
         act_pts = []
         for i, val in enumerate(act_data):
             x = i * dx
@@ -200,7 +201,7 @@ class ControlView3Axis(tk.LabelFrame):
         if len(act_pts) >= 4:
             canvas.create_line(act_pts, fill=COLOR_PLOT_ACT, width=2.5 if is_expanded else 2.0, smooth=True, splinesteps=12)
 
-        # Axis Scale Text Labels
+        # Etiquetas de escala en ejes
         font_size = 9 if is_expanded else 7
         canvas.create_text(8, 8, text=f"Max: {max_val:.2f}", fill=COLOR_PLOT_TEXT, font=("Consolas", font_size, "bold"), anchor="nw")
         canvas.create_text(8, h - 8, text=f"Min: {min_val:.2f}", fill=COLOR_PLOT_TEXT, font=("Consolas", font_size, "bold"), anchor="sw")

@@ -1,3 +1,5 @@
+# File: ground_station/panel/views/nodes/nodes_status.py
+
 import json
 import time
 import tkinter as tk
@@ -184,7 +186,7 @@ class NodeHealthView(tk.LabelFrame):
         return " | ".join(parts)
 
     def _get_receiver_for_node(self, node_name: str):
-        """Resolves node receiver with active Singleton fallback."""
+        """Resolves sub-node receiver with active Singleton fallback."""
         if node_name in ["MAVLink Node", "PX4-MAVLink Node"]:
             active_inst = getattr(MavlinkReceiver, "_active_instance", None)
             if active_inst:
@@ -214,7 +216,6 @@ class NodeHealthView(tk.LabelFrame):
         """Refreshes status matrix indicators and updates active terminal windows smoothly."""
         node_states = self.main_receiver.get_all_node_statuses()
 
-        # Check if master network link is active
         active_link = self.pi_link or getattr(PiLink, "_active_instance", None)
         is_master_connected = False
         if active_link and hasattr(active_link, "get_health"):
@@ -224,7 +225,6 @@ class NodeHealthView(tk.LabelFrame):
             is_enabled = self.node_enabled_states.get(name, True)
             rx_obj = self._get_receiver_for_node(name)
 
-            # Instant disconnect override: Force OFFLINE if master link is down
             if not is_master_connected:
                 h_status = "OFFLINE"
                 health_info = {}
@@ -250,7 +250,7 @@ class NodeHealthView(tk.LabelFrame):
             if name in self.active_inspectors:
                 inspector = self.active_inspectors[name]
                 if not inspector["win"].winfo_exists():
-                    del self.active_inspectors[name]
+                    del self.active_inspectors[node_name]
                     continue
 
                 txt = inspector["txt"]
@@ -266,7 +266,6 @@ class NodeHealthView(tk.LabelFrame):
 
                 hdr_lbl.config(text=hdr_text, fg=hdr_color)
 
-                # Register any newly discovered incoming packet tabs
                 for pkt_key in telemetry.keys():
                     self._create_tab_button(name, pkt_key)
 
@@ -276,7 +275,6 @@ class NodeHealthView(tk.LabelFrame):
 
                 active_pkt = inspector["active_packet_var"].get()
 
-                # Retrieve current packet data directly from receiver object or fallback to telemetry dict
                 current_val = None
                 if rx_obj:
                     if hasattr(rx_obj, "get_packet"):
@@ -314,7 +312,6 @@ class NodeHealthView(tk.LabelFrame):
 
             active_link = self.pi_link or getattr(PiLink, "_active_instance", None)
             if active_link:
-                # Send filter selection command compatible with all RPi node naming variants
                 cmd_payload = {
                     "node": node_name,
                     "packet": pkt_name,

@@ -1,45 +1,48 @@
-# ground_station/receivers/main_receiver.py
+# File: ground_station/receivers/main_receiver.py
 
 import time
 from typing import Any, Dict
 
+from ground_station.receivers.nodes.master_rx import MasterReceiver
+from ground_station.receivers.nodes.mavlink_rx import MAVLinkReceiver
+from ground_station.receivers.nodes.distance_sensor_rx import DistanceSensorReceiver
 from ground_station.receivers.nodes.camera_rx import CameraReceiver
 from ground_station.receivers.nodes.control_rx import ControlReceiver
-from ground_station.receivers.nodes.distance_sensor_rx import DistanceSensorReceiver
-from ground_station.receivers.nodes.mavlink_rx import MAVLinkReceiver
 
 
 class MainReceiver:
     """Aggregates telemetry and stream receivers across all node sub-receivers."""
 
     def __init__(self):
-        self.mavlink_rx = MAVLinkReceiver()
-        self.distance_rx = DistanceSensorReceiver()
-        self.camera_rx = CameraReceiver()
-        self.control_rx = ControlReceiver()
+        self.master_rx = MasterReceiver(port=5001)
+        self.mavlink_rx = MAVLinkReceiver(port=5005)
+        self.distance_rx = DistanceSensorReceiver(port=5002)
+        self.camera_rx = CameraReceiver(port=5003)
+        self.control_rx = ControlReceiver(port=5004)
 
     def start_all(self):
-        """Starts background thread listener loops for all sub-node receivers."""
+        """Starts background thread listener loops for all node receivers."""
+        self.master_rx.start()
         self.mavlink_rx.start()
         self.distance_rx.start()
         self.camera_rx.start()
         self.control_rx.start()
 
     def stop_all(self):
-        """Gracefully shuts down all active sub-node receiver background threads."""
+        """Gracefully shuts down all active receiver background threads."""
+        self.master_rx.stop()
         self.mavlink_rx.stop()
         self.distance_rx.stop()
         self.camera_rx.stop()
         self.control_rx.stop()
 
     def get_all_node_statuses(self) -> Dict[str, Dict[str, Any]]:
-        """Evaluates heartbeat timeouts across nodes and compiles full status matrix."""
+        """Evaluates heartbeat timeouts across sub-nodes (excluding Master Node)."""
         now = time.time()
 
-        def check_stat(last_seen: float, timeout: float = 2.0) -> str:
+        def check_stat(last_seen: float, timeout: float = 2.5) -> str:
             return "OK" if (now - last_seen < timeout and last_seen > 0) else "DISCONNECTED"
 
-        # Safely query live status info dictionaries from each sub-receiver
         mav_info = self.mavlink_rx.get_status_info() if hasattr(self.mavlink_rx, "get_status_info") else {}
         dist_info = self.distance_rx.get_status_info() if hasattr(self.distance_rx, "get_status_info") else {}
         cam_info = self.camera_rx.get_status_info() if hasattr(self.camera_rx, "get_status_info") else {}
@@ -49,25 +52,25 @@ class MainReceiver:
             "MAVLink Node": {
                 "status": check_stat(mav_info.get("last_seen", getattr(self.mavlink_rx, "last_seen", 0.0))),
                 "port": getattr(self.mavlink_rx, "port", 5005),
-                "rate": "10Hz",
+                "rate": f"{mav_info.get('rate', 10.0)}Hz",
                 "telemetry": mav_info.get("telemetry", getattr(self.mavlink_rx, "packets", {})),
             },
             "Distance-Sensor Node": {
                 "status": check_stat(dist_info.get("last_seen", getattr(self.distance_rx, "last_seen", 0.0))),
-                "port": getattr(self.distance_rx, "port", 5008),
-                "rate": "5Hz",
+                "port": getattr(self.distance_rx, "port", 5002),
+                "rate": f"{dist_info.get('rate', 15.0)}Hz",
                 "telemetry": dist_info.get("telemetry", getattr(self.distance_rx, "packets", {})),
             },
             "Camera-Aruco Node": {
                 "status": check_stat(cam_info.get("last_seen", getattr(self.camera_rx, "last_seen", 0.0))),
-                "port": getattr(self.camera_rx, "port", 8080),
-                "rate": "30fps",
+                "port": getattr(self.camera_rx, "port", 5003),
+                "rate": f"{cam_info.get('rate', 30.0)}fps",
                 "telemetry": cam_info.get("telemetry", getattr(self.camera_rx, "packets", {})),
             },
             "Control Node": {
                 "status": check_stat(ctrl_info.get("last_seen", getattr(self.control_rx, "last_seen", 0.0))),
-                "port": getattr(self.control_rx, "port", 5007),
-                "rate": "20Hz",
+                "port": getattr(self.control_rx, "port", 5004),
+                "rate": f"{ctrl_info.get('rate', 20.0)}Hz",
                 "telemetry": ctrl_info.get("telemetry", getattr(self.control_rx, "packets", {})),
             },
         }

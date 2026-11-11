@@ -1,3 +1,5 @@
+# File: ground_station/panel/views/nodes/camera_view.py
+
 import base64
 import io
 import tkinter as tk
@@ -6,6 +8,7 @@ from ground_station.utils.colors import (
     COLOR_PLOT_AXIS, COLOR_PLOT_TEXT
 )
 from ground_station.receivers.nodes.camera_rx import CameraReceiver
+from ground_station.receivers.nodes.control_rx import ControlReceiver
 from ground_station.receivers.nodes.mavlink_rx import MavlinkReceiver
 from ground_station.comms.pi_bridge import PiLink, LinkState
 
@@ -26,7 +29,7 @@ class CameraView(tk.LabelFrame):
         )
         self.camera_rx = camera_rx
 
-        # 1. Header Metrics Bar
+        # 1. Header de métricas
         self.hdr_frame = tk.Frame(self, bg=BG_CARD)
         self.hdr_frame.pack(fill="x", pady=(0, 4))
 
@@ -42,7 +45,7 @@ class CameraView(tk.LabelFrame):
         )
         self.lbl_coords.pack(side="right")
 
-        # 2. Video Canvas Box
+        # 2. Canvas de Video
         self.canvas = tk.Canvas(
             self, bg=BG_DARK, height=260, highlightthickness=1, highlightbackground=COLOR_PLOT_AXIS
         )
@@ -53,28 +56,36 @@ class CameraView(tk.LabelFrame):
 
     def _start_loop(self):
         self.update_view()
-        self.after(66, self._start_loop)  # ~15 FPS redraw loop
+        self.after(66, self._start_loop)  # Redibujo a ~15 FPS
 
     def update_view(self):
-        rx = self.camera_rx or getattr(CameraReceiver, "_active_instance", None)
-        if not rx:
-            self._render_battery_overlay()
-            return
+        cam_rx = self.camera_rx or getattr(CameraReceiver, "_active_instance", None)
+        ctrl_rx = getattr(ControlReceiver, "_active_instance", None)
 
-        # 1. Fetch ArUco Target Coordinates
-        pose = rx.get_packet("aruco_pose", {"detected": False, "x": 0.0, "y": 0.0, "z": 0.0, "id": -1})
+        # 1. Coordenadas ArUco (CameraReceiver o fallback ControlReceiver)
+        pose = {"detected": False, "x": 0.0, "y": 0.0, "z": 0.0, "id": -1}
+        if cam_rx:
+            pose = cam_rx.get_packet("aruco_pose", pose)
+        if not pose.get("detected", False) and ctrl_rx:
+            pose = ctrl_rx.get_packet("aruco_pose", pose)
+
         if pose.get("detected", False):
-            x, y, z = pose.get("x", 0.0), pose.get("y", 0.0), pose.get("z", 0.0)
-            dist = rx.get_aruco_distance()
-            self.lbl_target.config(text=f"TARGET: ARUCO ID {pose.get('id', 0)} DETECTED", fg=ACCENT_GREEN)
+            x = float(pose.get("x", 0.0))
+            y = float(pose.get("y", 0.0))
+            z = float(pose.get("z", 0.0))
+            dist = (x**2 + y**2 + z**2) ** 0.5
+            target_id = pose.get("id", 0)
+            self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
             self.lbl_coords.config(text=f"X: {x:+.2f} | Y: {y:+.2f} | Z: {z:+.2f} | Dist: {dist:.2f} m")
         else:
             self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
             self.lbl_coords.config(text="X: -- | Y: -- | Z: -- | Dist: -- m")
 
-        # 2. Render Video Frame Payload
-        video_pkt = rx.get_packet("video_frame", {})
-        raw_b64 = video_pkt.get("data", "")
+        # 2. Renderizar Frame de Video (Base64 JPEG)
+        raw_b64 = ""
+        if cam_rx:
+            video_pkt = cam_rx.get_packet("video_frame", {})
+            raw_b64 = video_pkt.get("data", "")
 
         if raw_b64 and HAS_PIL:
             try:
@@ -91,21 +102,19 @@ class CameraView(tk.LabelFrame):
                 pass
         elif not raw_b64:
             self.canvas.delete("all")
-            cw = self.canvas.winfo_width() / 2
-            ch = self.canvas.winfo_height() / 2
+            cw = (self.canvas.winfo_width() or 320) / 2
+            ch = (self.canvas.winfo_height() or 240) / 2
             self.canvas.create_text(
                 cw, ch, text="[NO LIVE VIDEO STREAM]",
                 fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold")
             )
 
-        # 3. Render Drone Battery Overlay ONLY when MAVLink telemetry is actively present
+        # 3. Superponer la batería del dron leída de MAVLink
         self._render_battery_overlay()
 
     def _render_battery_overlay(self):
-        """Draws subtle drone battery overlay ONLY when MAVLink receiver is active and master link is CONNECTED."""
         self.canvas.delete("bat_overlay")
 
-        # Instant disconnect override: clear battery text immediately if master link drops
         active_link = getattr(PiLink, "_active_instance", None)
         if not active_link or not hasattr(active_link, "get_health"):
             return
