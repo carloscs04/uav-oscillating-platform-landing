@@ -43,3 +43,12 @@ calibration:
   min_corners: 12              # ignore views showing fewer ChArUco corners
   target_images: 30            # capture tool shows progress towards this
   max_view_error_px: 1.0       # views above this (and 2x the median) are dropped and re-solved
+
+# Flight markers (landing platform). Distances come out in the same unit as
+# the marker size, so the size must be the REAL printed black square, edge to edge.
+aruco:
+  dictionary: DICT_4X4_50
+  marker_mm: 100.0             # black square side, NOT including the white margin (measured on the print)
+  ids: [10, 25, 32]            # only these are reported; [] = report every ID
+  sizes_mm: {}                 # per-ID override, e.g. {32: 40.0} for a small nested marker
+  max_reproj_err_px: 2.0       # poses fitting worse than this are flagged as unreliable

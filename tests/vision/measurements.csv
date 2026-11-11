@@ -1,0 +1,4 @@
+time,camera,calibrated,id,n,distance_m,std_mm,x_m,y_m,z_m,view_angle_deg,reproj_err_px,marker_px,true_distance_m,notes
+2026-11-10 17:00:46,usb_0bdc_8088_1280x720,1,32,30,0.5277,0.42,-0.1011,-0.0079,0.5179,8.5,0.134,234.6,0.50,"tape, reference point not recorded (lens front? vertical height?)"
+2026-11-10 17:02:12,usb_0bdc_8088_1280x720,1,32,30,1.0223,1.62,0.0879,0.1022,1.0134,9.3,0.109,121.0,1.00,"tape, reference point not recorded (lens front? vertical height?)"
+2026-11-10 17:03:51,usb_0bdc_8088_1280x720,1,32,30,1.4973,1.19,-0.0225,0.0504,1.4963,4.4,0.066,82.6,1.50,"tape, reference point not recorded (lens front? vertical height?)"
