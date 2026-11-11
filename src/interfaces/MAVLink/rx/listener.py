@@ -54,27 +54,31 @@ class MAVLinkRXListener:
         self.master = None
 
     def _read_loop(self):
-        while not self._stop_event.is_set() and self.master:
-            try:
-                msg = self.master.recv_match(blocking=False)
-                if msg:
-                    data = msg.to_dict()
-                    pkt_type = data.get("mavpackettype")
+            while not self._stop_event.is_set() and self.master:
+                try:
+                    # Bucle interno para sacar TODOS los mensajes en cola
+                    while True:
+                        msg = self.master.recv_match(blocking=False)
+                        if not msg:
+                            break  # Si ya no hay mensajes, salimos del bucle para descansar
+                        
+                        data = msg.to_dict()
+                        pkt_type = data.get("mavpackettype")
 
-                    if pkt_type and pkt_type != "BAD_DATA":
-                        self.last_recv_time = time.time()
-                        self._msg_counter += 1
-                        self.state.update_packet(pkt_type, data)
+                        if pkt_type and pkt_type != "BAD_DATA":
+                            self.last_recv_time = time.time()
+                            self._msg_counter += 1
+                            self.state.update_packet(pkt_type, data)
 
-                # Cálculo de Hz cada 1.0 segundo
-                now = time.time()
-                elapsed = now - self._last_rate_calc
-                if elapsed >= 1.0:
-                    self.current_rate_hz = round(self._msg_counter / elapsed, 1)
-                    self._msg_counter = 0
-                    self._last_rate_calc = now
+                    # Cálculo de Hz cada 1.0 segundo
+                    now = time.time()
+                    elapsed = now - self._last_rate_calc
+                    if elapsed >= 1.0:
+                        self.current_rate_hz = round(self._msg_counter / elapsed, 1)
+                        self._msg_counter = 0
+                        self._last_rate_calc = now
 
-            except Exception:
-                time.sleep(0.05)
+                except Exception:
+                    time.sleep(0.05)
 
-            self._stop_event.wait(0.005)
+                self._stop_event.wait(0.005) 

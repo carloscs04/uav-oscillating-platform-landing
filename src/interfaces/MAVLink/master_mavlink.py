@@ -232,12 +232,6 @@ class MAVLinkManager:
         self.state.clear_transient_packets()
         return self.system_cmd.debug_force_disarm()
 
-    def export_telemetry_package(self) -> dict:
-        """Exports ready-to-send structured telemetry package or RECONNECTING status."""
-        if not self.connected:
-            return {"status": "RECONNECTING"}
-        return self.state.export_telemetry_package()
-
 # Global stream filter to suppress hardcoded pymavlink "Device ... is dead" terminal prints
 class SuppressDeadDeviceFilter:
     def __init__(self, original_stream):
