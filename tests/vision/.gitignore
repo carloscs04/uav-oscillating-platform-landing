@@ -1,0 +1,4 @@
+# Large / regenerated outputs of the vision tools.
+recordings/
+snapshots/
+# measurements.csv IS committed: it holds the tape-measure validation (Stage 5).

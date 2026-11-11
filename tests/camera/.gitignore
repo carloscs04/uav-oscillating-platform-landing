@@ -4,3 +4,6 @@ test_frames/
 calibration/images/
 # Keep calibration/params/*.yaml (results), but not the visual check images.
 calibration/params/*_check.jpg
+
+# Local planning notes, not shared.
+plan.md
