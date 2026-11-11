@@ -1,51 +1,56 @@
-# interfaces/Bridge-WIFI/tx_nodes/distance_sensor_tx.py
+# File: src/interfaces/Bridge_WIFI/tx/distance_sensor.py
 
 import json
-import math
 import socket
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 
 class DistanceSensorTransmitter(threading.Thread):
-    """Modular UDP transmitter for Rangefinder telemetry with per-packet streaming filters."""
+    """UDP transmitter for Distance Sensor Node telemetry and health status."""
 
-    def __init__(
-        self,
-        target_ip: str = "127.0.0.1",
-        port: int = 5008,
-        sensor_node: Optional[Any] = None,
-        **kwargs
-    ):
+    VALID_NODE_NAMES = {"Distance-Sensor Node", "Distance Sensor Node", "Distance Sensor"}
+
+    def __init__(self, target_ip: str = "127.0.0.1", port: int = 5002, distance_node: Optional[Any] = None, **kwargs):
         super().__init__(daemon=True)
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
-        self.sensor_node = sensor_node
+        
+        # Acepta cualquier variante de parámetro que envíe MasterWIFI
+        self.distance_node = (
+            distance_node 
+            or kwargs.get("distance_sensor_node") 
+            or kwargs.get("sensor_node") 
+            or kwargs.get("distance_state")
+        )
+        self.node_name = kwargs.get("node_name", "Distance-Sensor Node")
 
         self.running = False
         self.streaming = True
         self.active_filter: str = "ALL"
         self._sock: Optional[socket.socket] = None
-
-        self._packet_providers: Dict[str, Callable[[], Any]] = {}
-        self._static_packets: Dict[str, Any] = {}
         self._lock = threading.Lock()
 
-        self._setup_default_providers()
+    def process_command(self, command: Dict[str, Any]):
+        """Procesa comandos enviados desde el GCS (START_STREAM, STOP_STREAM, SELECT_PACKET)."""
+        target_node = command.get("node")
+        legacy_node = command.get("legacy_node")
+
+        if target_node in self.VALID_NODE_NAMES or legacy_node in self.VALID_NODE_NAMES:
+            cmd_type = command.get("cmd") or command.get("command")
+            new_filter = command.get("filter") or command.get("packet")
+            if new_filter:
+                self.set_active_filter(new_filter)
+
+            if cmd_type == "START_STREAM":
+                self.resume_stream()
+            elif cmd_type == "STOP_STREAM":
+                self.pause_stream()
 
     def set_active_filter(self, packet_name: str):
         with self._lock:
             self.active_filter = packet_name
-            print(f"[DISTANCE_TX] Active filter set to: '{self.active_filter}'")
-
-    def set_packet(self, pkt_type: str, data: Any):
-        with self._lock:
-            self._static_packets[pkt_type] = data
-
-    def register_packet_provider(self, pkt_type: str, provider: Callable[[], Any]):
-        with self._lock:
-            self._packet_providers[pkt_type] = provider
 
     def update_target_ip(self, new_ip: str):
         self.target_ip = new_ip
@@ -62,7 +67,6 @@ class DistanceSensorTransmitter(threading.Thread):
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         t_start = time.time()
-
         while self.running:
             if not self.target_ip or not self.streaming:
                 time.sleep(0.1)
@@ -72,7 +76,7 @@ class DistanceSensorTransmitter(threading.Thread):
             packets_payload = self._build_packets_payload(elapsed)
 
             pkt = json.dumps({
-                "node": "Distance-Sensor Node",
+                "node": self.node_name,
                 "timestamp": time.time(),
                 "packets": packets_payload
             }).encode("utf-8")
@@ -85,43 +89,54 @@ class DistanceSensorTransmitter(threading.Thread):
             time.sleep(0.05)
 
         if self._sock:
-            self._sock.close()
+            try:
+                self._sock.close()
+            except Exception:
+                pass
 
     def _build_packets_payload(self, elapsed: float) -> Dict[str, Any]:
+        """Extrae la salud y la telemetría del estado del sensor de distancia."""
         payload = {}
+
         with self._lock:
-            payload["node_health"] = self._get_health_status()
+            node_ref = self.distance_node
+            if node_ref:
+                try:
+                    state = getattr(node_ref, "state", node_ref)
+                    is_connected = getattr(node_ref, "connected", getattr(state, "connected", True))
+                    rate_hz = getattr(node_ref, "current_rate_hz", getattr(state, "current_rate_hz", 15.0))
 
-            for pkt_type, provider in self._packet_providers.items():
-                if self.active_filter == "ALL" or self.active_filter == pkt_type:
-                    try:
-                        payload[pkt_type] = provider()
-                    except Exception as e:
-                        print(f"[DISTANCE_TX_ERR] Provider '{pkt_type}' failed: {e}")
+                    # 1. Salud del nodo
+                    if hasattr(state, "export_node_health"):
+                        payload["node_health"] = state.export_node_health(rate_hz, is_connected)
 
-            for pkt_type, data in self._static_packets.items():
-                if (self.active_filter == "ALL" or self.active_filter == pkt_type) and pkt_type not in payload:
-                    payload[pkt_type] = data
-        return payload
+                    # 2. Filtrado dinámico de paquetes (distance_sensor / status / ALL)
+                    if hasattr(state, "export_telemetry_data"):
+                        telemetry_data = state.export_telemetry_data()
+                        if isinstance(telemetry_data, dict):
+                            for pkt_name, pkt_data in telemetry_data.items():
+                                if self.active_filter == "ALL" or self.active_filter == pkt_name:
+                                    payload[pkt_name] = pkt_data
 
-    def _get_health_status(self) -> Dict[str, Any]:
-        return {"status": "HEALTHY", "sensor_ready": True}
+                    if payload:
+                        return payload
+                except Exception as e:
+                    print(f"[DISTANCE_TX_ERR] Failed to pull data from state: {e}")
 
-    def _setup_default_providers(self):
-        def _gen_rangefinder():
-            now = time.time()
-            return {
-                "distance": round(1.85 + 0.15 * math.sin(now * 1.2), 3),
-                "min_range": 0.20,
-                "max_range": 6.00,
-                "signal_quality": 98
+            # Fallback en caso de desconexión
+            payload["node_health"] = {
+                "status": "OFFLINE",
+                "rate_hz": 0.0,
+                "battery_pct": -1,
+                "voltage_v": 0.0
             }
 
-        def _gen_sensor_health():
-            return {"voltage": 5.01, "status": "OK", "error_code": 0}
+            if self.active_filter != "ALL":
+                payload[self.active_filter] = {"status": "NO_CONNECTION_ESTABLISHED"}
+            else:
+                payload["status"] = "NO_CONNECTION_ESTABLISHED"
 
-        self.register_packet_provider("rangefinder", _gen_rangefinder)
-        self.register_packet_provider("sensor_health", _gen_sensor_health)
+        return payload
 
     def stop(self):
         self.running = False

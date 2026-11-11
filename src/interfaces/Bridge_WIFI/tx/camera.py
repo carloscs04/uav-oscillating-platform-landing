@@ -1,52 +1,50 @@
-# interfaces/Bridge-WIFI/tx_nodes/camera_tx.py
+# File: src/interfaces/Bridge_WIFI/tx/camera.py
 
 import json
-import math
 import socket
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 
 class CameraTransmitter(threading.Thread):
-    """Modular UDP transmitter for Perception & Video with dynamic packet filtering."""
+    """UDP transmitter for Camera telemetry metadata and node health."""
 
-    def __init__(
-        self,
-        target_ip: str = "127.0.0.1",
-        port: int = 8080,
-        camera_node: Optional[Any] = None,
-        **kwargs
-    ):
+    VALID_NODE_NAMES = {"Camera Node", "Camera Driver", "Camera-Aruco Node", "Aruco-Perception Node"}
+
+    def __init__(self, target_ip: str = "127.0.0.1", port: int = 5003, camera_node: Optional[Any] = None, **kwargs):
         super().__init__(daemon=True)
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
         self.camera_node = camera_node
+        self.node_name = kwargs.get("node_name", "Camera Node")
 
         self.running = False
         self.streaming = True
-        self.active_filter: str = "ALL"  # 'ALL' or specific packet name
+        self.active_filter: str = "ALL"
         self._sock: Optional[socket.socket] = None
-
-        self._packet_providers: Dict[str, Callable[[], Any]] = {}
-        self._static_packets: Dict[str, Any] = {}
         self._lock = threading.Lock()
 
-        self._setup_default_providers()
+    def process_command(self, command: Dict[str, Any]):
+        """Processes incoming GCS control commands (e.g., SET_FILTER, START_STREAM, SELECT_PACKET)."""
+        target_node = command.get("node")
+        legacy_node = command.get("legacy_node")
+
+        if target_node in self.VALID_NODE_NAMES or legacy_node in self.VALID_NODE_NAMES:
+            cmd_type = command.get("cmd") or command.get("command")
+            new_filter = command.get("filter") or command.get("packet")
+            if new_filter:
+                self.set_active_filter(new_filter)
+
+            if cmd_type == "START_STREAM":
+                self.resume_stream()
+            elif cmd_type == "STOP_STREAM":
+                self.pause_stream()
 
     def set_active_filter(self, packet_name: str):
-        """Filters stream output to transmit ONLY the selected packet or 'ALL'."""
         with self._lock:
             self.active_filter = packet_name
             print(f"[CAMERA_TX] Active filter set to: '{self.active_filter}'")
-
-    def set_packet(self, pkt_type: str, data: Any):
-        with self._lock:
-            self._static_packets[pkt_type] = data
-
-    def register_packet_provider(self, pkt_type: str, provider: Callable[[], Any]):
-        with self._lock:
-            self._packet_providers[pkt_type] = provider
 
     def update_target_ip(self, new_ip: str):
         self.target_ip = new_ip
@@ -63,7 +61,6 @@ class CameraTransmitter(threading.Thread):
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         t_start = time.time()
-
         while self.running:
             if not self.target_ip or not self.streaming:
                 time.sleep(0.1)
@@ -73,7 +70,7 @@ class CameraTransmitter(threading.Thread):
             packets_payload = self._build_packets_payload(elapsed)
 
             pkt = json.dumps({
-                "node": "Aruco-Perception Node",
+                "node": self.node_name,
                 "timestamp": time.time(),
                 "packets": packets_payload
             }).encode("utf-8")
@@ -83,52 +80,51 @@ class CameraTransmitter(threading.Thread):
             except Exception as e:
                 print(f"[CAMERA_TX_ERR] Send error to {self.target_ip}: {e}")
 
-            time.sleep(0.066)  # ~15 FPS
+            time.sleep(0.05)
 
         if self._sock:
             self._sock.close()
 
     def _build_packets_payload(self, elapsed: float) -> Dict[str, Any]:
+        """Pulls telemetry and health directly from state, matching MavlinkTransmitter pattern."""
         payload = {}
+
         with self._lock:
-            payload["node_health"] = self._get_health_status()
+            if self.camera_node and hasattr(self.camera_node, "state"):
+                try:
+                    state = self.camera_node.state
+                    is_connected = getattr(self.camera_node, "connected", True)
+                    rate_hz = getattr(self.camera_node, "fps", 30.0)
 
-            for pkt_type, provider in self._packet_providers.items():
-                if self.active_filter == "ALL" or self.active_filter == pkt_type:
-                    try:
-                        payload[pkt_type] = provider()
-                    except Exception as e:
-                        print(f"[CAMERA_TX_ERR] Provider '{pkt_type}' failed: {e}")
+                    # 1. Extracción continua de Salud (Bypassing filtros)
+                    if hasattr(state, "export_node_health"):
+                        payload["node_health"] = state.export_node_health(rate_hz, is_connected)
 
-            for pkt_type, data in self._static_packets.items():
-                if (self.active_filter == "ALL" or self.active_filter == pkt_type) and pkt_type not in payload:
-                    payload[pkt_type] = data
-        return payload
+                    # 2. Extracción y filtrado dinámico de telemetría
+                    if hasattr(state, "export_telemetry_data"):
+                        telemetry_data = state.export_telemetry_data()
+                        if isinstance(telemetry_data, dict):
+                            for pkt_name, pkt_data in telemetry_data.items():
+                                if self.active_filter == "ALL" or self.active_filter == pkt_name:
+                                    payload[pkt_name] = pkt_data
 
-    def _get_health_status(self) -> Dict[str, Any]:
-        return {"status": "HEALTHY", "fps": 15.0, "error_count": 0}
+                    return payload
+                except Exception as e:
+                    print(f"[CAMERA_TX_ERR] Failed to pull data from state: {e}")
 
-    def _setup_default_providers(self):
-        def _gen_aruco_pose():
-            if self.camera_node and hasattr(self.camera_node, "get_aruco_pose"):
-                return self.camera_node.get_aruco_pose()
-            
-            now = time.time()
-            return {
-                "id": 42,
-                "detected": True,
-                "x": round(0.15 * math.sin(now), 3),
-                "y": round(0.10 * math.cos(now), 3),
-                "z": round(1.25 + 0.05 * math.sin(now * 2.0), 3)
+            payload["node_health"] = {
+                "status": "OFFLINE",
+                "rate_hz": 0.0,
+                "battery_pct": -1,
+                "voltage_v": 0.0
             }
 
-        def _gen_video_frame():
-            if self.camera_node and hasattr(self.camera_node, "get_encoded_frame"):
-                return self.camera_node.get_encoded_frame()
-            return {"format": "jpeg_b64", "data": "", "resolution": [640, 480]}
+            if self.active_filter != "ALL":
+                payload[self.active_filter] = {"status": "NO_CONNECTION_ESTABLISHED"}
+            else:
+                payload["status"] = "NO_CONNECTION_ESTABLISHED"
 
-        self.register_packet_provider("aruco_pose", _gen_aruco_pose)
-        self.register_packet_provider("video_frame", _gen_video_frame)
+        return payload
 
     def stop(self):
         self.running = False

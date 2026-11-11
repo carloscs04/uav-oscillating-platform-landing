@@ -1,3 +1,5 @@
+# File: src/interfaces/Bridge_WIFI/master_wifi.py
+
 import os
 import sys
 import time
@@ -10,6 +12,7 @@ from tx.control_node import ControlTransmitter
 from tx.camera import CameraTransmitter
 from tx.mavlink import MavlinkTransmitter
 from tx.distance_sensor import DistanceSensorTransmitter
+from tx.master_node import MasterTransmitter
 
 
 class MasterWIFI:
@@ -25,7 +28,8 @@ class MasterWIFI:
         mavlink_node: Optional[Any] = None,
         control_node: Optional[Any] = None,
         camera_node: Optional[Any] = None,
-        distance_node: Optional[Any] = None
+        distance_node: Optional[Any] = None,
+        master_node: Optional[Any] = None
     ):
         self.handshake_port = handshake_port
         
@@ -34,6 +38,7 @@ class MasterWIFI:
         self.control_node = control_node
         self.camera_node = camera_node
         self.distance_node = distance_node
+        self.master_node = master_node
 
         self.target_ip: Optional[str] = None
         self.tx_nodes: Dict[str, Any] = {}
@@ -70,6 +75,12 @@ class MasterWIFI:
         self.distance_node = node
         if "distance_tx" in self.tx_nodes:
             self.tx_nodes["distance_tx"].distance_node = node
+
+    def set_master_node(self, node: Any):
+        """Dynamically attach or update the live Master Node reference."""
+        self.master_node = node
+        if "master_tx" in self.tx_nodes:
+            self.tx_nodes["master_tx"].master_node = node
 
     def start(self):
         print("==================================================")
@@ -113,7 +124,9 @@ class MasterWIFI:
             "3-Axis Control Node": "control_tx",
             "Aruco-Perception Node": "camera_tx",
             "PX4-MAVLink Node": "mavlink_tx",
-            "Distance-Sensor Node": "distance_tx"
+            "Distance-Sensor Node": "distance_tx",
+            "Master Node": "master_tx",
+            "Master-Logic Node": "master_tx"
         }
         node_key = node_map.get(target_node, target_node)
 
@@ -140,9 +153,9 @@ class MasterWIFI:
                 self.tx_nodes[node_key].set_active_filter(packet_name)
 
     def _start_or_update_tx_nodes(self, target_ip: str):
-        # 1. Control TX Node (Port 5007)
+        # 1. Control TX Node (Port 5004 / 5007)
         if "control_tx" not in self.tx_nodes:
-            tx = ControlTransmitter(target_ip=target_ip, port=5007, control_node=self.control_node)
+            tx = ControlTransmitter(target_ip=target_ip, port=5004, control_node=self.control_node)
             tx.start()
             tx.set_active_filter("ALL")
             self.tx_nodes["control_tx"] = tx
@@ -151,9 +164,9 @@ class MasterWIFI:
             if self.control_node:
                 self.tx_nodes["control_tx"].control_node = self.control_node
 
-        # 2. Camera / Perception TX Node (Port 8080)
+        # 2. Camera / Perception TX Node (Port 5003)
         if "camera_tx" not in self.tx_nodes:
-            cam_tx = CameraTransmitter(target_ip=target_ip, port=8080, camera_node=self.camera_node)
+            cam_tx = CameraTransmitter(target_ip=target_ip, port=5003, camera_node=self.camera_node)
             cam_tx.start()
             cam_tx.set_active_filter("ALL")
             self.tx_nodes["camera_tx"] = cam_tx
@@ -173,9 +186,9 @@ class MasterWIFI:
             if self.mavlink_node:
                 self.tx_nodes["mavlink_tx"].mavlink_node = self.mavlink_node
 
-        # 4. Distance Sensor TX Node (Port 5008)
+        # 4. Distance Sensor TX Node (Port 5002)
         if "distance_tx" not in self.tx_nodes:
-            dist_tx = DistanceSensorTransmitter(target_ip=target_ip, port=5008, distance_node=self.distance_node)
+            dist_tx = DistanceSensorTransmitter(target_ip=target_ip, port=5002, distance_node=self.distance_node)
             dist_tx.start()
             dist_tx.set_active_filter("ALL")
             self.tx_nodes["distance_tx"] = dist_tx
@@ -183,6 +196,17 @@ class MasterWIFI:
             self.tx_nodes["distance_tx"].update_target_ip(target_ip)
             if self.distance_node:
                 self.tx_nodes["distance_tx"].distance_node = self.distance_node
+
+        # 5. Master Node TX Node (Port 5001)
+        if "master_tx" not in self.tx_nodes:
+            mst_tx = MasterTransmitter(target_ip=target_ip, port=5001, master_node=self.master_node)
+            mst_tx.start()
+            mst_tx.set_active_filter("ALL")
+            self.tx_nodes["master_tx"] = mst_tx
+        else:
+            self.tx_nodes["master_tx"].update_target_ip(target_ip)
+            if self.master_node:
+                self.tx_nodes["master_tx"].master_node = self.master_node
 
     def stop(self):
         self.pc_bridge.stop()
