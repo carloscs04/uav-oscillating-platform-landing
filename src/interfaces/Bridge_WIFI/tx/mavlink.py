@@ -21,7 +21,7 @@ class MavlinkTransmitter(threading.Thread):
         super().__init__(daemon=True)
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
-        self.mavlink_node = mavlink_node
+        self.mavlink_node = mavlink_node  # Este es el MAVLinkManager
         self.node_name = kwargs.get("node_name", "MAVLink Node")
 
         self.running = False
@@ -96,28 +96,38 @@ class MavlinkTransmitter(threading.Thread):
             self._sock.close()
 
     def _build_packets_payload(self, elapsed: float) -> Dict[str, Any]:
-        """Pulls telemetry packages from MAVLink Node and ensures node_health always bypasses filters."""
+        """Pulls telemetry and health directly from VehicleState, bypassing master wrapper."""
         payload = {}
 
         with self._lock:
-            if self.mavlink_node and hasattr(self.mavlink_node, "export_telemetry_package"):
+            if self.mavlink_node and hasattr(self.mavlink_node, "state"):
                 try:
-                    telemetry_packages = self.mavlink_node.export_telemetry_package()
-                    if isinstance(telemetry_packages, dict):
-                        # 1. Always extract and include node_health (bypassing dynamic active_filter)
-                        if "node_health" in telemetry_packages:
-                            payload["node_health"] = telemetry_packages.pop("node_health")
+                    vehicle_state = self.mavlink_node.state
+                    
+                    # Extraer variables necesarias del master para calcular la salud
+                    is_connected = getattr(self.mavlink_node, "connected", False)
+                    rate_hz = 0.0
+                    if hasattr(self.mavlink_node, "rx_listener") and self.mavlink_node.rx_listener:
+                        rate_hz = getattr(self.mavlink_node.rx_listener, "current_rate_hz", 0.0)
 
-                        # 2. Filter remaining telemetry packages (velocity, attitude, etc.) based on active_filter
-                        for pkt_name, pkt_data in telemetry_packages.items():
-                            if self.active_filter == "ALL" or self.active_filter == pkt_name:
-                                payload[pkt_name] = pkt_data
+                    # 1. Extraer siempre la salud (bypassing filtros)
+                    if hasattr(vehicle_state, "export_node_health"):
+                        payload["node_health"] = vehicle_state.export_node_health(rate_hz, is_connected)
 
-                        return payload
+                    # 2. Extraer datos y aplicar el filtro
+                    if hasattr(vehicle_state, "export_telemetry_data"):
+                        telemetry_data = vehicle_state.export_telemetry_data()
+                        if isinstance(telemetry_data, dict):
+                            for pkt_name, pkt_data in telemetry_data.items():
+                                if self.active_filter == "ALL" or self.active_filter == pkt_name:
+                                    payload[pkt_name] = pkt_data
+
+                    return payload
+
                 except Exception as e:
-                    print(f"[MAVLINK_TX_ERR] Failed to pull telemetry package: {e}")
+                    print(f"[MAVLINK_TX_ERR] Failed to pull data from state: {e}")
 
-            # Fallback health status if node is disconnected or unavailable
+            # Fallback en caso de que el nodo esté desconectado o falle
             payload["node_health"] = {
                 "status": "RECONNECTING",
                 "rate_hz": 0.0,

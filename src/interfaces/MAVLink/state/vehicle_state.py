@@ -88,8 +88,8 @@ class VehicleState:
             }
         return {"vx": 0.0, "vy": 0.0, "vz": 0.0}
 
-    def export_telemetry_package(self) -> Dict[str, Any]:
-        """Exports all live telemetry formatted into clean, pre-structured JSON-ready packages."""
+    def export_telemetry_data(self) -> Dict[str, Any]:
+        """Exporta únicamente los paquetes de telemetría en vivo."""
         att = self.get_packet("ATTITUDE") or {}
         sys_status = self.get_packet("SYS_STATUS") or {}
         hb = self.get_packet("HEARTBEAT") or {}
@@ -123,4 +123,24 @@ class VehicleState:
                 "base_mode": base_mode,
                 "custom_mode": hb.get("custom_mode", 0),
             }
+        }
+
+    def export_node_health(self, rate_hz: float, is_connected: bool) -> Dict[str, Any]:
+        """Calcula y exporta exclusivamente el estado de salud de la conexión y batería."""
+        if not is_connected:
+            return {
+                "status": "RECONNECTING",
+                "rate_hz": 0.0,
+                "battery_pct": -1,
+                "voltage_v": 0.0
+            }
+
+        health_status = "HEALTHY" if rate_hz >= 7.0 else ("POOR" if rate_hz > 0.0 else "RECONNECTING")
+        sys_status = self.get_packet("SYS_STATUS") or {}
+        
+        return {
+            "status": health_status,
+            "rate_hz": rate_hz,
+            "battery_pct": sys_status.get("battery_remaining", -1),
+            "voltage_v": round(sys_status.get("voltage_battery", 0) / 1000.0, 2)
         }
