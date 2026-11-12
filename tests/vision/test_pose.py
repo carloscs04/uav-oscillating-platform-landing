@@ -24,6 +24,7 @@ import _paths  # noqa: F401
 from calibration import load_calibration
 from cameras import get_camera, load_config
 from src.logic.vision import ArucoDetector, CameraModel, estimate_pose
+from src.logic.vision.master_vision import load_vision_config
 from synthetic import MarkerRenderer
 
 WORKING_MAX_M = 2.0
@@ -39,7 +40,7 @@ def tolerance(d):
 def run_camera(name, config, refine="edges"):
     cam = get_camera(name, config)
     model = CameraModel.from_calibration(load_calibration(cam.calib_key), name)
-    acfg = config["aruco"]
+    acfg = load_vision_config()["aruco"]
     size_m = acfg["marker_mm"] / 1000.0
     marker_id = acfg["ids"][0] if acfg.get("ids") else 10
     det = ArucoDetector(acfg["dictionary"], acfg.get("ids"), refine=refine)

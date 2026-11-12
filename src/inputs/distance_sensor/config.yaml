@@ -1,0 +1,12 @@
+# Distance sensor manager configuration (src/inputs/distance_sensor/master_sensor.py).
+distance_sensor:
+  # Hardware not chosen yet: master_sensor.py stays RECONNECTING until
+  # _open_device() / _read_distance_m() are written for the real sensor.
+  type: "none"                 # e.g. "tfmini_uart", "vl53l1x_i2c", "mavlink_rangefinder"
+  port: "/dev/serial0"         # UART device (UART sensors)
+  baud_rate: 115200
+  i2c_bus: 1                   # I2C bus (I2C sensors)
+  rate_hz: 20                  # target read rate
+
+  settings:
+    read_timeout: 1.0          # no valid reading for this long -> reconnect

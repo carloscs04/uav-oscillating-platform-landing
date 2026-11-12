@@ -1,12 +1,12 @@
 """
 make_markers.py - printable flight markers at exact size (one per A4 page).
 
-    python3 tests/vision/make_markers.py                  # ids + size from config.yaml
+    python3 tests/vision/make_markers.py                  # ids + size from src/logic/vision/config.yaml
     python3 tests/vision/make_markers.py --ids 10 --size-mm 60
 
 Writes tests/vision/markers/markers_<dict>_<size>mm.pdf. Print at 100 % /
 "actual size", then MEASURE the black square and put the real value in
-config.yaml (aruco: marker_mm). Laser printers are preferred: the IMX219 is
+src/logic/vision/config.yaml (aruco: marker_mm). Laser printers are preferred: the IMX219 is
 NoIR and some inkjet blacks look grey in infrared.
 """
 
@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 import _paths  # noqa: F401
-from cameras import load_config
+from src.logic.vision.master_vision import load_vision_config
 from src.logic.vision import get_dictionary
 
 A4_MM = (210.0, 297.0)  # portrait
@@ -58,7 +58,7 @@ def main():
     ap.add_argument("--dpi", type=int, default=600)
     args = ap.parse_args()
 
-    acfg = load_config(args.config)["aruco"]
+    acfg = load_vision_config(args.config)["aruco"]
     ids = args.ids or acfg.get("ids") or [0]
     size = args.size_mm or float(acfg["marker_mm"])
     if size > A4_MM[0] - 30:

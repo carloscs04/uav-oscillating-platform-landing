@@ -37,6 +37,7 @@ import _paths  # noqa: F401
 from calibration import CalibrationNotFound, load_calibration
 from cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, estimate_all
+from src.logic.vision.master_vision import load_vision_config, marker_sizes_m
 from viewer import make_viewer
 
 HERE = Path(__file__).resolve().parent
@@ -161,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--camera", help="camera name from config.yaml (default: active_camera)")
-    ap.add_argument("--config", help="path to config.yaml")
+    ap.add_argument("--config", help="camera config (default src/inputs/camera_driver/config.yaml)")
     ap.add_argument("--nominal-focal", type=float,
                     help="run without calibration using this focal length in px (approximate)")
     ap.add_argument("--refine", choices=ArucoDetector.REFINE_METHODS, default="edges")
@@ -171,9 +172,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     config = load_config(args.config)
-    acfg = config["aruco"]
-    sizes = {int(i): float(acfg["marker_mm"]) / 1000.0 for i in (acfg.get("ids") or range(1000))}
-    sizes.update({int(k): float(v) / 1000.0 for k, v in (acfg.get("sizes_mm") or {}).items()})
+    acfg = load_vision_config()["aruco"]          # src/logic/vision/config.yaml
+    sizes = marker_sizes_m(acfg)
     max_err = float(acfg.get("max_reproj_err_px", 2.0))
     detector = ArucoDetector(acfg["dictionary"], acfg.get("ids"), refine=args.refine)
 
