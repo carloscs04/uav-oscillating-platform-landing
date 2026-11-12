@@ -6,8 +6,8 @@ calibrate.py - compute camera intrinsics + distortion from captured ChArUco imag
     python3 -m calibration.calibrate --rational             # 8-coefficient model for wide lenses
 
 Reads   calibration/images/<calib_key>/img_*.png
-Writes  calibration/params/<calib_key>.yaml          (used by the pose code)
-        calibration/params/<calib_key>_check.jpg     (original | undistorted, to check by eye)
+Writes  src/inputs/camera_driver/calib/<calib_key>.yaml   (used on the drone)
+        calibration/images/<calib_key>/check.jpg        (original | undistorted, to check by eye)
 
 Quality guide (RMS reprojection error):  < 0.5 px good,  0.5-1.0 px usable,  > 1.0 px redo.
 """
@@ -23,12 +23,12 @@ import yaml
 
 if __package__ in (None, ""):  # allow `python3 calibration/calibrate.py`
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import _paths  # noqa: E402,F401  (camera layer lives in src/inputs/camera_driver)
 
 from calibration.board import (board_config, describe, detect_corners,  # noqa: E402
                                make_board, make_detector, n_corners)
 from calibration.capture import GRID  # noqa: E402
-from calibration.params import (PARAMS_DIR, images_dir,  # noqa: E402
-                                save_calibration)
+from calibration.params import images_dir, save_calibration  # noqa: E402
 from cameras import get_camera, load_config  # noqa: E402
 
 MIN_IMAGES = 10
@@ -184,7 +184,7 @@ def main():
         "opencv_version": cv2.__version__,
     }
     path = save_calibration(key, image_size, K, dist, rms, meta)
-    check = PARAMS_DIR / f"{key}_check.jpg"
+    check = folder / "check.jpg"
     write_check_image(check, views[int(np.argmin(per_view))][0], K, dist, image_size)
     print(f"\nSaved {path}\nCheck image: {check}")
 

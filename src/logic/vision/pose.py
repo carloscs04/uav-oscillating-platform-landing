@@ -84,6 +84,24 @@ def estimate_pose(marker_id, corners, size_m, camera, stamp=0.0, max_reproj_err_
         camera_id=camera.camera_id, reliable=reliable, corners=pts.astype(np.float32))
 
 
+_FACING = np.diag([1.0, -1.0, -1.0])  # marker frame -> camera frame when facing the camera upright
+
+
+def marker_attitude_deg(rvec):
+    """Marker attitude relative to the camera as (roll, pitch, yaw) in degrees.
+
+    (0, 0, 0) = marker facing the camera squarely, printed side up in the image.
+    roll / pitch = tilt about the camera's x / y axis, yaw = rotation in the
+    image plane (useful to align with the platform). ZYX convention.
+    """
+    R, _ = cv2.Rodrigues(np.asarray(rvec, np.float64).reshape(3, 1))
+    T = _FACING.T @ R
+    roll = np.degrees(np.arctan2(T[2, 1], T[2, 2]))
+    pitch = np.degrees(np.arctan2(-T[2, 0], np.hypot(T[2, 1], T[2, 2])))
+    yaw = np.degrees(np.arctan2(T[1, 0], T[0, 0]))
+    return float(roll), float(pitch), float(yaw)
+
+
 def estimate_all(detections, sizes_m, camera, stamp=0.0, max_reproj_err_px=2.0):
     """detections from ArucoDetector.detect(); sizes_m: {id: size} or a single float."""
     out = []

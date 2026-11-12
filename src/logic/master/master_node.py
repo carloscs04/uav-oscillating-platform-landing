@@ -15,6 +15,14 @@ from src.logic.vision.vision_state import VisionState
 from src.logic.master.master_state import MasterState, SystemState
 from src.logic.master.command_guard import CommandGuard
 
+# Real camera + ArUco node. If it cannot be imported (e.g. OpenCV missing), the
+# camera/vision nodes fall back to flags only, as before (use 'sim on' for data).
+try:
+    from src.inputs.camera_driver.camera_node import CameraNode
+except Exception as _camera_import_error:  # noqa: BLE001
+    CameraNode = None
+    print(f"[MASTER Warning] Camera node unavailable: {_camera_import_error}")
+
 
 class MasterNode:
     """Central UAV Supervisor: manages subsystem lifecycles, safety guards, debug sim, and CLI control."""
@@ -41,6 +49,9 @@ class MasterNode:
         self.vision_state.state = self.vision_state
         self.distance_state.state = self.distance_state
         self.control_state.state = self.control_state
+
+        # Real camera driver: writes video into camera_state and ArUco pose into vision_state
+        self.camera_node = CameraNode(self.camera_state, self.vision_state) if CameraNode else None
 
         self._running = False
         self._sim_active = False
@@ -167,9 +178,15 @@ class MasterNode:
             elif name == "camera":
                 setattr(self.camera_state, "connected", True)
                 setattr(self.camera_state, "current_rate_hz", 30.0)
+                if self.camera_node:
+                    self.camera_node.start()   # opens the camera in the background
             elif name == "vision":
                 setattr(self.vision_state, "connected", True)
                 setattr(self.vision_state, "current_rate_hz", 30.0)
+                if self.camera_node:
+                    self.camera_node.enable_vision(True)
+                    if not self.camera_node.is_running:
+                        self.state.append_cli_log("Vision needs the camera node: run 'start camera'.", "WARN")
             elif name == "distance":
                 setattr(self.distance_state, "connected", True)
                 setattr(self.distance_state, "current_rate_hz", 15.0)
@@ -206,8 +223,12 @@ class MasterNode:
                 self.mavlink_node.stop()
             elif name == "camera":
                 setattr(self.camera_state, "connected", False)
+                if self.camera_node:
+                    self.camera_node.stop()
             elif name == "vision":
                 setattr(self.vision_state, "connected", False)
+                if self.camera_node:
+                    self.camera_node.enable_vision(False)
             elif name == "distance":
                 setattr(self.distance_state, "connected", False)
             elif name == "control":
