@@ -1,19 +1,19 @@
-# ground_station/receivers/nodes/master_rx.py
+# File: ground_station/receivers/nodes/master_rx.py
 
 import json
 import socket
 import threading
 import time
 from typing import Dict, Any, Optional, Tuple
-from ground_station.comms.pi_bridge import PiLink
+from ground_station.transmiters.main_command_tx import MainCommandTransmitter
 
 
 class MasterReceiver(threading.Thread):
-    """Modular UDP receiver for Master System Node + Remote Console Interface."""
+    """Modular UDP receiver & CLI command bridge for RPi MasterNode on dedicated port 5008."""
 
     _active_instance = None
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 5001):
+    def __init__(self, host: str = "0.0.0.0", port: int = 5008):
         super().__init__(daemon=True)
         MasterReceiver._active_instance = self
 
@@ -37,10 +37,19 @@ class MasterReceiver(threading.Thread):
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
         self._sock: Optional[socket.socket] = None
+        self.cmd_tx = MainCommandTransmitter()
+
+    def send_terminal_command(self, cmd_text: str) -> bool:
+        """Forwards a CLI command typed in cmd_master.py to RPi MasterCommandReceiver."""
+        return self.cmd_tx.send_command(cmd_text)
 
     def get_packet(self, pkt_type: str, default: Any = None) -> Any:
         with self._lock:
             return self.packets.get(pkt_type, default)
+
+    def get_all_packets(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self.packets)
 
     def get_health_info(self) -> Dict[str, Any]:
         with self._lock:
@@ -51,21 +60,16 @@ class MasterReceiver(threading.Thread):
                 info["status"] = "HEALTHY"
             return info
 
-    def send_terminal_command(self, cmd_str: str):
-        """Sends CLI command directly to the Master Node on RPi."""
-        if self._sock:
-            cmd_pkt = json.dumps({
-                "cmd": "EXEC_SHELL",
-                "node": "Master Node",
-                "command": cmd_str
-            }).encode("utf-8")
-            active_link = getattr(PiLink, "_active_instance", None)
-            target_ip = self.last_rpi_ip or (active_link.active_ip if active_link else None)
-            if target_ip and target_ip not in ["N/A", "127.0.0.1", "localhost"]:
-                try:
-                    self._sock.sendto(cmd_pkt, (target_ip, self.port))
-                except Exception:
-                    pass
+    def get_status_info(self) -> Dict[str, Any]:
+        with self._lock:
+            is_active = (time.time() - self.last_seen <= 2.5) and self.enabled
+            return {
+                "status": "STREAMING" if is_active else "OFFLINE",
+                "port": self.port,
+                "rate": self.health_info.get("rate_hz", 0.0),
+                "telemetry": dict(self.packets),
+                "last_seen": self.last_seen
+            }
 
     def run(self):
         self.running = True
@@ -75,7 +79,7 @@ class MasterReceiver(threading.Thread):
 
         try:
             self._sock.bind((self.host, self.port))
-            print(f"[GCS MASTER_RX] Listener bound to {self.host}:{self.port}")
+            print(f"[GCS MASTER_RX] CLI & FSM listener bound to {self.host}:{self.port}")
         except Exception as e:
             print(f"[GCS MASTER_RX_ERR] Bind error on port {self.port}: {e}")
             return
@@ -88,7 +92,7 @@ class MasterReceiver(threading.Thread):
                 continue
 
             try:
-                data, addr = self._sock.recvfrom(4096)
+                data, addr = self._sock.recvfrom(65535)
                 if not data:
                     continue
 
@@ -104,11 +108,9 @@ class MasterReceiver(threading.Thread):
                     self.last_seen = time.time()
                     incoming_packets = payload["packets"]
 
-                    # Extract node_health
                     if "node_health" in incoming_packets:
                         self.health_info = incoming_packets.pop("node_health")
 
-                    # Store dynamic telemetry/terminal packets
                     for pkt_type, pkt_data in incoming_packets.items():
                         self.packets[pkt_type] = pkt_data
 

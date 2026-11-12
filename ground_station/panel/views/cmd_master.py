@@ -1,10 +1,10 @@
 # File: ground_station/panel/views/cmd_master.py
 
-import json
 import time
 import tkinter as tk
 from ground_station.utils.colors import (
-    BG_CARD, BG_DARK, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED
+    BG_CARD, BG_DARK, FG_CYAN, FG_WHITE,
+    ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW
 )
 from ground_station.receivers.nodes.master_rx import MasterReceiver
 
@@ -17,9 +17,30 @@ class MasterTerminalView(tk.LabelFrame):
             parent, text=" Master Node Stream & Command Console ", font=("Helvetica", 10, "bold"),
             fg=FG_CYAN, bg=BG_CARD, bd=2, relief="groove", pady=4, padx=6, **kwargs
         )
-        self.master_rx = master_rx
+        self.master_rx = master_rx if hasattr(master_rx, "get_all_packets") else None
+        self._last_printed_seq: int = 0
+        self._current_boot_id = None
+        self._is_stream_online: bool = False
+        self._cmd_history = []
+        self._history_idx = -1
 
-        # 1. Terminal Log Output Display
+        # 1. Top FSM & Active Subsystems Header Bar
+        hdr_frame = tk.Frame(self, bg=BG_CARD)
+        hdr_frame.pack(fill="x", pady=(0, 3))
+
+        self.lbl_fsm = tk.Label(
+            hdr_frame, text="FSM: [OFFLINE] | DISARMED",
+            font=("Consolas", 8, "bold"), fg=ACCENT_RED, bg=BG_CARD
+        )
+        self.lbl_fsm.pack(side="left")
+
+        self.lbl_nodes = tk.Label(
+            hdr_frame, text="NODES: 0/5",
+            font=("Consolas", 8, "bold"), fg=FG_WHITE, bg=BG_CARD
+        )
+        self.lbl_nodes.pack(side="right")
+
+        # 2. Terminal Log Output Display
         txt_frame = tk.Frame(self, bg=BG_DARK)
         txt_frame.pack(fill="both", expand=True, pady=(0, 4))
 
@@ -29,9 +50,19 @@ class MasterTerminalView(tk.LabelFrame):
         scrollbar.pack(side="right", fill="y")
         self.txt.pack(side="left", fill="both", expand=True)
 
-        self.txt.insert("end", "=== MASTER NODE CLI STREAM & CONSOLE ===\n")
+        self.txt.tag_config("INFO", foreground=ACCENT_GREEN)
+        self.txt.tag_config("OK", foreground=ACCENT_GREEN)
+        self.txt.tag_config("SYSTEM", foreground=FG_CYAN)
+        self.txt.tag_config("CMD", foreground="#ffffff")
+        self.txt.tag_config("STATUS", foreground="#80deea")
+        self.txt.tag_config("WARN", foreground=ACCENT_YELLOW)
+        self.txt.tag_config("BLOCKED", foreground=ACCENT_RED)
+        self.txt.tag_config("ALERT", foreground=ACCENT_RED)
+        self.txt.tag_config("ERROR", foreground=ACCENT_RED)
 
-        # 2. Command Line Input Box
+        self.txt.insert("end", "=== MASTER NODE CLI STREAM & CONSOLE ===\n", "SYSTEM")
+
+        # 3. Command Line Input Box
         cmd_frame = tk.Frame(self, bg=BG_CARD)
         cmd_frame.pack(fill="x")
 
@@ -39,6 +70,8 @@ class MasterTerminalView(tk.LabelFrame):
         self.entry_cmd = tk.Entry(cmd_frame, bg=BG_DARK, fg=FG_WHITE, font=("Consolas", 9), insertbackground="white", bd=1)
         self.entry_cmd.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.entry_cmd.bind("<Return>", lambda e: self.send_cmd())
+        self.entry_cmd.bind("<Up>", self._history_up)
+        self.entry_cmd.bind("<Down>", self._history_down)
 
         btn_send = tk.Button(
             cmd_frame, text="Execute", bg="#3949ab", fg="white",
@@ -47,73 +80,154 @@ class MasterTerminalView(tk.LabelFrame):
         )
         btn_send.pack(side="right")
 
-        self._last_packets_hash = ""
+        self._resolve_receiver()
         self._start_loop()
 
-    def append_log(self, msg: str):
-        """Callback invocado por logic_panel para insertar mensajes del sistema en la consola."""
+    def _resolve_receiver(self):
+        """Resolves or auto-starts the MasterReceiver singleton on port 5008."""
+        rx = self.master_rx or getattr(MasterReceiver, "_active_instance", None)
+        if rx is None:
+            rx = MasterReceiver(port=5008)
+            rx.start()
+        elif not rx.running and not rx.is_alive():
+            rx.start()
+        self.master_rx = rx
+        return rx
+
+    def append_log(self, msg: str, tag: str = "INFO"):
         if not hasattr(self, "txt") or not self.txt.winfo_exists():
             return
 
-        timestamp = time.strftime("%H:%M:%S")
-        formatted = f"[{timestamp}] {msg}\n" if not str(msg).endswith("\n") else f"[{timestamp}] {msg}"
+        msg_str = str(msg)
+        if msg_str.startswith("[") and len(msg_str) > 10 and msg_str[3] == ":":
+            formatted = msg_str if msg_str.endswith("\n") else f"{msg_str}\n"
+        else:
+            timestamp = time.strftime("%H:%M:%S")
+            formatted = f"[{timestamp}] {msg_str}\n" if not msg_str.endswith("\n") else f"[{timestamp}] {msg_str}"
 
         try:
-            self.txt.insert("end", formatted)
+            self.txt.insert("end", formatted, tag)
             self.txt.see("end")
 
             line_count = int(self.txt.index("end-1c").split(".")[0])
-            if line_count > 200:
+            if line_count > 250:
                 self.txt.delete("1.0", "20.0")
         except Exception:
             pass
 
     def send_cmd(self):
-        """Envía un comando CLI directamente a la Raspberry Pi a través de MasterReceiver."""
+        """Sends a CLI command directly to RPi MasterCommandReceiver."""
         cmd_text = self.entry_cmd.get().strip()
         if not cmd_text:
             return
 
-        self.append_log(f"CMD> {cmd_text}")
         self.entry_cmd.delete(0, "end")
+        self._cmd_history.append(cmd_text)
+        self._history_idx = len(self._cmd_history)
 
-        rx = self.master_rx or getattr(MasterReceiver, "_active_instance", None)
-        if rx and hasattr(rx, "send_terminal_command"):
-            rx.send_terminal_command(cmd_text)
+        if cmd_text.lower() == "clear":
+            self.txt.delete("1.0", "end")
+            self.txt.insert("end", "=== MASTER NODE CLI STREAM & CONSOLE ===\n", "SYSTEM")
+            return
+
+        rx = self._resolve_receiver()
+        if not rx.send_terminal_command(cmd_text):
+            self.append_log("[ERROR] RPi IP unknown or link disconnected. Command not sent.", "ERROR")
 
     def _start_loop(self):
         self.update_view()
-        self.after(100, self._start_loop)
+        self.after(120, self._start_loop)
 
     def update_view(self):
-        """Lee de forma continua todos los paquetes entrantes del MasterReceiver."""
-        rx = self.master_rx or getattr(MasterReceiver, "_active_instance", None)
+        rx = self._resolve_receiver()
         if not rx:
             return
 
-        all_packets = rx.get_all_packets() if hasattr(rx, "get_all_packets") else getattr(rx, "packets", {})
+        last_seen = getattr(rx, "last_seen", 0.0)
+        is_alive = (last_seen > 0.0) and ((time.time() - last_seen) <= 2.5)
+
+        # Detect RPi process stop / link timeout
+        if not is_alive:
+            if self._is_stream_online:
+                self._is_stream_online = False
+                self._last_printed_seq = 0
+                self._current_boot_id = None
+                self.lbl_fsm.config(text="FSM: [OFFLINE] | DISARMED", fg=ACCENT_RED)
+                self.lbl_nodes.config(text="NODES: 0/5")
+                self.append_log("[ALERT] MasterNode stream lost (RPi process stopped or offline).", "ALERT")
+            return
+
+        all_packets = rx.get_all_packets()
         if not all_packets:
             return
 
-        current_hash = json.dumps(all_packets)
-        if current_hash != self._last_packets_hash:
-            self._last_packets_hash = current_hash
-            timestamp = time.strftime("%H:%M:%S")
+        # 1. Detect RPi process startup / reconnection
+        cli_stream = all_packets.get("cli_stream", {})
+        if isinstance(cli_stream, dict):
+            boot_id = cli_stream.get("boot_id")
+            latest_seq = cli_stream.get("latest_seq", 0)
 
-            for pkt_type, pkt_content in all_packets.items():
-                if isinstance(pkt_content, (dict, list)):
-                    content_str = json.dumps(pkt_content)
-                else:
-                    content_str = str(pkt_content)
+            # Reset sequence counter if RPi restarted with a new boot_id or lower seq
+            if (boot_id is not None and boot_id != self._current_boot_id) or (latest_seq < self._last_printed_seq):
+                if self._current_boot_id is not None:
+                    self.append_log("──────────────────────────────────────────────────────────", "SYSTEM")
+                    self.append_log("[SYSTEM] New MasterNode session detected (RPi restarted).", "SYSTEM")
+                self._current_boot_id = boot_id
+                self._last_printed_seq = 0
 
-                self.txt.insert("end", f"[{timestamp}] [{pkt_type}]: {content_str}\n")
+            if not self._is_stream_online:
+                self._is_stream_online = True
+                if boot_id is None:
+                    self.append_log("[SYSTEM] MasterNode stream CONNECTED.", "SYSTEM")
 
-            self.txt.see("end")
+            # Stream new sequenced console lines
+            lines = cli_stream.get("lines", [])
+            for entry in lines:
+                seq = entry.get("seq", 0)
+                text = entry.get("text", "")
+                if seq > self._last_printed_seq and text:
+                    self._last_printed_seq = seq
+                    tag = self._detect_log_tag(text)
+                    self.append_log(text, tag)
 
-            line_count = int(self.txt.index("end-1c").split(".")[0])
-            if line_count > 200:
-                self.txt.delete("1.0", "20.0")
+        # 2. Update Top FSM Status Bar
+        m_status = all_packets.get("master_status", {})
+        if isinstance(m_status, dict) and m_status:
+            fsm_state = m_status.get("system_state", "UNKNOWN")
+            armed = m_status.get("armed", False)
+            arm_str = "ARMED" if armed else "DISARMED"
+            color = ACCENT_RED if fsm_state == "EMERGENCY_ABORT" else (
+                ACCENT_YELLOW if armed else ACCENT_GREEN
+            )
+            self.lbl_fsm.config(text=f"FSM: [{fsm_state}] | {arm_str}", fg=color)
+
+        status_pkt = all_packets.get("status", {})
+        if isinstance(status_pkt, dict) and "active_nodes" in status_pkt:
+            act = status_pkt.get("active_nodes", 0)
+            tot = status_pkt.get("total_nodes", 5)
+            self.lbl_nodes.config(text=f"NODES: {act}/{tot}")
+
+    def _detect_log_tag(self, line: str) -> str:
+        for tag in ("BLOCKED", "ALERT", "ERROR", "WARN", "SYSTEM", "STATUS", "CMD", "OK"):
+            if f"[{tag}]" in line:
+                return tag
+        return "INFO"
+
+    def _history_up(self, _event):
+        if self._cmd_history and self._history_idx > 0:
+            self._history_idx -= 1
+            self.entry_cmd.delete(0, "end")
+            self.entry_cmd.insert(0, self._cmd_history[self._history_idx])
+
+    def _history_down(self, _event):
+        if self._cmd_history and self._history_idx < len(self._cmd_history) - 1:
+            self._history_idx += 1
+            self.entry_cmd.delete(0, "end")
+            self.entry_cmd.insert(0, self._cmd_history[self._history_idx])
+        else:
+            self._history_idx = len(self._cmd_history)
+            self.entry_cmd.delete(0, "end")
 
 
-# Alias para exportación hacia master_panel.py
+# Alias for export to master_panel.py
 ConsoleView = MasterTerminalView
