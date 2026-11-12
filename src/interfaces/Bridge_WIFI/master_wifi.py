@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from rx.pc_bridge import PCBridgeListener
 from tx.control_node import ControlTransmitter
 from tx.camera import CameraTransmitter
+from tx.vision import VisionTransmitter
 from tx.mavlink import MavlinkTransmitter
 from tx.distance_sensor import DistanceSensorTransmitter
 from tx.master_node import MasterTransmitter
@@ -29,16 +30,18 @@ class MasterWIFI:
         control_node: Optional[Any] = None,
         camera_node: Optional[Any] = None,
         distance_node: Optional[Any] = None,
-        master_node: Optional[Any] = None
+        master_node: Optional[Any] = None,
+        vision_node: Optional[Any] = None
     ):
         self.handshake_port = handshake_port
-        
+
         # Subsystem Node References
         self.mavlink_node = mavlink_node
         self.control_node = control_node
         self.camera_node = camera_node
         self.distance_node = distance_node
         self.master_node = master_node
+        self.vision_node = vision_node
 
         self.target_ip: Optional[str] = None
         self.tx_nodes: Dict[str, Any] = {}
@@ -75,6 +78,12 @@ class MasterWIFI:
         self.distance_node = node
         if "distance_tx" in self.tx_nodes:
             self.tx_nodes["distance_tx"].distance_node = node
+
+    def set_vision_node(self, node: Any):
+        """Dynamically attach or update the live Vision ArUco node reference."""
+        self.vision_node = node
+        if "vision_tx" in self.tx_nodes:
+            self.tx_nodes["vision_tx"].vision_node = node
 
     def set_master_node(self, node: Any):
         """Dynamically attach or update the live Master Node reference."""
@@ -207,6 +216,17 @@ class MasterWIFI:
             self.tx_nodes["master_tx"].update_target_ip(target_ip)
             if self.master_node:
                 self.tx_nodes["master_tx"].master_node = self.master_node
+
+        # 6. Vision / ArUco TX Node (Port 5006)
+        if "vision_tx" not in self.tx_nodes:
+            vis_tx = VisionTransmitter(target_ip=target_ip, port=5006, vision_node=self.vision_node)
+            vis_tx.start()
+            vis_tx.set_active_filter("ALL")
+            self.tx_nodes["vision_tx"] = vis_tx
+        else:
+            self.tx_nodes["vision_tx"].update_target_ip(target_ip)
+            if self.vision_node:
+                self.tx_nodes["vision_tx"].vision_node = self.vision_node
 
     def stop(self):
         self.pc_bridge.stop()

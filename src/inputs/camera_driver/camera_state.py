@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 
 class CameraState:
-    """Thread-safe buffer for Camera frames, status, and ArUco detection metadata."""
+    """Thread-safe buffer dedicated exclusively to Camera video frames and stream status."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -13,21 +13,17 @@ class CameraState:
         self.resolution: str = "640x480"
         self.fps_actual: float = 30.0
 
-        self.aruco_detected: bool = False
-        self.aruco_id: int = -1
-        self.aruco_pos: Dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
-
-    def update_frame(self, b64_data: str):
+    def update_frame(self, b64_data: str, fps: Optional[float] = None, resolution: Optional[str] = None):
+        """Update the latest Base64-encoded video frame and optional stream metrics."""
         with self._lock:
             self.latest_b64_frame = b64_data
-
-    def update_aruco_pose(self, detected: bool, target_id: int, x: float, y: float, z: float):
-        with self._lock:
-            self.aruco_detected = detected
-            self.aruco_id = target_id
-            self.aruco_pos = {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3)}
+            if fps is not None:
+                self.fps_actual = round(fps, 1)
+            if resolution is not None:
+                self.resolution = resolution
 
     def export_telemetry_data(self) -> Dict[str, Any]:
+        """Export video frame and camera stream metadata packets."""
         with self._lock:
             return {
                 "video_frame": {
@@ -36,17 +32,11 @@ class CameraState:
                 "camera_status": {
                     "resolution": self.resolution,
                     "fps": self.fps_actual
-                },
-                "aruco_pose": {
-                    "detected": self.aruco_detected,
-                    "id": self.aruco_id,
-                    "x": self.aruco_pos["x"],
-                    "y": self.aruco_pos["y"],
-                    "z": self.aruco_pos["z"]
                 }
             }
 
     def export_node_health(self, rate_hz: float, is_connected: bool) -> Dict[str, Any]:
+        """Export health status for the Camera stream node."""
         if not is_connected:
             return {
                 "status": "RECONNECTING",

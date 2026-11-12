@@ -8,16 +8,16 @@ from typing import Any, Dict, Optional
 
 
 class CameraTransmitter(threading.Thread):
-    """UDP transmitter for Camera telemetry metadata and node health."""
+    """Dedicated UDP transmitter for raw/encoded camera video frames and hardware status."""
 
-    VALID_NODE_NAMES = {"Camera Node", "Camera Driver", "Camera-Aruco Node", "Aruco-Perception Node"}
+    VALID_NODE_NAMES = {"Camera-Stream Node", "Camera-Aruco Node", "Camera Node"}
 
     def __init__(self, target_ip: str = "127.0.0.1", port: int = 5003, camera_node: Optional[Any] = None, **kwargs):
         super().__init__(daemon=True)
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
-        self.camera_node = camera_node
-        self.node_name = kwargs.get("node_name", "Camera Node")
+        self.camera_node = camera_node or kwargs.get("camera_state")
+        self.node_name = kwargs.get("node_name", "Camera-Stream Node")
 
         self.running = False
         self.streaming = True
@@ -26,7 +26,7 @@ class CameraTransmitter(threading.Thread):
         self._lock = threading.Lock()
 
     def process_command(self, command: Dict[str, Any]):
-        """Processes incoming GCS control commands (e.g., SET_FILTER, START_STREAM, SELECT_PACKET)."""
+        """Handle incoming GCS commands for video stream control."""
         target_node = command.get("node")
         legacy_node = command.get("legacy_node")
 
@@ -60,15 +60,12 @@ class CameraTransmitter(threading.Thread):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        t_start = time.time()
         while self.running:
             if not self.target_ip or not self.streaming:
-                time.sleep(0.1)
+                time.sleep(0.05)
                 continue
 
-            elapsed = time.time() - t_start
-            packets_payload = self._build_packets_payload(elapsed)
-
+            packets_payload = self._build_packets_payload()
             pkt = json.dumps({
                 "node": self.node_name,
                 "timestamp": time.time(),
@@ -78,29 +75,32 @@ class CameraTransmitter(threading.Thread):
             try:
                 self._sock.sendto(pkt, (self.target_ip, self.port))
             except Exception as e:
-                print(f"[CAMERA_TX_ERR] Send error to {self.target_ip}: {e}")
+                print(f"[CAMERA_TX_ERR] Send error to {self.target_ip}:{self.port} -> {e}")
 
-            time.sleep(0.05)
+            # ~25 FPS video stream pacing
+            time.sleep(0.04)
 
         if self._sock:
-            self._sock.close()
+            try:
+                self._sock.close()
+            except Exception:
+                pass
 
-    def _build_packets_payload(self, elapsed: float) -> Dict[str, Any]:
-        """Pulls telemetry and health directly from state, matching MavlinkTransmitter pattern."""
-        payload = {}
+    def _build_packets_payload(self) -> Dict[str, Any]:
+        """Pull video frame and camera status from CameraState."""
+        payload: Dict[str, Any] = {}
 
         with self._lock:
-            if self.camera_node and hasattr(self.camera_node, "state"):
+            node_ref = self.camera_node
+            if node_ref:
                 try:
-                    state = self.camera_node.state
-                    is_connected = getattr(self.camera_node, "connected", True)
-                    rate_hz = getattr(self.camera_node, "fps", 30.0)
+                    state = getattr(node_ref, "state", node_ref)
+                    is_connected = getattr(node_ref, "connected", getattr(state, "connected", True))
+                    rate_hz = getattr(node_ref, "current_rate_hz", getattr(state, "current_rate_hz", 25.0))
 
-                    # 1. Extracción continua de Salud (Bypassing filtros)
                     if hasattr(state, "export_node_health"):
                         payload["node_health"] = state.export_node_health(rate_hz, is_connected)
 
-                    # 2. Extracción y filtrado dinámico de telemetría
                     if hasattr(state, "export_telemetry_data"):
                         telemetry_data = state.export_telemetry_data()
                         if isinstance(telemetry_data, dict):
@@ -108,9 +108,10 @@ class CameraTransmitter(threading.Thread):
                                 if self.active_filter == "ALL" or self.active_filter == pkt_name:
                                     payload[pkt_name] = pkt_data
 
-                    return payload
+                    if payload:
+                        return payload
                 except Exception as e:
-                    print(f"[CAMERA_TX_ERR] Failed to pull data from state: {e}")
+                    print(f"[CAMERA_TX_ERR] Failed to extract state data: {e}")
 
             payload["node_health"] = {
                 "status": "OFFLINE",
@@ -118,7 +119,6 @@ class CameraTransmitter(threading.Thread):
                 "battery_pct": -1,
                 "voltage_v": 0.0
             }
-
             if self.active_filter != "ALL":
                 payload[self.active_filter] = {"status": "NO_CONNECTION_ESTABLISHED"}
             else:
