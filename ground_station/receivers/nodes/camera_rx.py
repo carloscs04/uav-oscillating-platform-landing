@@ -5,11 +5,10 @@ import socket
 import threading
 import time
 from typing import Dict, Any, Optional, Tuple
-from ground_station.comms.pi_bridge import PiLink
 
 
 class CameraReceiver(threading.Thread):
-    """Modular UDP receiver for Camera metadata, video stream, and ArUco detection."""
+    """Modular UDP receiver dedicated exclusively to live camera video stream for CameraView."""
 
     _active_instance = None
 
@@ -41,6 +40,11 @@ class CameraReceiver(threading.Thread):
     def get_packet(self, pkt_type: str, default: Any = None) -> Any:
         with self._lock:
             return self.packets.get(pkt_type, default)
+
+    def get_video_frame(self) -> Optional[Any]:
+        """Return the latest video frame payload for CameraView rendering."""
+        with self._lock:
+            return self.packets.get("video_frame")
 
     def get_all_packets(self) -> Dict[str, Any]:
         with self._lock:
@@ -74,7 +78,7 @@ class CameraReceiver(threading.Thread):
 
         try:
             self._sock.bind((self.host, self.port))
-            print(f"[GCS CAMERA_RX] Listener bound to {self.host}:{self.port}")
+            print(f"[GCS CAMERA_RX] Video stream listener bound to {self.host}:{self.port}")
         except Exception as e:
             print(f"[GCS CAMERA_RX_ERR] Bind error on port {self.port}: {e}")
             return
@@ -107,7 +111,8 @@ class CameraReceiver(threading.Thread):
                         self.health_info = incoming_packets.pop("node_health")
 
                     for pkt_type, pkt_data in incoming_packets.items():
-                        self.packets[pkt_type] = pkt_data
+                        if pkt_type in ("video_frame", "camera_status"):
+                            self.packets[pkt_type] = pkt_data
 
             except socket.timeout:
                 continue

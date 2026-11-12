@@ -7,6 +7,7 @@ from ground_station.receivers.nodes.master_rx import MasterReceiver
 from ground_station.receivers.nodes.mavlink_rx import MAVLinkReceiver
 from ground_station.receivers.nodes.distance_sensor_rx import DistanceSensorReceiver
 from ground_station.receivers.nodes.camera_rx import CameraReceiver
+from ground_station.receivers.nodes.vision_rx import VisionReceiver
 from ground_station.receivers.nodes.control_rx import ControlReceiver
 
 
@@ -15,10 +16,11 @@ class MainReceiver:
 
     def __init__(self):
         self.master_rx = MasterReceiver(port=5001)
-        self.mavlink_rx = MAVLinkReceiver(port=5005)
         self.distance_rx = DistanceSensorReceiver(port=5002)
-        self.camera_rx = CameraReceiver(port=5003)
+        self.camera_rx = CameraReceiver(port=5003)      # Dedicated video stream for CameraView
         self.control_rx = ControlReceiver(port=5004)
+        self.mavlink_rx = MAVLinkReceiver(port=5005)
+        self.vision_rx = VisionReceiver(port=5006)      # Dedicated ArUco telemetry for Node Matrix & Terminal
 
     def start_all(self):
         """Starts background thread listener loops for all node receivers."""
@@ -26,6 +28,7 @@ class MainReceiver:
         self.mavlink_rx.start()
         self.distance_rx.start()
         self.camera_rx.start()
+        self.vision_rx.start()
         self.control_rx.start()
 
     def stop_all(self):
@@ -34,6 +37,7 @@ class MainReceiver:
         self.mavlink_rx.stop()
         self.distance_rx.stop()
         self.camera_rx.stop()
+        self.vision_rx.stop()
         self.control_rx.stop()
 
     def get_all_node_statuses(self) -> Dict[str, Dict[str, Any]]:
@@ -45,7 +49,7 @@ class MainReceiver:
 
         mav_info = self.mavlink_rx.get_status_info() if hasattr(self.mavlink_rx, "get_status_info") else {}
         dist_info = self.distance_rx.get_status_info() if hasattr(self.distance_rx, "get_status_info") else {}
-        cam_info = self.camera_rx.get_status_info() if hasattr(self.camera_rx, "get_status_info") else {}
+        vis_info = self.vision_rx.get_status_info() if hasattr(self.vision_rx, "get_status_info") else {}
         ctrl_info = self.control_rx.get_status_info() if hasattr(self.control_rx, "get_status_info") else {}
 
         return {
@@ -61,11 +65,11 @@ class MainReceiver:
                 "rate": f"{dist_info.get('rate', 15.0)}Hz",
                 "telemetry": dist_info.get("telemetry", getattr(self.distance_rx, "packets", {})),
             },
-            "Camera-Aruco Node": {
-                "status": check_stat(cam_info.get("last_seen", getattr(self.camera_rx, "last_seen", 0.0))),
-                "port": getattr(self.camera_rx, "port", 5003),
-                "rate": f"{cam_info.get('rate', 30.0)}fps",
-                "telemetry": cam_info.get("telemetry", getattr(self.camera_rx, "packets", {})),
+            "Vision-ArUco Node": {
+                "status": check_stat(vis_info.get("last_seen", getattr(self.vision_rx, "last_seen", 0.0))),
+                "port": getattr(self.vision_rx, "port", 5006),
+                "rate": f"{vis_info.get('rate', 30.0)}Hz",
+                "telemetry": vis_info.get("telemetry", getattr(self.vision_rx, "packets", {})),
             },
             "Control Node": {
                 "status": check_stat(ctrl_info.get("last_seen", getattr(self.control_rx, "last_seen", 0.0))),

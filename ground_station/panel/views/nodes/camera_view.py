@@ -8,6 +8,7 @@ from ground_station.utils.colors import (
     COLOR_PLOT_AXIS, COLOR_PLOT_TEXT
 )
 from ground_station.receivers.nodes.camera_rx import CameraReceiver
+from ground_station.receivers.nodes.vision_rx import VisionReceiver
 from ground_station.receivers.nodes.control_rx import ControlReceiver
 from ground_station.receivers.nodes.mavlink_rx import MavlinkReceiver
 from ground_station.comms.pi_bridge import PiLink, LinkState
@@ -22,14 +23,15 @@ except ImportError:
 class CameraView(tk.LabelFrame):
     """Live Video Stream & ArUco Target Tracking View."""
 
-    def __init__(self, parent, camera_rx=None, **kwargs):
+    def __init__(self, parent, camera_rx=None, vision_rx=None, **kwargs):
         super().__init__(
             parent, text=" Vision & ArUco Perception ", font=("Helvetica", 10, "bold"),
             fg=FG_CYAN, bg=BG_CARD, bd=2, relief="groove", pady=6, padx=6, **kwargs
         )
         self.camera_rx = camera_rx
+        self.vision_rx = vision_rx
 
-        # 1. Header de métricas
+        # 1. Metrics Header
         self.hdr_frame = tk.Frame(self, bg=BG_CARD)
         self.hdr_frame.pack(fill="x", pady=(0, 4))
 
@@ -45,7 +47,7 @@ class CameraView(tk.LabelFrame):
         )
         self.lbl_coords.pack(side="right")
 
-        # 2. Canvas de Video
+        # 2. Video Canvas
         self.canvas = tk.Canvas(
             self, bg=BG_DARK, height=260, highlightthickness=1, highlightbackground=COLOR_PLOT_AXIS
         )
@@ -56,16 +58,17 @@ class CameraView(tk.LabelFrame):
 
     def _start_loop(self):
         self.update_view()
-        self.after(66, self._start_loop)  # Redibujo a ~15 FPS
+        self.after(66, self._start_loop)  # Redraw at ~15 FPS
 
     def update_view(self):
         cam_rx = self.camera_rx or getattr(CameraReceiver, "_active_instance", None)
+        vis_rx = self.vision_rx or getattr(VisionReceiver, "_active_instance", None)
         ctrl_rx = getattr(ControlReceiver, "_active_instance", None)
 
-        # 1. Coordenadas ArUco (CameraReceiver o fallback ControlReceiver)
+        # 1. ArUco Coordinates (VisionReceiver on port 5006, with ControlReceiver fallback)
         pose = {"detected": False, "x": 0.0, "y": 0.0, "z": 0.0, "id": -1}
-        if cam_rx:
-            pose = cam_rx.get_packet("aruco_pose", pose)
+        if vis_rx:
+            pose = vis_rx.get_packet("aruco_pose", pose)
         if not pose.get("detected", False) and ctrl_rx:
             pose = ctrl_rx.get_packet("aruco_pose", pose)
 
@@ -81,7 +84,7 @@ class CameraView(tk.LabelFrame):
             self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
             self.lbl_coords.config(text="X: -- | Y: -- | Z: -- | Dist: -- m")
 
-        # 2. Renderizar Frame de Video (Base64 JPEG)
+        # 2. Render Video Frame (Base64 JPEG from CameraReceiver on port 5003)
         raw_b64 = ""
         if cam_rx:
             video_pkt = cam_rx.get_packet("video_frame", {})
@@ -91,13 +94,14 @@ class CameraView(tk.LabelFrame):
             try:
                 img_bytes = base64.b64decode(raw_b64)
                 img = Image.open(io.BytesIO(img_bytes))
-                
+
                 cw = self.canvas.winfo_width() or 320
                 ch = self.canvas.winfo_height() or 240
                 img = img.resize((cw, ch), Image.Resampling.LANCZOS)
-                
+
                 self._image_ref = ImageTk.PhotoImage(img)
-                self.canvas.create_image(0, 0, image=self._image_ref, anchor="nw")
+                self.canvas.delete("video_layer")
+                self.canvas.create_image(0, 0, image=self._image_ref, anchor="nw", tags="video_layer")
             except Exception:
                 pass
         elif not raw_b64:
@@ -106,10 +110,10 @@ class CameraView(tk.LabelFrame):
             ch = (self.canvas.winfo_height() or 240) / 2
             self.canvas.create_text(
                 cw, ch, text="[NO LIVE VIDEO STREAM]",
-                fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold")
+                fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold"), tags="video_layer"
             )
 
-        # 3. Superponer la batería del dron leída de MAVLink
+        # 3. Overlay drone battery read from MAVLink
         self._render_battery_overlay()
 
     def _render_battery_overlay(self):
