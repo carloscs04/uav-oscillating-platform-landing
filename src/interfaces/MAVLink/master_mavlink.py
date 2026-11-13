@@ -168,6 +168,15 @@ class MAVLinkManager:
             self.master = None
             print("[MAVLink] Node stopped cleanly.")
 
+    def send_attitude_target(
+        self,
+        roll_deg: float = 0.0,
+        pitch_deg: float = 0.0,
+        yaw_deg: float = 0.0,
+        thrust: float = 0.5,
+    ):
+        self.flight_cmd.send_attitude_target(roll_deg, pitch_deg, yaw_deg, thrust)
+
     # --- FACADE WRAPPERS ---
 
     def arm(self) -> bool:

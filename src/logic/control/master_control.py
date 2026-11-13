@@ -9,14 +9,19 @@ from src.logic.control.control_state import ControlState
 
 class MissionPhase(str, Enum):
     IDLE = "IDLE"
-    ARMING_AND_TAKEOFF = "ARMING_AND_TAKEOFF"
+    ARMING = "ARMING"
+    CLIMBING = "CLIMBING"
     HOVER = "HOVER"
     ALIGNING = "ALIGNING"
     LANDING = "LANDING"
 
 
 class ControlManager:
-    """Facade API & Unified Flight Controller (Basic Takeoff/Hover + Autonomous ArUco Mission)."""
+    """Facade API & Unified Flight Controller (GUIDED_NOGPS Attitude/Thrust + Autonomous ArUco Mission)."""
+
+    CLIMB_THRUST = 0.65
+    HOVER_THRUST = 0.50
+    MAX_CLIMB_DURATION_SEC = 4.0
 
     def __init__(
         self,
@@ -35,6 +40,7 @@ class ControlManager:
         self.phase: MissionPhase = MissionPhase.IDLE
         self.target_altitude_m: float = 1.5
         self.setpoint: Tuple[float, float, float] = (0.0, 0.0, 1.5)
+        self._climb_start_time: float = 0.0
 
         self.state = ControlState()
         self.connected: bool = False
@@ -73,7 +79,8 @@ class ControlManager:
     def is_airborne(self) -> bool:
         """Returns True whenever ControlManager is actively executing an airborne phase."""
         return self.active_guidance and self.phase in {
-            MissionPhase.ARMING_AND_TAKEOFF,
+            MissionPhase.ARMING,
+            MissionPhase.CLIMBING,
             MissionPhase.HOVER,
             MissionPhase.ALIGNING,
             MissionPhase.LANDING,
@@ -84,7 +91,7 @@ class ControlManager:
     # =========================================================================
 
     def start_basic_flight(self, altitude_m: float = 1.5) -> bool:
-        """Arms (if needed), takes off to altitude_m, and holds HOVER indefinitely without mission alignment."""
+        """Arms (if needed), climbs using GUIDED_NOGPS thrust, and holds HOVER without mission alignment."""
         if not self.mavlink:
             return False
 
@@ -96,11 +103,11 @@ class ControlManager:
         if self.mavlink.state.is_armed() and self.phase in {MissionPhase.HOVER, MissionPhase.ALIGNING}:
             self.phase = MissionPhase.HOVER
         else:
-            self.phase = MissionPhase.ARMING_AND_TAKEOFF
+            self.phase = MissionPhase.ARMING
         return True
 
     def hold_hover(self, force_sim: bool = False) -> bool:
-        """Cancels alignment/motion and keeps the vehicle holding HOVER."""
+        """Cancels alignment/climb and keeps the vehicle holding HOVER thrust."""
         if not self.mavlink:
             return False
         if not force_sim and not self.mavlink.state.is_armed():
@@ -110,7 +117,7 @@ class ControlManager:
         self.active_guidance = True
         self.phase = MissionPhase.HOVER
         if self.mavlink.is_healthy():
-            self.mavlink.send_velocity(0.0, 0.0, 0.0)
+            self.mavlink.send_attitude_target(0.0, 0.0, 0.0, self.HOVER_THRUST)
         return True
 
     def command_land(self) -> bool:
@@ -131,9 +138,9 @@ class ControlManager:
 
     def start_mission(self, altitude_m: float = 1.5) -> bool:
         """
-        Starts full autonomous ArUco mission regardless of initial state:
-        - If on ground (disarmed): Arms -> Takeoffs -> Hovers -> Aligns ArUco -> Precision Lands.
-        - If already airborne (armed/hovering): Skips takeoff and jumps directly to Aligning ArUco -> Precision Lands.
+        Starts full autonomous ArUco mission:
+        - If on ground (disarmed): Arms -> Climbs -> Hovers -> Aligns ArUco -> Precision Lands.
+        - If already airborne (armed/hovering): Skips climb and jumps directly to Aligning ArUco -> Precision Lands.
         """
         if not self.mavlink:
             return False
@@ -146,7 +153,7 @@ class ControlManager:
         if self.mavlink.state.is_armed():
             self.phase = MissionPhase.ALIGNING
         else:
-            self.phase = MissionPhase.ARMING_AND_TAKEOFF
+            self.phase = MissionPhase.ARMING
         return True
 
     def abort_mission(self):
@@ -164,6 +171,15 @@ class ControlManager:
 
     def set_target_offset(self, ref_x: float, ref_y: float, ref_z: float):
         self.setpoint = (ref_x, ref_y, ref_z)
+
+    def _get_current_altitude_m(self) -> Optional[float]:
+        """Reads downward distance sensor if healthy and valid."""
+        if not self.distance or not getattr(self.distance, "is_healthy", lambda: False)():
+            return None
+        dist_m = getattr(self.distance.state, "distance_m", None)
+        if isinstance(dist_m, (int, float)) and dist_m > 0.02:
+            return float(dist_m)
+        return None
 
     # =========================================================================
     # 20 HZ CLOSED-LOOP EXECUTION ENGINE
@@ -184,42 +200,61 @@ class ControlManager:
                 time.sleep(interval)
                 continue
 
-            if self.phase == MissionPhase.ARMING_AND_TAKEOFF:
-                self._execute_arm_and_takeoff()
+            if self.phase == MissionPhase.ARMING:
+                self._execute_arming()
+
+            elif self.phase == MissionPhase.CLIMBING:
+                cur_alt = self._get_current_altitude_m()
+                elapsed = time.time() - self._climb_start_time
+
+                reached_alt = (cur_alt is not None) and (cur_alt >= self.target_altitude_m * 0.90)
+                timed_out = elapsed >= self.MAX_CLIMB_DURATION_SEC
+
+                if reached_alt or timed_out:
+                    print(f"[Control] Phase -> HOVER (thrust={self.HOVER_THRUST})")
+                    self.phase = MissionPhase.HOVER
+                    self.mavlink.send_attitude_target(0.0, 0.0, 0.0, self.HOVER_THRUST)
+                else:
+                    self.mavlink.send_attitude_target(0.0, 0.0, 0.0, self.CLIMB_THRUST)
 
             elif self.phase == MissionPhase.HOVER:
-                self.mavlink.send_velocity(0.0, 0.0, 0.0)
+                self.mavlink.send_attitude_target(0.0, 0.0, 0.0, self.HOVER_THRUST)
                 if self.mission_mode:
+                    print("[Control] Phase -> ALIGNING")
                     self.phase = MissionPhase.ALIGNING
 
             elif self.phase == MissionPhase.ALIGNING:
-                # TODO: Read ArUco offset from self.vision and send clamped vx, vy setpoints
-                # Once centered within threshold, transition to self.phase = MissionPhase.LANDING
-                pass
+                self.mavlink.send_attitude_target(0.0, 0.0, 0.0, self.HOVER_THRUST)
 
             elif self.phase == MissionPhase.LANDING:
-                # TODO: Descend while keeping ArUco centered, then call self.command_land()
-                pass
+                self.command_land()
 
             time.sleep(interval)
 
-    def _execute_arm_and_takeoff(self):
+    def _execute_arming(self):
         self.mavlink.set_mode("GUIDED_NOGPS")
-        time.sleep(0.3)
+        time.sleep(0.35)
 
         if not self.mavlink.state.is_armed():
             self.mavlink.arm()
-            time.sleep(0.8)
+
+        # Poll up to 2.5s for Pixhawk HEARTBEAT confirmation (runs at ~1Hz)
+        deadline = time.time() + 2.5
+        while time.time() < deadline and self.running and self.active_guidance:
+            if self.mavlink.state.is_armed():
+                break
+            time.sleep(0.05)
 
         if not self.mavlink.state.is_armed():
+            print("[Control] Arming confirmation timed out -> IDLE")
             self.mission_mode = False
             self.active_guidance = False
             self.phase = MissionPhase.IDLE
             return
 
-        self.mavlink.takeoff(self.target_altitude_m)
-        time.sleep(0.5)
-        self.phase = MissionPhase.HOVER
+        self._climb_start_time = time.time()
+        print(f"[Control] Armed confirmed -> CLIMBING (thrust={self.CLIMB_THRUST})")
+        self.phase = MissionPhase.CLIMBING
 
 
 MasterControl = ControlManager

@@ -9,7 +9,7 @@ from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
 from src.inputs.camera_driver.master_camera import CameraManager
 from src.inputs.distance_sensor.master_distance import DistanceManager
 from src.logic.vision.master_vision import VisionManager
-from src.logic.control.master_control import ControlManager
+from src.logic.control.master_control import ControlManager, MissionPhase
 
 from src.logic.master.master_state import MasterState, SystemState
 from src.logic.master.command_guard import CommandGuard
@@ -153,14 +153,22 @@ class MasterNode:
                     real_armed = bool(self.mavlink_node.state.is_armed())
                     if self.state.is_armed() != real_armed:
                         self.state.set_armed(real_armed)
-                        if not real_armed:
-                            self.control_node.disable_guidance()
-                            setattr(self.state, "in_controlled_flight", False)
-                            if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
-                                self._refresh_readiness_state()
-                elif self.state.is_armed():
-                    self.state.set_armed(False)
+
+                    # Do not cancel ControlNode while it is actively waiting for Pixhawk ARM confirmation
+                    if not real_armed and self.control_node.phase != MissionPhase.ARMING:
+                        self.control_node.disable_guidance()
+                        setattr(self.state, "in_controlled_flight", False)
+                        if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
+                            self.state.set_system_state(SystemState.IDLE)
+                            self._refresh_readiness_state()
+                else:
+                    if self.state.is_armed():
+                        self.state.set_armed(False)
+                    self.control_node.disable_guidance()
                     setattr(self.state, "in_controlled_flight", False)
+                    if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
+                        self.state.set_system_state(SystemState.IDLE)
+                        self._refresh_readiness_state()
 
             setattr(self.state, "in_controlled_flight", self.control_node.is_airborne())
             self._check_gcs_link_failsafe()
@@ -422,6 +430,11 @@ class MasterNode:
             return "RESET_OK"
 
         # 3. Dynamic Standalone Routing
+        if verb == "land":
+            self._pending_mission_confirm = False
+            self.control_node.disable_guidance()
+            setattr(self.state, "in_controlled_flight", False)
+
         for node_cli in self.node_clis.values():
             if node_cli.owns_command(verb):
                 return node_cli.execute_cli_command([verb] + rest)

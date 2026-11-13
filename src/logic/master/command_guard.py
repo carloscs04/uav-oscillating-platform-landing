@@ -22,7 +22,7 @@ class CommandGuard:
         subsystems = self.state.get_subsystems_snapshot()
         armed = self.state.is_armed()
         in_controlled_flight = bool(getattr(self.state, "in_controlled_flight", False))
-        airborne = (sys_state in self.AIRBORNE_STATES) or in_controlled_flight
+        airborne = armed and ((sys_state == SystemState.MISSION_ACTIVE) or in_controlled_flight)
 
         # 1. Emergency Abort Lockout
         if sys_state == SystemState.EMERGENCY_ABORT:
@@ -42,13 +42,15 @@ class CommandGuard:
                 return False, "FORBIDDEN: Cannot ARM. MAVLink node is OFFLINE."
             if armed:
                 return False, "FORBIDDEN: Vehicle is already ARMED."
-            if airborne:
-                return False, "FORBIDDEN: Cannot ARM while already airborne."
+            if sys_state == SystemState.LANDING:
+                return False, "FORBIDDEN: System is in LANDING state. Run 'reset' or disarm first."
 
-        # 4. Disarming rules (blocked in basic flight, active mission, and landing)
+        # 4. Disarming rules (blocked during active flight, allowed once LAND has been commanded)
         if action == "disarm":
+            if not armed:
+                return False, "FORBIDDEN: Vehicle is already DISARMED."
             if airborne:
-                return False, "FORBIDDEN: Cannot DISARM while airborne. Land first or use 'abort'."
+                return False, "FORBIDDEN: Cannot DISARM while airborne. Command 'land' or 'abort' first."
 
         # 5. Basic ControlNode takeoff rules
         if action == "control_takeoff":
@@ -61,7 +63,7 @@ class CommandGuard:
             if missing:
                 return False, f"FORBIDDEN: Offline required nodes: {', '.join(missing)}."
 
-        # 6. Full Autonomous Mission start rules (works both from ground OR mid-air hover)
+        # 6. Full Autonomous Mission start rules
         if action == "mission_start":
             if sys_state in self.AIRBORNE_STATES:
                 return False, f"FORBIDDEN: Cannot start mission while state is {sys_state.value}."
