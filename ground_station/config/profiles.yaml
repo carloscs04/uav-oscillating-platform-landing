@@ -17,3 +17,11 @@ profiles:
     port_telemetry: 5005
     port_command: 5006
     port_video: 8080
+
+  cable:
+    name: "Pi2 (camera) - cable"
+    pi_ip: "192.168.137.50"
+    port_telemetry: 5005
+    port_command: 5006
+    port_video: 8080
+
