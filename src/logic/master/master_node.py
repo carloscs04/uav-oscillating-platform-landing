@@ -11,6 +11,14 @@ from src.inputs.distance_sensor.master_distance import DistanceManager
 from src.logic.vision.master_vision import VisionManager
 from src.logic.control.master_control import ControlManager
 
+# Real camera + ArUco driver. If it can't be imported (e.g. OpenCV missing),
+# the camera/vision managers keep their flag-only stub behaviour.
+try:
+    from src.inputs.camera_driver.camera_node import CameraNode
+except Exception as _camera_import_error:  # noqa: BLE001
+    CameraNode = None
+    print(f"[MASTER Warning] Camera node unavailable: {_camera_import_error}")
+
 from src.logic.master.master_state import MasterState, SystemState
 from src.logic.master.command_guard import CommandGuard
 from src.logic.master.debug_sim import DebugSimulator
@@ -44,6 +52,15 @@ class MasterNode:
             vision_node=self.vision_node,
             distance_node=self.distance_node,
         )
+
+        # One real driver shared by both managers: it writes video into the
+        # camera state and ArUco pose into the vision state.
+        self.camera_driver = (
+            CameraNode(self.camera_node.state, self.vision_node.state) if CameraNode else None
+        )
+        if self.camera_driver:
+            self.camera_node.attach_driver(self.camera_driver)
+            self.vision_node.attach_driver(self.camera_driver)
 
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)

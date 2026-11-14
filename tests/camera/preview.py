@@ -20,6 +20,7 @@ import time
 
 import cv2
 
+import _paths  # noqa: F401  (camera layer lives in src/inputs/camera_driver)
 from cameras import open_camera
 from viewer import make_viewer
 

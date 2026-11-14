@@ -18,6 +18,9 @@ BACKENDS = {
     "csi": CsiCamera,
 }
 
+# Camera settings used by the vision code, not by the camera backends.
+NON_BACKEND_KEYS = ("nominal_focal_px",)
+
 
 def load_config(path=None):
     with open(path or DEFAULT_CONFIG) as f:
@@ -36,7 +39,7 @@ def get_camera(name=None, config=None):
     if name not in cameras:
         raise CameraError(f"camera '{name}' is not in the config. Options: {list(cameras)}")
 
-    params = dict(cameras[name])
+    params = {k: v for k, v in cameras[name].items() if k not in NON_BACKEND_KEYS}
     backend = params.pop("backend")
     if backend not in BACKENDS:
         raise CameraError(f"{name}: unknown backend '{backend}'. Options: {list(BACKENDS)}")

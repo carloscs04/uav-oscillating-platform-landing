@@ -19,6 +19,7 @@ cameras:
     fps: 60
     tuning_file: imx219_noir.json   # uncomment if the module has no IR-cut filter (purple tint)
     rotate_180: false          # set true if the camera is mounted upside down
+    nominal_focal_px: 1357     # datasheet value, only used if calib/ has no file for this camera
 
   usb_0bdc_8088:
     backend: usb
@@ -27,6 +28,7 @@ cameras:
     fps: 30
     fourcc: MJPG
     rotate_180: false
+    nominal_focal_px: 1238     # from the first calibration, only used if calib/ has no file
 
 # ChArUco calibration board (python3 -m calibration.board makes the printable PDF).
 # The default fits A4 landscape. After printing, MEASURE a square with calipers
@@ -52,3 +54,16 @@ aruco:
   ids: [10, 25, 32]            # only these are reported; [] = report every ID
   sizes_mm: {}                 # per-ID override, e.g. {32: 40.0} for a small nested marker
   max_reproj_err_px: 2.0       # poses fitting worse than this are flagged as unreliable
+
+# Onboard vision node (src/inputs/camera_driver/master_camera.py).
+# Onboard camera node (src/inputs/camera_driver/camera_node.py). It fills
+# CameraState (video preview, port 5003) and VisionState (aruco_pose, port 5006).
+vision:
+  primary_ids: [10, 25, 32]    # the reported target = first of these that is visible (order = priority)
+  smoothing: 0.6               # weight of the newest reading, 0..1 (1.0 = no smoothing, no lag)
+  max_jump_m: 0.30             # a bigger jump between frames restarts the smoothing instead of averaging
+  hold_s: 0.5                  # keep reporting a lost marker this long (tracking_state HOLDING), then drop it
+  preview_width: 480           # video preview sent to the ground station (UDP packets are max ~64 KB)
+  preview_quality: 60          # JPEG quality of that preview
+  preview_hz: 15               # how often the preview is encoded (CameraTransmitter sends at ~25 Hz)
+  reopen_after_failures: 30    # consecutive failed frame reads before the camera is closed and reopened

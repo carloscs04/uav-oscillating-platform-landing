@@ -18,6 +18,7 @@ import numpy as np
 
 if __package__ in (None, ""):  # allow `python3 calibration/board.py`
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import _paths  # noqa: E402,F401  (camera layer lives in src/inputs/camera_driver)
 
 from cameras import load_config  # noqa: E402
 

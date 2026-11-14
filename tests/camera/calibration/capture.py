@@ -30,6 +30,7 @@ import yaml
 
 if __package__ in (None, ""):  # allow `python3 calibration/capture.py`
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import _paths  # noqa: E402,F401  (camera layer lives in src/inputs/camera_driver)
 
 from calibration.board import (board_config, describe, detect_corners,  # noqa: E402
                                make_board, make_detector, n_corners)
