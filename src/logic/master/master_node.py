@@ -25,6 +25,12 @@ except Exception as _camera_import_error:  # noqa: BLE001
     CameraManager = VisionManager = None
     print(f"[MASTER Warning] Camera/vision managers unavailable: {_camera_import_error}")
 
+try:
+    from src.inputs.distance_sensor.master_sensor import DistanceSensorManager
+except Exception as _distance_import_error:  # noqa: BLE001
+    DistanceSensorManager = None
+    print(f"[MASTER Warning] Distance sensor manager unavailable: {_distance_import_error}")
+
 
 class MasterNode:
     """Central UAV Supervisor: manages subsystem lifecycles, safety guards, debug sim, and CLI control."""
@@ -48,7 +54,9 @@ class MasterNode:
                                if VisionManager and self.camera_manager else None)
         self.camera_state = self.camera_manager.state if self.camera_manager else CameraState()
         self.vision_state = self.vision_manager.state if self.vision_manager else VisionState()
-        self.distance_state = DistanceSensorState()
+        self.distance_manager = DistanceSensorManager() if DistanceSensorManager else None
+        self.distance_state = (self.distance_manager.state if self.distance_manager
+                               else DistanceSensorState())
         self.control_state = ControlState()
 
         # Compatibility self-references for tx/*.py
@@ -194,6 +202,8 @@ class MasterNode:
             elif name == "distance":
                 setattr(self.distance_state, "connected", True)
                 setattr(self.distance_state, "current_rate_hz", 15.0)
+                if self.distance_manager:
+                    self.distance_manager.start(timeout=0)  # opens the sensor in the background
             elif name == "control":
                 setattr(self.control_state, "connected", True)
                 setattr(self.control_state, "current_rate_hz", 20.0)
@@ -235,6 +245,8 @@ class MasterNode:
                     self.vision_manager.stop()
             elif name == "distance":
                 setattr(self.distance_state, "connected", False)
+                if self.distance_manager:
+                    self.distance_manager.stop()
             elif name == "control":
                 setattr(self.control_state, "connected", False)
 

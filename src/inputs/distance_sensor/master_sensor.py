@@ -20,10 +20,14 @@ class DistanceSensorManager:
         sensor.export_telemetry_package()  # DistanceSensorState packets + node_health
         sensor.stop()
 
-    HARDWARE NOT IMPLEMENTED YET: _open_device() and _read_distance_m() must be
-    written for the real sensor (see config.yaml `type`). Until then the node
-    stays RECONNECTING and never publishes made-up distances.
+    Sensor chosen by config.yaml `type`: VL53L1X or VL53L0X time-of-flight over I2C.
+    A sample with no valid target (too far, nothing below) keeps the last distance
+    and sets status NO_TARGET; only a silent sensor counts as disconnected.
     """
+
+    # Valid range (m) published in DistanceSensorState for each sensor / mode.
+    RANGES_M = {("vl53l1x_i2c", "long"): (0.04, 4.0), ("vl53l1x_i2c", "short"): (0.04, 1.3),
+                ("vl53l0x_i2c", None): (0.03, 1.2)}
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -41,8 +45,15 @@ class DistanceSensorManager:
         self.current_rate_hz: float = 0.0
         self._supervisor_thread: Optional[threading.Thread] = None
 
+        self.sensor_type = self.config.get("type", "none")
         self.state = DistanceSensorState()
         self.state.state = self.state      # tx/*.py compatibility (node.state)
+        mode = self.config.get("vl53l1x", {}).get("distance_mode") \
+            if self.sensor_type == "vl53l1x_i2c" else None
+        if (self.sensor_type, mode) in self.RANGES_M:
+            self.state.min_distance_m, self.state.max_distance_m = \
+                self.RANGES_M[(self.sensor_type, mode)]
+        self._last_distance_m = 0.0
         self._sync_state_link()
         self.last_error = ""
 
@@ -82,16 +93,35 @@ class DistanceSensorManager:
         package["node_health"] = self.state.export_node_health(self.current_rate_hz, self.connected)
         return package
 
-    # ------------------------------------------------- hardware (TO IMPLEMENT)
+    # -------------------------------------------------------------- hardware
     def _open_device(self):
-        """Open the sensor (serial port, I2C bus...). Return a device handle."""
-        raise NotImplementedError(
-            f"distance sensor type '{self.config.get('type')}' has no driver yet "
-            f"(implement _open_device/_read_distance_m in master_sensor.py)")
+        """Open and start the sensor configured in config.yaml. Returns the driver."""
+        bus = int(self.config.get("i2c_bus", 1))
+        address = int(self.config.get("i2c_address", 0x29))
+        if self.sensor_type == "vl53l1x_i2c":
+            from src.inputs.distance_sensor.vl53l1x import VL53L1X
+            cfg = self.config.get("vl53l1x", {})
+            dev = VL53L1X(bus=bus, address=address,
+                          distance_mode=cfg.get("distance_mode", "long"),
+                          timing_budget_ms=int(cfg.get("timing_budget_ms", 50)),
+                          period_ms=round(self.period * 1000))
+            dev.start_ranging()
+            return dev
+        if self.sensor_type == "vl53l0x_i2c":
+            from src.inputs.distance_sensor.vl53l0x import VL53L0X
+            cfg = self.config.get("vl53l0x", {})
+            dev = VL53L0X(bus=bus, address=address,
+                          timing_budget_us=int(cfg.get("timing_budget_ms", 33)) * 1000)
+            dev.start_continuous()
+            return dev
+        raise NotImplementedError(f"distance sensor type '{self.sensor_type}' has no driver "
+                                  f"(see config.yaml `type`)")
 
     def _read_distance_m(self) -> Optional[float]:
-        """Return one distance in metres, or None if no valid reading this cycle."""
-        raise NotImplementedError
+        """Block for the next sample. Returns metres, or None if the sensor answered
+        but saw no valid target. Raises if the sensor does not answer."""
+        mm = self.device.read_mm()
+        return None if mm is None else mm / 1000.0
 
     # ------------------------------------------------------------ internals
     def _sync_state_link(self):
@@ -138,16 +168,20 @@ class DistanceSensorManager:
                     retry_delay = min(retry_delay * 2, 10.0)
                     continue
 
-            # 2. READ
-            t0 = time.monotonic()
+            # 2. READ (the driver paces itself: it waits for the sensor's next sample)
+            answered = True
             try:
                 dist = self._read_distance_m()
             except Exception as e:
-                dist, self.last_error = None, str(e)
+                answered, dist, self.last_error = False, None, str(e)
             now = time.monotonic()
-            if dist is not None:
+            if answered:
                 last_ok = now
-                self.state.update_distance(dist)
+                if dist is not None:
+                    self._last_distance_m = dist
+                    self.state.update_distance(dist, status="OK")
+                else:
+                    self.state.update_distance(self._last_distance_m, status="NO_TARGET")
                 if last_stamp is not None and now > last_stamp:
                     inst = 1.0 / (now - last_stamp)
                     self.current_rate_hz = inst if self.current_rate_hz == 0 else \
@@ -160,7 +194,6 @@ class DistanceSensorManager:
                 print("[DISTANCE] Disconnected (no valid readings). Reconnecting...")
                 self._cleanup_device()
                 continue
-            time.sleep(max(0.0, self.period - (time.monotonic() - t0)))
 
         self._cleanup_device()
 
