@@ -20,14 +20,13 @@ class DistanceSensorManager:
         sensor.export_telemetry_package()  # DistanceSensorState packets + node_health
         sensor.stop()
 
-    Sensor chosen by config.yaml `type`: VL53L1X or VL53L0X time-of-flight over I2C.
+    Sensor: VL53L1X time-of-flight over I2C (config.yaml `type: vl53l1x_i2c`).
     A sample with no valid target (too far, nothing below) keeps the last distance
     and sets status NO_TARGET; only a silent sensor counts as disconnected.
     """
 
     # Valid range (m) published in DistanceSensorState for each sensor / mode.
-    RANGES_M = {("vl53l1x_i2c", "long"): (0.04, 4.0), ("vl53l1x_i2c", "short"): (0.04, 1.3),
-                ("vl53l0x_i2c", None): (0.03, 1.2)}
+    RANGES_M = {("vl53l1x_i2c", "long"): (0.04, 4.0), ("vl53l1x_i2c", "short"): (0.04, 1.3)}
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -106,13 +105,6 @@ class DistanceSensorManager:
                           timing_budget_ms=int(cfg.get("timing_budget_ms", 50)),
                           period_ms=round(self.period * 1000))
             dev.start_ranging()
-            return dev
-        if self.sensor_type == "vl53l0x_i2c":
-            from src.inputs.distance_sensor.vl53l0x import VL53L0X
-            cfg = self.config.get("vl53l0x", {})
-            dev = VL53L0X(bus=bus, address=address,
-                          timing_budget_us=int(cfg.get("timing_budget_ms", 33)) * 1000)
-            dev.start_continuous()
             return dev
         raise NotImplementedError(f"distance sensor type '{self.sensor_type}' has no driver "
                                   f"(see config.yaml `type`)")

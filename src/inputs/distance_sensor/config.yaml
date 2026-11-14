@@ -1,8 +1,7 @@
 # Distance sensor manager configuration (src/inputs/distance_sensor/master_sensor.py).
 distance_sensor:
   # Which driver to use:
-  #   "vl53l1x_i2c"  VL53L0/1XV2 board with a VL53L1X chip (current, I2C model id 0xEACC)
-  #   "vl53l0x_i2c"  GY-VL53L0XV2 board (VL53L0X chip, model id 0xEE; ~1.2 m max)
+  #   "vl53l1x_i2c"  VL53L0/1XV2 board with a VL53L1X chip (I2C model id 0xEACC)
   #   "none"         no sensor: the node stays RECONNECTING
   type: "vl53l1x_i2c"
   i2c_bus: 1                   # Pi pins 3 (SDA) / 5 (SCL)
@@ -12,9 +11,6 @@ distance_sensor:
   vl53l1x:
     distance_mode: "long"      # "long" (up to ~4 m, dark) or "short" (up to ~1.3 m, best in sunlight)
     timing_budget_ms: 50       # time per measurement: 15*/20/33/50/100/200/500 (*short only)
-
-  vl53l0x:
-    timing_budget_ms: 33       # >= 20
 
   settings:
     read_timeout: 1.0          # sensor silent for this long -> reconnect
