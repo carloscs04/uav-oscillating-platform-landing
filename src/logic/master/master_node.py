@@ -1,31 +1,37 @@
 # File: src/logic/master/master_node.py
 
-import math
-import random
 import sys
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Dict, Optional
 
 from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
-from src.inputs.camera_driver.camera_state import CameraState
-from src.inputs.distance_sensor.sensor_state import DistanceSensorState
-from src.logic.control.control_state import ControlState
-from src.logic.vision.vision_state import VisionState
-from src.logic.master.master_state import MasterState, SystemState
-from src.logic.master.command_guard import CommandGuard
+from src.inputs.camera_driver.master_camera import CameraManager
+from src.inputs.distance_sensor.master_distance import DistanceManager
+from src.logic.vision.master_vision import VisionManager
+from src.logic.control.master_control import ControlManager
 
-# Real camera + ArUco node. If it cannot be imported (e.g. OpenCV missing), the
-# camera/vision nodes fall back to flags only, as before (use 'sim on' for data).
+# Real camera + ArUco driver. If it can't be imported (e.g. OpenCV missing),
+# the camera/vision managers keep their flag-only stub behaviour.
 try:
     from src.inputs.camera_driver.camera_node import CameraNode
 except Exception as _camera_import_error:  # noqa: BLE001
     CameraNode = None
     print(f"[MASTER Warning] Camera node unavailable: {_camera_import_error}")
 
+from src.logic.master.master_state import MasterState, SystemState
+from src.logic.master.command_guard import CommandGuard
+from src.logic.master.debug_sim import DebugSimulator
+from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
+from src.logic.master.cmd_nodes.mavlink_cmd import MAVLinkCLI
+from src.logic.master.cmd_nodes.camera_cmd import CameraCLI
+from src.logic.master.cmd_nodes.vision_cmd import VisionCLI
+from src.logic.master.cmd_nodes.distance_cmd import DistanceCLI
+from src.logic.master.cmd_nodes.control_cmd import ControlCLI
+
 
 class MasterNode:
-    """Central UAV Supervisor: manages subsystem lifecycles, safety guards, debug sim, and CLI control."""
+    """Central UAV Supervisor: handles global lifecycle/mission commands and delegates node commands to cmd_nodes/."""
 
     VALID_TARGETS = {"mavlink", "camera", "vision", "distance", "control", "all"}
 
@@ -33,33 +39,64 @@ class MasterNode:
         self.mavlink_mode = mavlink_mode
         self.enable_local_stdin = enable_local_stdin
 
-        # Core State & Safety Guard
         self.state = MasterState()
         self.guard = CommandGuard(self.state)
 
-        # Subsystem instances (exposed so MasterWIFI can bind transmitters)
+        # 1. Subsystem Facade Managers
         self.mavlink_node = MAVLinkManager()
-        self.camera_state = CameraState()
-        self.vision_state = VisionState()
-        self.distance_state = DistanceSensorState()
-        self.control_state = ControlState()
+        self.camera_node = CameraManager()
+        self.distance_node = DistanceManager()
+        self.vision_node = VisionManager()
+        self.control_node = ControlManager(
+            mavlink_node=self.mavlink_node,
+            vision_node=self.vision_node,
+            distance_node=self.distance_node,
+        )
 
-        # Compatibility self-references for tx/*.py
-        self.camera_state.state = self.camera_state
-        self.vision_state.state = self.vision_state
-        self.distance_state.state = self.distance_state
-        self.control_state.state = self.control_state
+        # One real driver shared by both managers: it writes video into the
+        # camera state and ArUco pose into the vision state.
+        self.camera_driver = (
+            CameraNode(self.camera_node.state, self.vision_node.state) if CameraNode else None
+        )
+        if self.camera_driver:
+            self.camera_node.attach_driver(self.camera_driver)
+            self.vision_node.attach_driver(self.camera_driver)
 
-        # Real camera driver: writes video into camera_state and ArUco pose into vision_state
-        self.camera_node = CameraNode(self.camera_state, self.vision_state) if CameraNode else None
+        # 2. Isolated Telemetry Simulator
+        self.simulator = DebugSimulator(self)
+
+        # 3. Modular Node CLI Routers
+        self.node_clis: Dict[str, BaseNodeCLI] = {
+            "mavlink": MAVLinkCLI(self.mavlink_node, self.state, self.guard, sim_ref=self.simulator),
+            "camera": CameraCLI(self.camera_node, self.state, self.guard),
+            "vision": VisionCLI(self.vision_node, self.state, self.guard),
+            "distance": DistanceCLI(self.distance_node, self.state, self.guard),
+            "control": ControlCLI(self.control_node, self.state, self.guard),
+        }
 
         self._running = False
-        self._sim_active = False
+        self._pending_mission_confirm = False
+        self._pending_mission_alt = 1.5
         self._stdin_thread: Optional[threading.Thread] = None
-        self._sim_thread: Optional[threading.Thread] = None
+        self._sync_thread: Optional[threading.Thread] = None
+
+    @property
+    def camera_state(self):
+        return self.camera_node.state
+
+    @property
+    def distance_state(self):
+        return self.distance_node.state
+
+    @property
+    def vision_state(self):
+        return self.vision_node.state
+
+    @property
+    def control_state(self):
+        return self.control_node.state
 
     def start(self, auto_start_all: bool = True):
-        """Boot MasterNode, optionally start all subsystems, and launch CLI listener."""
         self._running = True
         self.state.set_system_state(SystemState.BOOTING)
         self.state.append_cli_log("MasterNode initializing UAV subsystem orchestrator...", "SYSTEM")
@@ -69,89 +106,37 @@ class MasterNode:
 
         self.state.set_system_state(SystemState.IDLE)
         self._refresh_readiness_state()
-        self.state.append_cli_log("MasterNode READY. Type 'help' for available commands.", "SYSTEM")
+        self.state.append_cli_log("MasterNode READY. Type 'help' or '<node> help' (e.g. 'mavlink help').", "SYSTEM")
+
+        self._sync_thread = threading.Thread(target=self._hardware_sync_loop, daemon=True)
+        self._sync_thread.start()
 
         if self.enable_local_stdin:
             self._stdin_thread = threading.Thread(target=self._local_cli_loop, daemon=True)
             self._stdin_thread.start()
 
     def stop(self):
-        """Gracefully shut down all subsystems and MasterNode."""
         self._running = False
-        self._sim_active = False
+        self.simulator.active = False
+        self._pending_mission_confirm = False
         self.state.append_cli_log("Shutting down all UAV subsystems...", "SYSTEM")
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
 
-    # =========================================================================
-    # MAVLINK HARDWARE / SITL COMMAND BRIDGE
-    # =========================================================================
-
-    def _send_mavlink_command(self, action: str) -> Tuple[bool, str]:
-        """Dispatches arm/disarm/mode/land/abort commands through MAVLinkManager."""
-        mav = self.mavlink_node
-        if mav is None:
-            return False, "MAVLinkManager instance is None."
-
-        # Check if MAVLink link is active (allow if SIM mode is on)
-        is_connected = getattr(mav, "connected", True)
-        if not is_connected and not self._sim_active:
-            return False, "MAVLink link is OFFLINE (vehicle not connected)."
-
-        tx = getattr(mav, "tx", None)
-        targets = [obj for obj in (mav, tx) if obj is not None]
-
-        # 1. Try high-level methods on MAVLinkManager or MAVLink TX
-        method_candidates = {
-            "arm": [("arm", ()), ("send_arm", ()), ("arm_drone", ()), ("arm_disarm", (True,)), ("set_armed", (True,))],
-            "disarm": [("disarm", ()), ("send_disarm", ()), ("disarm_drone", ()), ("arm_disarm", (False,)), ("set_armed", (False,))],
-            "mission_start": [("start_mission", ()), ("set_guided", ()), ("set_mode", ("OFFBOARD",)), ("set_mode", ("GUIDED",))],
-            "land": [("land", ()), ("send_land", ()), ("land_drone", ()), ("set_mode", ("AUTO.LAND",)), ("set_mode", ("LAND",))],
-            "abort": [("abort", ()), ("emergency_stop", ()), ("hold", ()), ("set_mode", ("AUTO.LOITER",)), ("set_mode", ("LOITER",))]
-        }
-
-        for target in targets:
-            for method_name, args in method_candidates.get(action, []):
-                fn = getattr(target, method_name, None)
-                if callable(fn):
-                    try:
-                        res = fn(*args)
-                        if res is False:
-                            return False, f"MAVLink rejected '{action}' via {method_name}()."
-                        return True, f"MAVLink '{action.upper()}' sent via {method_name}()."
-                    except Exception as e:
-                        return False, f"MAVLink error in {method_name}(): {e}"
-
-        # 2. Fallback: Raw pymavlink COMMAND_LONG if connection object is exposed
-        conn = getattr(mav, "master", None) or getattr(mav, "conn", None) or getattr(mav, "mav_conn", None)
-        if conn is not None and hasattr(conn, "mav"):
-            try:
-                t_sys = getattr(conn, "target_system", 1)
-                t_comp = getattr(conn, "target_component", 1)
-                if action == "arm":
-                    conn.mav.command_long_send(t_sys, t_comp, 400, 0, 1, 0, 0, 0, 0, 0, 0)
-                    return True, "MAVLink MAV_CMD_COMPONENT_ARM_DISARM (ARM=1) sent."
-                elif action == "disarm":
-                    conn.mav.command_long_send(t_sys, t_comp, 400, 0, 0, 0, 0, 0, 0, 0, 0)
-                    return True, "MAVLink MAV_CMD_COMPONENT_ARM_DISARM (ARM=0) sent."
-                elif action == "land":
-                    conn.mav.command_long_send(t_sys, t_comp, 21, 0, 0, 0, 0, 0, 0, 0, 0)
-                    return True, "MAVLink MAV_CMD_NAV_LAND sent."
-                elif action == "abort":
-                    conn.mav.command_long_send(t_sys, t_comp, 176, 0, 1, 4, 0, 0, 0, 0, 0)
-                    return True, "MAVLink HOLD/LOITER abort command sent."
-                elif action == "mission_start":
-                    return True, "MAVLink GUIDED/OFFBOARD mission active."
-            except Exception as e:
-                return False, f"Raw MAVLink send failed: {e}"
-
-        if self._sim_active:
-            return True, f"SIM mode active: '{action.upper()}' simulated."
-
-        return False, f"No MAVLink '{action}' handler found in MAVLinkManager."
+    def _hardware_sync_loop(self):
+        """Continuously mirrors real Pixhawk HEARTBEAT armed status into MasterState."""
+        while self._running:
+            if not self.simulator.active:
+                if self.mavlink_node.is_healthy():
+                    real_armed = bool(self.mavlink_node.state.is_armed())
+                    if self.state.is_armed() != real_armed:
+                        self.state.set_armed(real_armed)
+                elif self.state.is_armed():
+                    self.state.set_armed(False)
+            time.sleep(0.2)
 
     # =========================================================================
-    # SUBSYSTEM LIFECYCLE MANAGEMENT (START / STOP)
+    # GLOBAL SUBSYSTEM LIFECYCLE MANAGEMENT (START / STOP)
     # =========================================================================
 
     def start_node(self, name: str) -> bool:
@@ -161,10 +146,7 @@ class MasterNode:
             return True
 
         if name not in self.VALID_TARGETS:
-            self.state.append_cli_log(
-                f"Unknown node '{name}'. Valid: mavlink, camera, vision, distance, control, all",
-                "ERROR"
-            )
+            self.state.append_cli_log(f"Unknown node '{name}'. Valid: mavlink, camera, vision, distance, control, all", "ERROR")
             return False
 
         subs = self.state.get_subsystems_snapshot()
@@ -175,24 +157,8 @@ class MasterNode:
         try:
             if name == "mavlink":
                 self.mavlink_node.start(mode=self.mavlink_mode)
-            elif name == "camera":
-                setattr(self.camera_state, "connected", True)
-                setattr(self.camera_state, "current_rate_hz", 30.0)
-                if self.camera_node:
-                    self.camera_node.start()   # opens the camera in the background
-            elif name == "vision":
-                setattr(self.vision_state, "connected", True)
-                setattr(self.vision_state, "current_rate_hz", 30.0)
-                if self.camera_node:
-                    self.camera_node.enable_vision(True)
-                    if not self.camera_node.is_running:
-                        self.state.append_cli_log("Vision needs the camera node: run 'start camera'.", "WARN")
-            elif name == "distance":
-                setattr(self.distance_state, "connected", True)
-                setattr(self.distance_state, "current_rate_hz", 15.0)
-            elif name == "control":
-                setattr(self.control_state, "connected", True)
-                setattr(self.control_state, "current_rate_hz", 20.0)
+            else:
+                self.node_clis[name].manager.start()
 
             self.state.update_subsystem(name, running=True, health="HEALTHY")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STARTED.", "OK")
@@ -219,21 +185,7 @@ class MasterNode:
                 return False
 
         try:
-            if name == "mavlink":
-                self.mavlink_node.stop()
-            elif name == "camera":
-                setattr(self.camera_state, "connected", False)
-                if self.camera_node:
-                    self.camera_node.stop()
-            elif name == "vision":
-                setattr(self.vision_state, "connected", False)
-                if self.camera_node:
-                    self.camera_node.enable_vision(False)
-            elif name == "distance":
-                setattr(self.distance_state, "connected", False)
-            elif name == "control":
-                setattr(self.control_state, "connected", False)
-
+            self.node_clis[name].manager.stop()
             self.state.update_subsystem(name, running=False, health="OFFLINE")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STOPPED.", "WARN")
             self._refresh_readiness_state()
@@ -256,7 +208,6 @@ class MasterNode:
             self.stop_node(node, force=True)
 
     def _refresh_readiness_state(self):
-        """Automatically transitions between IDLE and READY when subsystems change."""
         cur = self.state.get_system_state()
         if cur in {SystemState.MISSION_ACTIVE, SystemState.LANDING, SystemState.EMERGENCY_ABORT}:
             return
@@ -265,223 +216,178 @@ class MasterNode:
         self.state.set_system_state(SystemState.READY if all_up else SystemState.IDLE)
 
     # =========================================================================
-    # INTERACTIVE CLI PARSER (SSH & REMOTE GCS)
+    # CENTRAL CLI ROUTER
     # =========================================================================
 
     def execute_cli_command(self, raw_cmd: str) -> str:
-        """Executes a text command from local SSH, remote cmd_master console, or ActionsView buttons."""
         cmd_clean = raw_cmd.strip()
         if not cmd_clean:
             return ""
 
         self.state.append_cli_log(f"> {cmd_clean}", "CMD")
-        parts = cmd_clean.lower().split()
-        verb = parts[0]
-        arg = parts[1] if len(parts) > 1 else ""
+        parts = cmd_clean.split()
+        verb = parts[0].lower()
+        rest = parts[1:]
 
+        # 0. Terminal confirmation gate (blocks other commands until 'y' or 'n' is answered)
+        if self._pending_mission_confirm:
+            if verb in ("y", "yes", "confirm"):
+                self._pending_mission_confirm = False
+                return self._launch_confirmed_mission()
+            elif verb in ("n", "no", "cancel"):
+                self._pending_mission_confirm = False
+                self.state.append_cli_log("Mission launch CANCELLED. Normal console commands resumed.", "WARN")
+                return "MISSION_CANCELLED"
+            elif verb != "abort":
+                self.state.append_cli_log(
+                    "Are you sure you want to continue? Type 'y' to launch or 'n' to cancel:",
+                    "WARN"
+                )
+                return "AWAITING_CONFIRM"
+
+        # 1. Prefixed node command
+        if verb in self.node_clis:
+            return self.node_clis[verb].execute_cli_command(rest)
+
+        # 2. Global Supervisor Commands
         if verb == "help":
-            help_msg = (
-                "Commands: status | nodes | ping | sim <on|off> | start <node|all> | "
-                "stop <node|all> | arm | disarm | mission start | mission land | abort | reset"
+            msg = (
+                "Global: status | nodes | ping | sim <on|off> | start <node|all> | stop <node|all> | "
+                "mission <start|stop|land> | abort | reset\n"
+                "Per-Node: <mavlink|camera|vision|distance|control> <help|status|methods|command...>"
             )
-            self.state.append_cli_log(help_msg, "INFO")
-            return help_msg
+            self.state.append_cli_log(msg, "INFO")
+            return msg
 
         elif verb == "ping":
-            self.state.append_cli_log("PONG! MasterNode link is alive (Read/Write OK).", "OK")
+            self.state.append_cli_log("PONG! MasterNode link alive.", "OK")
             return "PONG"
 
         elif verb == "sim":
+            arg = rest[0].lower() if rest else ""
             if arg == "on":
-                self._start_debug_sim()
+                self.simulator.start()
                 return "SIM_ON"
             elif arg == "off":
-                self._stop_debug_sim()
+                self.simulator.stop()
                 return "SIM_OFF"
-            else:
-                self.state.append_cli_log("Usage: sim <on|off>", "ERROR")
-                return "INVALID_SIM_ARG"
+            self.state.append_cli_log("Usage: sim <on|off>", "ERROR")
+            return "INVALID_SIM_ARG"
 
         elif verb == "status":
             subs = self.state.get_subsystems_snapshot()
             sys_st = self.state.get_system_state().value
             arm_st = "ARMED" if self.state.is_armed() else "DISARMED"
-            mav_conn = "ONLINE" if getattr(self.mavlink_node, "connected", False) else "OFFLINE"
             summary = " | ".join([f"{k.upper()}:{'ON' if v['running'] else 'OFF'}" for k, v in subs.items()])
-            msg = f"STATE=[{sys_st}] | {arm_st} | MAVLink={mav_conn} | SIM={'ON' if self._sim_active else 'OFF'} | {summary}"
+            msg = f"STATE=[{sys_st}] | {arm_st} | SIM={'ON' if self.simulator.active else 'OFF'} | {summary}"
             self.state.append_cli_log(msg, "STATUS")
             return msg
 
         elif verb in ("nodes", "info"):
-            subs = self.state.get_subsystems_snapshot()
-            mav_ok = getattr(self.mavlink_node, "connected", subs["mavlink"]["running"])
-            aruco_locked = getattr(self.vision_state, "aruco_detected", False)
-            aruco_id = getattr(self.vision_state, "aruco_id", -1)
-            cam_res = getattr(self.camera_state, "resolution", "640x480")
-            cam_fps = getattr(self.camera_state, "fps_actual", 0.0)
-
-            self.state.append_cli_log("--- SUBSYSTEM DIAGNOSTICS ---", "SYSTEM")
-            self.state.append_cli_log(f"1. MAVLINK  [Port 5005]: {'ONLINE' if mav_ok else 'OFFLINE'} | Mode={self.mavlink_mode}", "STATUS")
-            self.state.append_cli_log(f"2. DISTANCE [Port 5002]: {'RUNNING' if subs['distance']['running'] else 'STOPPED'}", "STATUS")
-            self.state.append_cli_log(f"3. CAMERA   [Port 5003]: {'RUNNING' if subs['camera']['running'] else 'STOPPED'} | {cam_res} @ {cam_fps}fps", "STATUS")
-            self.state.append_cli_log(f"4. VISION   [Port 5006]: {'RUNNING' if subs['vision']['running'] else 'STOPPED'} | ArUco={'ID ' + str(aruco_id) if aruco_locked else 'SEARCHING'}", "STATUS")
-            self.state.append_cli_log(f"5. CONTROL  [Port 5004]: {'RUNNING' if subs['control']['running'] else 'STOPPED'} | FSM={self.state.get_system_state().value}", "STATUS")
+            for cli in self.node_clis.values():
+                cli.cmd_status([])
             return "NODES_INFO_OK"
 
         elif verb == "start":
-            if not arg:
+            if not rest:
                 self.state.append_cli_log("Usage: start <mavlink|camera|vision|distance|control|all>", "ERROR")
                 return "MISSING_ARG"
-            self.start_node(arg)
+            self.start_node(rest[0])
             return "OK"
 
         elif verb == "stop":
-            if not arg:
+            if not rest:
                 self.state.append_cli_log("Usage: stop <mavlink|camera|vision|distance|control|all>", "ERROR")
                 return "MISSING_ARG"
-            self.stop_node(arg)
+            self.stop_node(rest[0])
             return "OK"
 
-        elif verb == "arm":
-            allowed, reason = self.guard.validate("arm")
-            if not allowed:
-                self.state.append_cli_log(reason, "BLOCKED")
-                return reason
-            ok, mav_msg = self._send_mavlink_command("arm")
-            if not ok:
-                self.state.append_cli_log(f"ARM FAILED: {mav_msg}", "ERROR")
-                return mav_msg
-            self.state.set_armed(True)
-            self.state.append_cli_log(f"Vehicle ARMED ({mav_msg})", "WARN")
-            return "ARMED"
-
-        elif verb == "disarm":
-            allowed, reason = self.guard.validate("disarm")
-            if not allowed:
-                self.state.append_cli_log(reason, "BLOCKED")
-                return reason
-            ok, mav_msg = self._send_mavlink_command("disarm")
-            if not ok:
-                self.state.append_cli_log(f"DISARM FAILED: {mav_msg}", "ERROR")
-                return mav_msg
-            self.state.set_armed(False)
-            self.state.append_cli_log(f"Vehicle DISARMED ({mav_msg})", "INFO")
-            return "DISARMED"
-
         elif verb == "mission":
+            arg = rest[0].lower() if rest else ""
             if arg == "start":
-                allowed, reason = self.guard.validate("mission_start")
-                if not allowed:
-                    self.state.append_cli_log(reason, "BLOCKED")
-                    return reason
-                ok, mav_msg = self._send_mavlink_command("mission_start")
-                if not ok:
-                    self.state.append_cli_log(f"MISSION START FAILED: {mav_msg}", "ERROR")
-                    return mav_msg
-                self.state.set_system_state(SystemState.MISSION_ACTIVE)
-                self.state.append_cli_log(f"Autonomous Precision Landing Mission STARTED ({mav_msg})", "OK")
-                return "MISSION_ACTIVE"
+                if not self.mavlink_node.is_healthy() and not self.simulator.active:
+                    self.state.append_cli_log("MISSION BLOCKED: MAVLink link is OFFLINE.", "BLOCKED")
+                    return "MAVLINK_OFFLINE"
+
+                self._pending_mission_alt = float(rest[1]) if len(rest) > 1 else 1.5
+                self._pending_mission_confirm = True
+                self.state.append_cli_log(
+                    f"[CONFIRM] Mission will switch to GUIDED, ARM vehicle, and TAKEOFF to {self._pending_mission_alt:.2f}m (HOVER). "
+                    "Are you sure you want to continue? (y/n)",
+                    "WARN"
+                )
+                return "AWAITING_CONFIRM"
+
+            elif arg == "stop":
+                self._pending_mission_confirm = False
+                self.control_node.hold_hover()
+                self.control_node.disable_guidance()
+                self.state.set_system_state(SystemState.READY)
+                self.state.append_cli_log("Mission STOPPED -> Control guidance disabled, holding HOVER.", "WARN")
+                return "MISSION_STOPPED"
 
             elif arg == "land":
-                allowed, reason = self.guard.validate("mission_land")
-                if not allowed:
-                    self.state.append_cli_log(reason, "BLOCKED")
-                    return reason
-                ok, mav_msg = self._send_mavlink_command("land")
-                if not ok:
-                    self.state.append_cli_log(f"LAND FAILED: {mav_msg}", "ERROR")
-                    return mav_msg
-                self.state.set_system_state(SystemState.LANDING)
-                self.state.append_cli_log(f"Landing sequence initiated ({mav_msg})", "OK")
-                return "LANDING"
-            else:
-                self.state.append_cli_log("Usage: mission <start|land>", "ERROR")
-                return "INVALID_MISSION_ARG"
+                self._pending_mission_confirm = False
+                self.control_node.disable_guidance()
+                return self.node_clis["mavlink"].execute_cli_command(["land"])
+
+            self.state.append_cli_log("Usage: mission <start|stop|land>", "ERROR")
+            return "INVALID_MISSION_ARG"
 
         elif verb == "abort":
-            ok, mav_msg = self._send_mavlink_command("abort")
+            self._pending_mission_confirm = False
+            self.control_node.abort_mission()
+            self.node_clis["mavlink"].execute_cli_command(["mode", "LOITER"])
             self.state.set_system_state(SystemState.EMERGENCY_ABORT)
-            self.state.append_cli_log(f"EMERGENCY ABORT TRIGGERED! ({mav_msg})", "ALERT")
+            self.state.append_cli_log("EMERGENCY ABORT! Switched to LOITER & disabled guidance.", "ALERT")
             return "EMERGENCY_ABORT"
 
         elif verb == "reset":
-            self.state.set_armed(False)
+            self._pending_mission_confirm = False
+            self.control_node.disable_guidance()
+            real_armed = bool(self.mavlink_node.state.is_armed()) if self.mavlink_node.is_healthy() else False
+            self.state.set_armed(real_armed)
             self.state.set_system_state(SystemState.IDLE)
             self._refresh_readiness_state()
             self.state.append_cli_log("System state reset to IDLE/READY.", "OK")
             return "RESET_OK"
 
-        else:
-            msg = f"Unknown command '{verb}'. Type 'help' for command list."
-            self.state.append_cli_log(msg, "ERROR")
-            return msg
+        # 3. Dynamic Standalone Routing
+        for node_cli in self.node_clis.values():
+            if node_cli.owns_command(verb):
+                return node_cli.execute_cli_command([verb] + rest)
 
-    # =========================================================================
-    # ON-DEMAND NODE DEBUGGING SIMULATOR ('sim on' / 'sim off')
-    # =========================================================================
+        msg = f"Unknown command '{verb}'. Type 'help' or '<node> help'."
+        self.state.append_cli_log(msg, "ERROR")
+        return msg
 
-    def _start_debug_sim(self):
-        if self._sim_active:
-            self.state.append_cli_log("Debug simulator is already RUNNING.", "WARN")
-            return
-        self._sim_active = True
-        self._sim_thread = threading.Thread(target=self._debug_sim_loop, daemon=True)
-        self._sim_thread.start()
-        self.state.append_cli_log("Debug telemetry simulator STARTED (injecting synthetic node data).", "OK")
+    def _launch_confirmed_mission(self) -> str:
+        """Starts ControlManager and verifies Pixhawk actually arms before entering MISSION_ACTIVE."""
+        if not self.control_node.is_healthy():
+            self.start_node("control")
 
-    def _stop_debug_sim(self):
-        if not self._sim_active:
-            self.state.append_cli_log("Debug simulator is already OFF.", "WARN")
-            return
-        self._sim_active = False
-        self.state.append_cli_log("Debug telemetry simulator STOPPED.", "WARN")
+        self.control_node.start_mission(altitude_m=self._pending_mission_alt)
 
-    def _debug_sim_loop(self):
-        """Injects synthetic test values into active State objects when 'sim on' is enabled."""
-        t0 = time.time()
-        while self._running and self._sim_active:
-            t = time.time() - t0
-            subs = self.state.get_subsystems_snapshot()
+        if not self.simulator.active:
+            time.sleep(1.3)
+            if not self.mavlink_node.state.is_armed():
+                st = self.mavlink_node.state.get_packet("STATUSTEXT") or {}
+                reason = st.get("text", "Pre-arm check failed")
+                self.control_node.disable_guidance()
+                self.state.set_armed(False)
+                self.state.set_system_state(SystemState.READY)
+                self.state.append_cli_log(f"Mission ABORTED: Pixhawk refused to arm ({reason}).", "ERROR")
+                return "MISSION_ARM_FAILED"
 
-            if subs["vision"]["running"]:
-                self.vision_state.update_aruco_pose(
-                    detected=True,
-                    target_id=42,
-                    x=0.10 * math.sin(t * 1.5) + random.uniform(-0.005, 0.005),
-                    y=-0.08 * math.cos(t * 1.5) + random.uniform(-0.005, 0.005),
-                    z=1.25 + 0.05 * math.sin(t),
-                    roll=1.5 * math.sin(t),
-                    pitch=-1.2 * math.cos(t),
-                    yaw=2.0 * math.sin(t * 0.5),
-                    tracking_state="LOCKED"
-                )
-
-            if subs["distance"]["running"]:
-                sim_dist = 1.40 + 0.20 * math.sin(t * 1.2) + random.uniform(-0.005, 0.005)
-                if hasattr(self.distance_state, "update_distance"):
-                    self.distance_state.update_distance(sim_dist)
-                elif hasattr(self.distance_state, "update"):
-                    self.distance_state.update(sim_dist)
-
-            if subs["control"]["running"]:
-                act_x = 0.05 * math.sin(t * 2.0) + random.uniform(-0.003, 0.003)
-                act_y = 0.05 * math.cos(t * 2.0) + random.uniform(-0.003, 0.003)
-                act_z = 1.20 + 0.03 * math.sin(t)
-                if hasattr(self.control_state, "update_control_state"):
-                    self.control_state.update_control_state(
-                        ref_x=0.0, ref_y=0.0, ref_z=1.2,
-                        act_x=act_x, act_y=act_y, act_z=act_z
-                    )
-                elif hasattr(self.control_state, "update"):
-                    self.control_state.update(
-                        ref_x=0.0, ref_y=0.0, ref_z=1.2,
-                        act_x=act_x, act_y=act_y, act_z=act_z
-                    )
-
-            time.sleep(0.05)
+        self.state.set_armed(True)
+        self.state.set_system_state(SystemState.MISSION_ACTIVE)
+        self.state.append_cli_log(
+            f"Mission CONFIRMED -> ControlNode active (ARMED + TAKEOFF {self._pending_mission_alt:.2f}m -> HOVER).",
+            "OK"
+        )
+        return "MISSION_ACTIVE"
 
     def _local_cli_loop(self):
-        """Allows typing commands directly inside an SSH session on the RPi."""
         while self._running:
             try:
                 line = sys.stdin.readline()
