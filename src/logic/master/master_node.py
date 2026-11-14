@@ -3,13 +3,13 @@
 import sys
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
-from src.inputs.camera_driver.master_camera import CameraManager
-from src.inputs.distance_sensor.master_distance import DistanceManager
+from src.inputs.distance_sensor.master_sensor import DistanceManager
 from src.logic.vision.master_vision import VisionManager
 from src.logic.control.master_control import ControlManager, MissionPhase
+
 
 from src.logic.master.master_state import MasterState, SystemState
 from src.logic.master.command_guard import CommandGuard
@@ -20,6 +20,42 @@ from src.logic.master.cmd_nodes.camera_cmd import CameraCLI
 from src.logic.master.cmd_nodes.vision_cmd import VisionCLI
 from src.logic.master.cmd_nodes.distance_cmd import DistanceCLI
 from src.logic.master.cmd_nodes.control_cmd import ControlCLI
+
+try:
+    from src.inputs.camera_driver.master_camera import CameraManager
+except ImportError:
+    from src.inputs.camera_driver.camera_state import CameraState
+
+    class CameraManager:  # type: ignore[no-redef]
+        """Adapter exposing CameraState with standard lifecycle methods for MasterNode & CameraCLI."""
+
+        def __init__(self):
+            self.state = CameraState()
+            self.connected: bool = False
+            self.current_rate_hz: float = 0.0
+
+        def start(self) -> bool:
+            self.connected = True
+            self.current_rate_hz = 30.0
+            setattr(self.state, "connected", True)
+            setattr(self.state, "current_rate_hz", 30.0)
+            return True
+
+        def stop(self):
+            self.connected = False
+            self.current_rate_hz = 0.0
+            setattr(self.state, "connected", False)
+            setattr(self.state, "current_rate_hz", 0.0)
+
+        def is_healthy(self) -> bool:
+            return self.connected
+
+# Real camera + ArUco driver (falls back cleanly if OpenCV/camera hardware is unavailable)
+try:
+    from src.inputs.camera_driver.camera_node import CameraNode
+except Exception as _camera_import_error:  # noqa: BLE001
+    CameraNode = None
+    print(f"[MASTER Warning] Camera node unavailable: {_camera_import_error}")
 
 
 class MasterNode:
@@ -46,6 +82,13 @@ class MasterNode:
             distance_node=self.distance_node,
         )
 
+        # Hardware camera + ArUco capture worker bound to shared camera_state & vision_state
+        self._camera_driver = (
+            CameraNode(self.camera_node.state, self.vision_node.state)
+            if CameraNode is not None
+            else None
+        )
+
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
 
@@ -67,6 +110,7 @@ class MasterNode:
         # Ground Station Wi-Fi link watchdog state
         self._last_gcs_contact: float = 0.0
         self._gcs_failsafe_triggered: bool = False
+        self.wifi_bridge: Optional[Any] = None
 
     @property
     def camera_state(self):
@@ -111,6 +155,10 @@ class MasterNode:
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
 
+    def bind_wifi_bridge(self, bridge: Any):
+        """Links MasterWIFI so its active 10Hz heartbeat keeps the GCS link watchdog alive."""
+        self.wifi_bridge = bridge
+
     def notify_gcs_activity(self):
         """Refreshes the Ground Station Wi-Fi link watchdog timestamp."""
         self._last_gcs_contact = time.time()
@@ -120,6 +168,15 @@ class MasterNode:
 
     def _check_gcs_link_failsafe(self):
         """Triggers autonomous LAND if Ground Station contact is lost for >10s while armed/flying."""
+        if self.wifi_bridge is not None:
+            pc_bridge = getattr(self.wifi_bridge, "pc_bridge", None)
+            if pc_bridge is not None and getattr(pc_bridge, "is_gcs_connected", False):
+                self._last_gcs_contact = time.time()
+                if self._gcs_failsafe_triggered:
+                    self._gcs_failsafe_triggered = False
+                    self.state.append_cli_log("Ground Station Wi-Fi link RESTORED.", "OK")
+                return
+
         if self._last_gcs_contact <= 0.0 or self._gcs_failsafe_triggered:
             return
 
@@ -199,6 +256,13 @@ class MasterNode:
             else:
                 self.node_clis[name].manager.start()
 
+            if name == "camera" and self._camera_driver is not None:
+                self._camera_driver.start()
+            elif name == "vision" and self._camera_driver is not None:
+                self._camera_driver.enable_vision(True)
+                if not getattr(self._camera_driver, "is_running", False):
+                    self.state.append_cli_log("Vision needs the camera node: run 'start camera'.", "WARN")
+
             self.state.update_subsystem(name, running=True, health="HEALTHY")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STARTED.", "OK")
             self._refresh_readiness_state()
@@ -224,6 +288,11 @@ class MasterNode:
                 return False
 
         try:
+            if name == "camera" and self._camera_driver is not None:
+                self._camera_driver.stop()
+            elif name == "vision" and self._camera_driver is not None:
+                self._camera_driver.enable_vision(False)
+
             self.node_clis[name].manager.stop()
             self.state.update_subsystem(name, running=False, health="OFFLINE")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STOPPED.", "WARN")

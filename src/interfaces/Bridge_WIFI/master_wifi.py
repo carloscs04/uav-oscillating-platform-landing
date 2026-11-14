@@ -161,6 +161,8 @@ class MasterWIFI:
                 "ARM_DRONE": "arm",
                 "DISARM_DRONE": "disarm",
                 "START_MISSION": "mission start",
+                "HOVER": "hover",
+                "HOLD_HOVER": "hover",
                 "LAND_DRONE": "mission land",
                 "ABORT": "abort",
                 "EMERGENCY_ABORT": "abort",

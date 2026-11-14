@@ -4,7 +4,7 @@ import threading
 from typing import Any, Dict, Optional
 
 
-class DistanceSensorState:
+class DistanceState:
     """Thread-safe state buffer for Distance Sensor telemetry and health status."""
 
     def __init__(self):

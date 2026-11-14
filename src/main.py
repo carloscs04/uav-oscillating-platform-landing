@@ -26,6 +26,7 @@ def main():
             control_node=master_node.control_state,
             master_node=master_node
         )
+        master_node.bind_wifi_bridge(bridge_wifi)
         bridge_wifi.start()
 
     except KeyboardInterrupt:
