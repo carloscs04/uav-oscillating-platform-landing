@@ -5,21 +5,19 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
 from src.inputs.distance_sensor.master_sensor import DistanceManager
-from src.logic.vision.master_vision import VisionManager
+from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
 from src.logic.control.master_control import ControlManager, MissionPhase
-
-
-from src.logic.master.master_state import MasterState, SystemState
+from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
+from src.logic.master.cmd_nodes.camera_cmd import CameraCLI
+from src.logic.master.cmd_nodes.control_cmd import ControlCLI
+from src.logic.master.cmd_nodes.distance_cmd import DistanceCLI
+from src.logic.master.cmd_nodes.mavlink_cmd import MAVLinkCLI
+from src.logic.master.cmd_nodes.vision_cmd import VisionCLI
 from src.logic.master.command_guard import CommandGuard
 from src.logic.master.debug_sim import DebugSimulator
-from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
-from src.logic.master.cmd_nodes.mavlink_cmd import MAVLinkCLI
-from src.logic.master.cmd_nodes.camera_cmd import CameraCLI
-from src.logic.master.cmd_nodes.vision_cmd import VisionCLI
-from src.logic.master.cmd_nodes.distance_cmd import DistanceCLI
-from src.logic.master.cmd_nodes.control_cmd import ControlCLI
+from src.logic.master.master_state import MasterState, SystemState
+from src.logic.vision.master_vision import VisionManager
 
 try:
     from src.inputs.camera_driver.master_camera import CameraManager
@@ -50,6 +48,7 @@ except ImportError:
         def is_healthy(self) -> bool:
             return self.connected
 
+
 # Real camera + ArUco driver (falls back cleanly if OpenCV/camera hardware is unavailable)
 try:
     from src.inputs.camera_driver.camera_node import CameraNode
@@ -59,9 +58,15 @@ except Exception as _camera_import_error:  # noqa: BLE001
 
 
 class MasterNode:
-    """Central UAV Supervisor: handles global lifecycle/mission commands and delegates node commands to cmd_nodes/."""
+    """Central UAV Supervisor with strict RC-Master authority.
+
+    The RC transmitter holds exclusive physical authority over arming and flight mode
+    selection. Autonomous guidance is permitted ONLY while the vehicle is RC-armed
+    and the RC flight-mode switch is set to GUIDED_NOGPS.
+    """
 
     VALID_TARGETS = {"mavlink", "camera", "vision", "distance", "control", "all"}
+    REQUIRED_AUTONOMOUS_MODE = "GUIDED_NOGPS"
     GCS_DISCONNECT_TIMEOUT_SEC = 10.0
 
     def __init__(self, mavlink_mode: str = "HARDWARE", enable_local_stdin: bool = True):
@@ -82,7 +87,14 @@ class MasterNode:
             distance_node=self.distance_node,
         )
 
-        # Hardware camera + ArUco capture worker bound to shared camera_state & vision_state
+        # Bind LiDAR & Optical Flow states to MAVLink 30Hz EKF3 sensor feed
+        if hasattr(self.mavlink_node, "bind_sensor_states"):
+            self.mavlink_node.bind_sensor_states(
+                distance_state=self.distance_node.state,
+                vision_state=self.vision_node.state,
+            )
+
+        # Hardware camera + ArUco + Optical Flow capture worker bound to shared states
         self._camera_driver = (
             CameraNode(self.camera_node.state, self.vision_node.state)
             if CameraNode is not None
@@ -129,16 +141,20 @@ class MasterNode:
         return self.control_node.state
 
     def start(self, auto_start_all: bool = True):
+        """Initializes all UAV subsystems and starts the hardware sync and CLI threads."""
         self._running = True
         self.state.set_system_state(SystemState.BOOTING)
-        self.state.append_cli_log("MasterNode initializing UAV subsystem orchestrator...", "SYSTEM")
+        self.state.append_cli_log("MasterNode initializing UAV subsystem orchestrator (RC-Master mode)...", "SYSTEM")
 
         if auto_start_all:
             self.start_all_nodes()
 
         self.state.set_system_state(SystemState.IDLE)
         self._refresh_readiness_state()
-        self.state.append_cli_log("MasterNode READY. Type 'help' or '<node> help' (e.g. 'control help').", "SYSTEM")
+        self.state.append_cli_log(
+            "MasterNode READY. Arm via RC and set switch to GUIDED_NOGPS before running 'mission start'.",
+            "SYSTEM",
+        )
 
         self._sync_thread = threading.Thread(target=self._hardware_sync_loop, daemon=True)
         self._sync_thread.start()
@@ -148,6 +164,7 @@ class MasterNode:
             self._stdin_thread.start()
 
     def stop(self):
+        """Stops all active subsystems and shuts down MasterNode cleanly."""
         self._running = False
         self.simulator.active = False
         self._pending_mission_confirm = False
@@ -156,7 +173,7 @@ class MasterNode:
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
 
     def bind_wifi_bridge(self, bridge: Any):
-        """Links MasterWIFI so its active 10Hz heartbeat keeps the GCS link watchdog alive."""
+        """Links MasterWIFI so its active heartbeat keeps the GCS link watchdog alive."""
         self.wifi_bridge = bridge
 
     def notify_gcs_activity(self):
@@ -166,8 +183,55 @@ class MasterNode:
             self._gcs_failsafe_triggered = False
             self.state.append_cli_log("Ground Station Wi-Fi link RESTORED.", "OK")
 
+    ARDUPILOT_MODE_MAP = {
+        0: "STABILIZE",
+        2: "ALT_HOLD",
+        4: "GUIDED",
+        5: "LOITER",
+        6: "RTL",
+        9: "LAND",
+        16: "POSHOLD",
+        20: "GUIDED_NOGPS",
+    }
+
+    def _get_pixhawk_mode(self) -> str:
+        """Extracts and normalizes the active flight mode reported by Pixhawk via MAVLink."""
+        st = self.mavlink_node.state
+        hb = st.get_packet("HEARTBEAT") or {}
+
+        raw_mode = getattr(st, "mode", None)
+        if raw_mode is None:
+            raw_mode = getattr(st, "flight_mode", None)
+        if raw_mode is None:
+            raw_mode = hb.get("custom_mode", hb.get("mode", ""))
+
+        if isinstance(raw_mode, int) or (isinstance(raw_mode, str) and raw_mode.strip().isdigit()):
+            return self.ARDUPILOT_MODE_MAP.get(int(raw_mode), f"MODE_{raw_mode}")
+
+        return str(raw_mode).strip().upper()
+
+    def _is_rc_master_authorized(self) -> tuple[bool, str]:
+        """Checks whether the RC pilot has armed the vehicle and selected GUIDED_NOGPS."""
+        if self.simulator.active:
+            return True, "SIMULATOR_ACTIVE"
+
+        if not self.mavlink_node.is_healthy():
+            return False, "MAVLink link is OFFLINE."
+
+        if not self.mavlink_node.state.is_armed():
+            return False, "Vehicle is DISARMED. Arm manually with the RC transmitter first."
+
+        current_mode = self._get_pixhawk_mode()
+        if current_mode != self.REQUIRED_AUTONOMOUS_MODE:
+            return (
+                False,
+                f"Flight mode is [{current_mode or 'UNKNOWN'}]. Flip RC switch to {self.REQUIRED_AUTONOMOUS_MODE} first.",
+            )
+
+        return True, "OK"
+
     def _check_gcs_link_failsafe(self):
-        """Triggers autonomous LAND if Ground Station contact is lost for >10s while armed/flying."""
+        """Releases guidance and commands LAND if GCS link is lost for >10s while in autonomous mission."""
         if self.wifi_bridge is not None:
             pc_bridge = getattr(self.wifi_bridge, "pc_bridge", None)
             if pc_bridge is not None and getattr(pc_bridge, "is_gcs_connected", False):
@@ -185,13 +249,14 @@ class MasterNode:
             return
 
         sys_state = self.state.get_system_state()
-        is_airborne_or_armed = (
+        current_mode = self._get_pixhawk_mode()
+        is_autonomous_airborne = (
             self.state.is_armed()
-            or self.control_node.is_airborne()
-            or (sys_state == SystemState.MISSION_ACTIVE)
+            and current_mode == self.REQUIRED_AUTONOMOUS_MODE
+            and (self.control_node.is_airborne() or sys_state == SystemState.MISSION_ACTIVE)
         )
 
-        if is_airborne_or_armed and sys_state != SystemState.LANDING:
+        if is_autonomous_airborne and sys_state != SystemState.LANDING:
             self._gcs_failsafe_triggered = True
             self._pending_mission_confirm = False
             self.control_node.command_land()
@@ -203,21 +268,41 @@ class MasterNode:
             )
 
     def _hardware_sync_loop(self):
-        """Continuously mirrors real Pixhawk HEARTBEAT armed status, ControlNode flight status, and GCS link."""
+        """Continuously mirrors Pixhawk state and immediately yields control if RC overrides mode or disarms."""
         while self._running:
             if not self.simulator.active:
                 if self.mavlink_node.is_healthy():
                     real_armed = bool(self.mavlink_node.state.is_armed())
+                    current_mode = self._get_pixhawk_mode()
+
                     if self.state.is_armed() != real_armed:
                         self.state.set_armed(real_armed)
 
-                    # Do not cancel ControlNode while it is actively waiting for Pixhawk ARM confirmation
-                    if not real_armed and self.control_node.phase != MissionPhase.ARMING:
+                    sys_state = self.state.get_system_state()
+                    rc_mode_override = (
+                        sys_state == SystemState.MISSION_ACTIVE
+                        and current_mode != self.REQUIRED_AUTONOMOUS_MODE
+                    )
+
+                    # Immediately release RPi guidance if RC disarms OR pilot switches out of GUIDED_NOGPS
+                    if not real_armed or rc_mode_override:
                         self.control_node.disable_guidance()
                         setattr(self.state, "in_controlled_flight", False)
-                        if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
+
+                        if sys_state in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
                             self.state.set_system_state(SystemState.IDLE)
                             self._refresh_readiness_state()
+                            if rc_mode_override:
+                                self.state.append_cli_log(
+                                    f"RC MASTER OVERRIDE: Mode switched to [{current_mode or 'MANUAL'}]. "
+                                    "Autonomous guidance released to pilot.",
+                                    "WARN",
+                                )
+                            elif not real_armed:
+                                self.state.append_cli_log(
+                                    "Vehicle DISARMED. Autonomous guidance stopped.",
+                                    "INFO",
+                                )
                 else:
                     if self.state.is_armed():
                         self.state.set_armed(False)
@@ -229,20 +314,24 @@ class MasterNode:
 
             setattr(self.state, "in_controlled_flight", self.control_node.is_airborne())
             self._check_gcs_link_failsafe()
-            time.sleep(0.2)
+            time.sleep(0.1)
 
     # =========================================================================
     # GLOBAL SUBSYSTEM LIFECYCLE MANAGEMENT (START / STOP)
     # =========================================================================
 
     def start_node(self, name: str) -> bool:
+        """Starts an individual subsystem node or all nodes."""
         name = name.lower().strip()
         if name == "all":
             self.start_all_nodes()
             return True
 
         if name not in self.VALID_TARGETS:
-            self.state.append_cli_log(f"Unknown node '{name}'. Valid: mavlink, camera, vision, distance, control, all", "ERROR")
+            self.state.append_cli_log(
+                f"Unknown node '{name}'. Valid: mavlink, camera, vision, distance, control, all",
+                "ERROR",
+            )
             return False
 
         subs = self.state.get_subsystems_snapshot()
@@ -272,6 +361,7 @@ class MasterNode:
             return False
 
     def stop_node(self, name: str, force: bool = False) -> bool:
+        """Stops an individual subsystem node or all nodes."""
         name = name.lower().strip()
         if name == "all":
             self.stop_all_nodes(force=force)
@@ -303,10 +393,12 @@ class MasterNode:
             return False
 
     def start_all_nodes(self):
+        """Starts all UAV subsystem nodes in dependency order."""
         for node in ("mavlink", "distance", "camera", "vision", "control"):
             self.start_node(node)
 
     def stop_all_nodes(self, force: bool = False):
+        """Stops all UAV subsystem nodes in reverse dependency order."""
         if not force:
             allowed, reason = self.guard.validate("stop", "all")
             if not allowed:
@@ -316,6 +408,7 @@ class MasterNode:
             self.stop_node(node, force=True)
 
     def _refresh_readiness_state(self):
+        """Updates system readiness between IDLE and READY when not actively flying or aborted."""
         cur = self.state.get_system_state()
         if cur in {SystemState.MISSION_ACTIVE, SystemState.LANDING, SystemState.EMERGENCY_ABORT}:
             return
@@ -328,6 +421,7 @@ class MasterNode:
     # =========================================================================
 
     def execute_cli_command(self, raw_cmd: str, from_gcs: bool = True) -> str:
+        """Parses and routes global supervisor commands and per-node CLI instructions."""
         cmd_clean = raw_cmd.strip()
         if not cmd_clean:
             return ""
@@ -369,8 +463,18 @@ class MasterNode:
                 self.state.append_cli_log(reason, "BLOCKED")
                 return reason
 
+        # Enforce RC-Master exclusivity: RPi cannot arm motors directly in hardware mode
+        if verb == "arm" and not self.simulator.active:
+            msg = "BLOCKED: RC transmitter holds master authority. Arm manually with RC sticks."
+            self.state.append_cli_log(msg, "BLOCKED")
+            return msg
+
         # 1. Prefixed node command
         if verb in self.node_clis:
+            if verb == "mavlink" and rest and rest[0].lower() == "arm" and not self.simulator.active:
+                msg = "BLOCKED: RC transmitter holds master authority. Arm manually with RC sticks."
+                self.state.append_cli_log(msg, "BLOCKED")
+                return msg
             return self.node_clis[verb].execute_cli_command(rest)
 
         # 2. Global Supervisor Commands
@@ -378,7 +482,7 @@ class MasterNode:
             msg = (
                 "Global: status | nodes | ping | sim <on|off> | start <node|all> | stop <node|all> | "
                 "mission <start|stop|land> | abort | reset\n"
-                "Basic Control Flight: control takeoff [alt] | hover | control land\n"
+                "RC-Master Prerequisite: Arm via RC sticks & set RC mode switch to GUIDED_NOGPS before 'mission start'.\n"
                 "Per-Node: <mavlink|camera|vision|distance|control> <help|status|methods|command...>"
             )
             self.state.append_cli_log(msg, "INFO")
@@ -403,8 +507,12 @@ class MasterNode:
             subs = self.state.get_subsystems_snapshot()
             sys_st = self.state.get_system_state().value
             arm_st = "ARMED" if self.state.is_armed() else "DISARMED"
+            mode_st = self._get_pixhawk_mode() or "UNKNOWN"
             summary = " | ".join([f"{k.upper()}:{'ON' if v['running'] else 'OFF'}" for k, v in subs.items()])
-            msg = f"STATE=[{sys_st}] | {arm_st} | SIM={'ON' if self.simulator.active else 'OFF'} | {summary}"
+            msg = (
+                f"STATE=[{sys_st}] | {arm_st} | MODE=[{mode_st}] | "
+                f"SIM={'ON' if self.simulator.active else 'OFF'} | {summary}"
+            )
             self.state.append_cli_log(msg, "STATUS")
             return msg
 
@@ -435,22 +543,18 @@ class MasterNode:
                     self.state.append_cli_log(reason, "BLOCKED")
                     return reason
 
-                if not self.mavlink_node.is_healthy() and not self.simulator.active:
-                    self.state.append_cli_log("MISSION BLOCKED: MAVLink link is OFFLINE.", "BLOCKED")
-                    return "MAVLINK_OFFLINE"
+                rc_ok, rc_reason = self._is_rc_master_authorized()
+                if not rc_ok:
+                    self.state.append_cli_log(f"MISSION BLOCKED: {rc_reason}", "BLOCKED")
+                    return "RC_AUTH_REQUIRED"
 
                 self._pending_mission_alt = float(rest[1]) if len(rest) > 1 else 1.5
                 self._pending_mission_confirm = True
-                if self.mavlink_node.state.is_armed():
-                    prompt = (
-                        "[CONFIRM] Vehicle is already ARMED/AIRBORNE. Mission will start ArUco ALIGNING & PRECISION LANDING immediately. "
-                        "Continue? (y/n)"
-                    )
-                else:
-                    prompt = (
-                        f"[CONFIRM] Mission will switch to GUIDED_NOGPS, ARM, TAKEOFF to {self._pending_mission_alt:.2f}m, "
-                        "and execute ArUco ALIGNING & PRECISION LANDING. Continue? (y/n)"
-                    )
+                prompt = (
+                    f"[CONFIRM] RC-Armed & {self.REQUIRED_AUTONOMOUS_MODE} verified. "
+                    f"Mission will ascend to {self._pending_mission_alt:.2f}m and execute ArUco ALIGNING & PRECISION LANDING "
+                    "(flip RC switch anytime to override). Continue? (y/n)"
+                )
                 self.state.append_cli_log(prompt, "WARN")
                 return "AWAITING_CONFIRM"
 
@@ -513,36 +617,25 @@ class MasterNode:
         return msg
 
     def _launch_confirmed_mission(self) -> str:
-        """Launches full autonomous mission from ground (arm+takeoff+align+land) OR mid-air hover (align+land)."""
+        """Starts autonomous guidance ONLY after re-verifying RC-arm and GUIDED_NOGPS mode."""
+        rc_ok, rc_reason = self._is_rc_master_authorized()
+        if not rc_ok:
+            self.state.append_cli_log(f"Mission ABORTED: {rc_reason}", "BLOCKED")
+            return "MISSION_RC_AUTH_FAILED"
+
         if not self.control_node.is_healthy():
             self.start_node("control")
 
-        was_already_armed = bool(self.mavlink_node.state.is_armed())
         self.control_node.start_mission(altitude_m=self._pending_mission_alt)
-
-        if not self.simulator.active and not was_already_armed:
-            time.sleep(1.3)
-            if not self.mavlink_node.state.is_armed():
-                st = self.mavlink_node.state.get_packet("STATUSTEXT") or {}
-                reason = st.get("text", "Pre-arm check failed")
-                self.control_node.disable_guidance()
-                self.state.set_armed(False)
-                self.state.set_system_state(SystemState.READY)
-                self.state.append_cli_log(f"Mission ABORTED: Pixhawk refused to arm ({reason}).", "ERROR")
-                return "MISSION_ARM_FAILED"
-
-        self.state.set_armed(True)
         self.state.set_system_state(SystemState.MISSION_ACTIVE)
-        if was_already_armed:
-            self.state.append_cli_log("Mission CONFIRMED mid-air -> Jumping directly to ArUco ALIGNING.", "OK")
-        else:
-            self.state.append_cli_log(
-                f"Mission CONFIRMED -> Full autonomous flight (ARM + TAKEOFF {self._pending_mission_alt:.2f}m -> ALIGNING).",
-                "OK",
-            )
+        self.state.append_cli_log(
+            f"Mission CONFIRMED -> Guidance ACTIVE (target {self._pending_mission_alt:.2f}m -> ArUco ALIGNING).",
+            "OK",
+        )
         return "MISSION_ACTIVE"
 
     def _local_cli_loop(self):
+        """Reads commands from local stdin when enabled."""
         while self._running:
             try:
                 line = sys.stdin.readline()

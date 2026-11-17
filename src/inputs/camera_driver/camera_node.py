@@ -1,26 +1,6 @@
 # File: src/inputs/camera_driver/camera_node.py
 """
-Onboard camera node: real camera -> CameraState (video) + VisionState (ArUco pose).
-
-It follows the State pattern used by the other subsystems: the node only
-WRITES into the State objects; the existing transmitters read them.
-
-    CameraState  <- update_frame(...)        -> CameraTransmitter  port 5003  [video_frame, camera_status]
-    VisionState  <- update_aruco_pose(...)   -> VisionTransmitter  port 5006  [aruco_pose, status]
-
-aruco_pose: x, y, z and distance_m in METRES, camera frame (x right, y down,
-z out of the lens); roll/pitch/yaw in degrees, (0, 0, 0) = marker facing the
-camera squarely. tracking_state: LOCKED (marker in this frame), HOLDING (lost
-for less than vision.hold_s), SEARCHING (no marker).
-
-MasterNode drives it:
-    start camera -> node.start()             (opens the camera, streams video)
-    start vision -> node.enable_vision(True) (ArUco processing on the same frames)
-    stop vision  -> node.enable_vision(False)
-    stop camera  -> node.stop()
-
-Self-healing: if the camera cannot be opened or stops delivering frames it is
-(re)opened in the background, with fallback to the spare camera, until stop().
+Onboard camera node: real camera -> CameraState (video) + VisionState (ArUco pose & Optical Flow).
 """
 
 import base64
@@ -33,20 +13,26 @@ import cv2
 from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_calibration
 from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg
+from src.logic.vision.optical_flow import OpticalFlowEstimator
 from src.logic.vision.tracker import TargetTracker
 
-UDP_SAFE_B64_CHARS = 60000   # keep the video packet under the ~65 KB UDP limit
+UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
 
 
 class CameraNode:
     """Runs the camera in a background thread and publishes into the State objects."""
 
-    def __init__(self, camera_state, vision_state, config_path: Optional[str] = None,
-                 camera: Optional[str] = None):
+    def __init__(
+        self,
+        camera_state,
+        vision_state,
+        config_path: Optional[str] = None,
+        camera: Optional[str] = None,
+    ):
         self.camera_state = camera_state
         self.vision_state = vision_state
         self.config = load_config(config_path)
-        self.camera_name = camera              # None = active_camera from config.yaml
+        self.camera_name = camera  # None = active_camera from config.yaml
 
         vcfg = self.config.get("vision", {})
         self.reopen_after = int(vcfg.get("reopen_after_failures", 30))
@@ -57,10 +43,9 @@ class CameraNode:
         self.cam = None
         self.model: Optional[CameraModel] = None
         self.tracker: Optional[TargetTracker] = None
+        self.flow_estimator: Optional[OpticalFlowEstimator] = None
 
         self.vision_enabled = False
-        # Held while a frame's ArUco result is computed and published, so that
-        # enable_vision(False) can never be overtaken by a frame already in flight.
         self._vision_lock = threading.Lock()
         self.is_running = False
         self._thread: Optional[threading.Thread] = None
@@ -90,7 +75,7 @@ class CameraNode:
         self._publish_no_target("SEARCHING")
 
     def enable_vision(self, on: bool):
-        """Turn ArUco processing on/off (the camera keeps streaming video)."""
+        """Turn ArUco processing on/off (optical flow and video keep running while camera is active)."""
         with self._vision_lock:
             self.vision_enabled = bool(on)
             setattr(self.vision_state, "connected", bool(on and self.cam is not None))
@@ -133,8 +118,27 @@ class CameraNode:
                 cam.close()
                 raise
             model = CameraModel.nominal(cam.resolution, float(focal), cam.camera_id)
-            print(f"[CAMERA_NODE Warning] {cam.calib_key} not calibrated: using nominal "
-                  f"focal {focal} px, distances are approximate.")
+            print(
+                f"[CAMERA_NODE Warning] {cam.calib_key} not calibrated: using nominal "
+                f"focal {focal} px, distances are approximate."
+            )
+
+        K = getattr(model, "K", None)
+        if K is not None:
+            fx, fy = float(K[0, 0]), float(K[1, 1])
+        else:
+            fx = float(getattr(model, "fx", cam_cfg.get("nominal_focal_px", 500.0)))
+            fy = float(getattr(model, "fy", fx))
+
+        flow_cfg = self.config.get("optical_flow", {})
+        self.flow_estimator = OpticalFlowEstimator(
+            native_resolution=cam.resolution,
+            focal_px=(fx, fy),
+            work_width=int(flow_cfg.get("work_width", 160)),
+            swap_xy=bool(flow_cfg.get("swap_xy", False)),
+            invert_x=bool(flow_cfg.get("invert_x", False)),
+            invert_y=bool(flow_cfg.get("invert_y", False)),
+        )
 
         acfg = self.config["aruco"]
         vcfg = self.config.get("vision", {})
@@ -143,20 +147,26 @@ class CameraNode:
         sizes.update({int(k): float(v) / 1000.0 for k, v in (acfg.get("sizes_mm") or {}).items()})
         self.tracker = TargetTracker(
             detector=ArucoDetector(acfg["dictionary"], acfg.get("ids")),
-            camera_model=model, sizes_m=sizes,
+            camera_model=model,
+            sizes_m=sizes,
             max_reproj_err_px=float(acfg.get("max_reproj_err_px", 2.0)),
             primary_ids=vcfg.get("primary_ids") or acfg.get("ids"),
             smoothing=float(vcfg.get("smoothing", 0.6)),
             max_jump_m=float(vcfg.get("max_jump_m", 0.30)),
-            hold_s=float(vcfg.get("hold_s", 0.5)))
+            hold_s=float(vcfg.get("hold_s", 0.5)),
+        )
         self.cam, self.model = cam, model
         self._set_link(camera=True)
         w, h = cam.resolution
         self.camera_state.update_frame("", fps=0.0, resolution=f"{w}x{h}")
-        print(f"[CAMERA_NODE] {cam.calib_key} open, calibrated={model.calibrated}, "
-              f"markers {acfg['dictionary']} ids={acfg.get('ids')} size {acfg['marker_mm']:g} mm")
+        print(
+            f"[CAMERA_NODE] {cam.calib_key} open, calibrated={model.calibrated}, "
+            f"markers {acfg['dictionary']} ids={acfg.get('ids')} size {acfg['marker_mm']:g} mm"
+        )
 
     def _close_camera(self):
+        if self.flow_estimator is not None:
+            self.flow_estimator.reset()
         if self.cam is not None:
             try:
                 self.cam.close()
@@ -184,10 +194,16 @@ class CameraNode:
             return
         roll, pitch, yaw = marker_attitude_deg(t["rvec"])
         self.vision_state.update_aruco_pose(
-            detected=True, target_id=int(t["id"]),
-            x=t["x"], y=t["y"], z=t["z"],
-            roll=roll, pitch=pitch, yaw=yaw,
-            tracking_state="LOCKED" if t["in_view"] else "HOLDING")
+            detected=True,
+            target_id=int(t["id"]),
+            x=t["x"],
+            y=t["y"],
+            z=t["z"],
+            roll=roll,
+            pitch=pitch,
+            yaw=yaw,
+            tracking_state="LOCKED" if t["in_view"] else "HOLDING",
+        )
 
     def _run(self):
         failures, last_stamp, retry_delay, next_preview = 0, None, 1.0, 0.0
@@ -196,12 +212,14 @@ class CameraNode:
                 try:
                     self._open()
                     failures, retry_delay, last_stamp = 0, 1.0, None
-                except Exception as e:  # noqa: BLE001 - keep retrying, like the MAVLink node
+                except Exception as e:  # noqa: BLE001
                     self.last_error = str(e).splitlines()[0]
                     self.error_count += 1
                     self._set_link(camera=False)
-                    print(f"[CAMERA_NODE Error] Cannot open camera: {self.last_error}. "
-                          f"Retrying in {retry_delay:.0f} s.")
+                    print(
+                        f"[CAMERA_NODE Error] Cannot open camera: {self.last_error}. "
+                        f"Retrying in {retry_delay:.0f} s."
+                    )
                     deadline = time.monotonic() + retry_delay
                     while self.is_running and time.monotonic() < deadline:
                         time.sleep(0.1)
@@ -231,6 +249,23 @@ class CameraNode:
             self.frames += 1
             setattr(self.camera_state, "current_rate_hz", round(self.fps, 1))
 
+            # Optical Flow -> VisionState (always active while camera runs so Loiter works continuously)
+            if self.flow_estimator is not None:
+                try:
+                    flow_res = self.flow_estimator.update(gray, stamp)
+                    if flow_res is not None and hasattr(self.vision_state, "update_optical_flow"):
+                        self.vision_state.update_optical_flow(
+                            rad_x=flow_res["rad_x"],
+                            rad_y=flow_res["rad_y"],
+                            dt_s=flow_res["dt_s"],
+                            quality=flow_res["quality"],
+                            px_dx=flow_res["px_dx"],
+                            px_dy=flow_res["px_dy"],
+                        )
+                except Exception as e:  # noqa: BLE001
+                    self.error_count += 1
+                    self.last_error = f"flow: {e}"
+
             # ArUco target -> VisionState
             with self._vision_lock:
                 if self.vision_enabled:
@@ -240,7 +275,7 @@ class CameraNode:
                         self._publish_target(stamp)
                         setattr(self.vision_state, "connected", True)
                         setattr(self.vision_state, "current_rate_hz", round(self.fps, 1))
-                    except Exception as e:  # noqa: BLE001 - one bad frame must not kill the node
+                    except Exception as e:  # noqa: BLE001
                         self.error_count += 1
                         self.last_error = f"vision: {e}"
                     ms = (time.perf_counter() - t0) * 1000.0
