@@ -19,8 +19,8 @@ class OpticalFlowEstimator:
         work_width: int = 160,
         max_corners: int = 40,
         min_corners: int = 12,
-        swap_xy: bool = False,
-        invert_x: bool = False,
+        swap_xy: bool = True,
+        invert_x: bool = True,
         invert_y: bool = False,
     ):
         self.native_w = max(1, int(native_resolution[0]))

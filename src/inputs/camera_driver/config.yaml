@@ -69,3 +69,8 @@ vision:
   preview_quality: 60          # JPEG quality of that preview
   preview_hz: 15               # how often the preview is encoded (CameraTransmitter sends at ~25 Hz)
   reopen_after_failures: 30    # consecutive failed frame reads before the camera is closed and reopened
+
+optical_flow:
+  swap_xy: true
+  invert_x: true
+  invert_y: false

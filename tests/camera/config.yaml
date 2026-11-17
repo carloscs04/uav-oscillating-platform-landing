@@ -23,7 +23,7 @@ cameras:
   usb_0bdc_8088:
     backend: usb
     vid_pid: "0bdc:8088"       # USB vendor:product, stable across reboots (unlike /dev/videoN)
-    resolution: [1280, 720]    # highest MJPG mode this webcam offers
+    resolution: [640, 360]     # OPTIMAL RESOLUTION!       #[1280, 720]    # highest MJPG mode this webcam offers
     fps: 30
     fourcc: MJPG
     rotate_180: false
