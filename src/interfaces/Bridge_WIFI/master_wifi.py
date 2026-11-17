@@ -161,6 +161,8 @@ class MasterWIFI:
                 "ARM_DRONE": "arm",
                 "DISARM_DRONE": "disarm",
                 "START_MISSION": "mission start",
+                "HOVER": "hover",
+                "HOLD_HOVER": "hover",
                 "LAND_DRONE": "mission land",
                 "ABORT": "abort",
                 "EMERGENCY_ABORT": "abort",
@@ -244,7 +246,7 @@ class MasterWIFI:
 
         # 4. Distance Sensor TX Node (Port 5002)
         if "distance_tx" not in self.tx_nodes:
-            dist_tx = DistanceSensorTransmitter(target_ip=target_ip, port=5002, distance_node=self.distance_node)
+            dist_tx = DistanceSensorTransmitter(target_ip=target_ip, port=5012, distance_node=self.distance_node)
             dist_tx.start()
             dist_tx.set_active_filter("ALL")
             self.tx_nodes["distance_tx"] = dist_tx

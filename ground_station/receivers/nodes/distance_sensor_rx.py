@@ -12,7 +12,7 @@ class DistanceSensorReceiver(threading.Thread):
 
     _active_instance = None
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 5002):
+    def __init__(self, host: str = "0.0.0.0", port: int = 5012):
         super().__init__(daemon=True)
         DistanceSensorReceiver._active_instance = self
 

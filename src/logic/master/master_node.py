@@ -3,13 +3,13 @@
 import sys
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
-from src.inputs.camera_driver.master_camera import CameraManager
-from src.inputs.distance_sensor.master_distance import DistanceManager
+from src.inputs.distance_sensor.master_sensor import DistanceManager
 from src.logic.vision.master_vision import VisionManager
-from src.logic.control.master_control import ControlManager
+from src.logic.control.master_control import ControlManager, MissionPhase
+
 
 from src.logic.master.master_state import MasterState, SystemState
 from src.logic.master.command_guard import CommandGuard
@@ -21,11 +21,48 @@ from src.logic.master.cmd_nodes.vision_cmd import VisionCLI
 from src.logic.master.cmd_nodes.distance_cmd import DistanceCLI
 from src.logic.master.cmd_nodes.control_cmd import ControlCLI
 
+try:
+    from src.inputs.camera_driver.master_camera import CameraManager
+except ImportError:
+    from src.inputs.camera_driver.camera_state import CameraState
+
+    class CameraManager:  # type: ignore[no-redef]
+        """Adapter exposing CameraState with standard lifecycle methods for MasterNode & CameraCLI."""
+
+        def __init__(self):
+            self.state = CameraState()
+            self.connected: bool = False
+            self.current_rate_hz: float = 0.0
+
+        def start(self) -> bool:
+            self.connected = True
+            self.current_rate_hz = 30.0
+            setattr(self.state, "connected", True)
+            setattr(self.state, "current_rate_hz", 30.0)
+            return True
+
+        def stop(self):
+            self.connected = False
+            self.current_rate_hz = 0.0
+            setattr(self.state, "connected", False)
+            setattr(self.state, "current_rate_hz", 0.0)
+
+        def is_healthy(self) -> bool:
+            return self.connected
+
+# Real camera + ArUco driver (falls back cleanly if OpenCV/camera hardware is unavailable)
+try:
+    from src.inputs.camera_driver.camera_node import CameraNode
+except Exception as _camera_import_error:  # noqa: BLE001
+    CameraNode = None
+    print(f"[MASTER Warning] Camera node unavailable: {_camera_import_error}")
+
 
 class MasterNode:
     """Central UAV Supervisor: handles global lifecycle/mission commands and delegates node commands to cmd_nodes/."""
 
     VALID_TARGETS = {"mavlink", "camera", "vision", "distance", "control", "all"}
+    GCS_DISCONNECT_TIMEOUT_SEC = 10.0
 
     def __init__(self, mavlink_mode: str = "HARDWARE", enable_local_stdin: bool = True):
         self.mavlink_mode = mavlink_mode
@@ -45,6 +82,13 @@ class MasterNode:
             distance_node=self.distance_node,
         )
 
+        # Hardware camera + ArUco capture worker bound to shared camera_state & vision_state
+        self._camera_driver = (
+            CameraNode(self.camera_node.state, self.vision_node.state)
+            if CameraNode is not None
+            else None
+        )
+
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
 
@@ -62,6 +106,11 @@ class MasterNode:
         self._pending_mission_alt = 1.5
         self._stdin_thread: Optional[threading.Thread] = None
         self._sync_thread: Optional[threading.Thread] = None
+
+        # Ground Station Wi-Fi link watchdog state
+        self._last_gcs_contact: float = 0.0
+        self._gcs_failsafe_triggered: bool = False
+        self.wifi_bridge: Optional[Any] = None
 
     @property
     def camera_state(self):
@@ -89,7 +138,7 @@ class MasterNode:
 
         self.state.set_system_state(SystemState.IDLE)
         self._refresh_readiness_state()
-        self.state.append_cli_log("MasterNode READY. Type 'help' or '<node> help' (e.g. 'mavlink help').", "SYSTEM")
+        self.state.append_cli_log("MasterNode READY. Type 'help' or '<node> help' (e.g. 'control help').", "SYSTEM")
 
         self._sync_thread = threading.Thread(target=self._hardware_sync_loop, daemon=True)
         self._sync_thread.start()
@@ -106,16 +155,80 @@ class MasterNode:
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
 
+    def bind_wifi_bridge(self, bridge: Any):
+        """Links MasterWIFI so its active 10Hz heartbeat keeps the GCS link watchdog alive."""
+        self.wifi_bridge = bridge
+
+    def notify_gcs_activity(self):
+        """Refreshes the Ground Station Wi-Fi link watchdog timestamp."""
+        self._last_gcs_contact = time.time()
+        if self._gcs_failsafe_triggered:
+            self._gcs_failsafe_triggered = False
+            self.state.append_cli_log("Ground Station Wi-Fi link RESTORED.", "OK")
+
+    def _check_gcs_link_failsafe(self):
+        """Triggers autonomous LAND if Ground Station contact is lost for >10s while armed/flying."""
+        if self.wifi_bridge is not None:
+            pc_bridge = getattr(self.wifi_bridge, "pc_bridge", None)
+            if pc_bridge is not None and getattr(pc_bridge, "is_gcs_connected", False):
+                self._last_gcs_contact = time.time()
+                if self._gcs_failsafe_triggered:
+                    self._gcs_failsafe_triggered = False
+                    self.state.append_cli_log("Ground Station Wi-Fi link RESTORED.", "OK")
+                return
+
+        if self._last_gcs_contact <= 0.0 or self._gcs_failsafe_triggered:
+            return
+
+        elapsed = time.time() - self._last_gcs_contact
+        if elapsed < self.GCS_DISCONNECT_TIMEOUT_SEC:
+            return
+
+        sys_state = self.state.get_system_state()
+        is_airborne_or_armed = (
+            self.state.is_armed()
+            or self.control_node.is_airborne()
+            or (sys_state == SystemState.MISSION_ACTIVE)
+        )
+
+        if is_airborne_or_armed and sys_state != SystemState.LANDING:
+            self._gcs_failsafe_triggered = True
+            self._pending_mission_confirm = False
+            self.control_node.command_land()
+            setattr(self.state, "in_controlled_flight", False)
+            self.state.set_system_state(SystemState.LANDING)
+            self.state.append_cli_log(
+                f"FAILSAFE: Ground Station disconnected for {elapsed:.1f}s! Executing autonomous LAND.",
+                "ALERT",
+            )
+
     def _hardware_sync_loop(self):
-        """Continuously mirrors real Pixhawk HEARTBEAT armed status into MasterState."""
+        """Continuously mirrors real Pixhawk HEARTBEAT armed status, ControlNode flight status, and GCS link."""
         while self._running:
             if not self.simulator.active:
                 if self.mavlink_node.is_healthy():
                     real_armed = bool(self.mavlink_node.state.is_armed())
                     if self.state.is_armed() != real_armed:
                         self.state.set_armed(real_armed)
-                elif self.state.is_armed():
-                    self.state.set_armed(False)
+
+                    # Do not cancel ControlNode while it is actively waiting for Pixhawk ARM confirmation
+                    if not real_armed and self.control_node.phase != MissionPhase.ARMING:
+                        self.control_node.disable_guidance()
+                        setattr(self.state, "in_controlled_flight", False)
+                        if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
+                            self.state.set_system_state(SystemState.IDLE)
+                            self._refresh_readiness_state()
+                else:
+                    if self.state.is_armed():
+                        self.state.set_armed(False)
+                    self.control_node.disable_guidance()
+                    setattr(self.state, "in_controlled_flight", False)
+                    if self.state.get_system_state() in {SystemState.LANDING, SystemState.MISSION_ACTIVE}:
+                        self.state.set_system_state(SystemState.IDLE)
+                        self._refresh_readiness_state()
+
+            setattr(self.state, "in_controlled_flight", self.control_node.is_airborne())
+            self._check_gcs_link_failsafe()
             time.sleep(0.2)
 
     # =========================================================================
@@ -143,6 +256,13 @@ class MasterNode:
             else:
                 self.node_clis[name].manager.start()
 
+            if name == "camera" and self._camera_driver is not None:
+                self._camera_driver.start()
+            elif name == "vision" and self._camera_driver is not None:
+                self._camera_driver.enable_vision(True)
+                if not getattr(self._camera_driver, "is_running", False):
+                    self.state.append_cli_log("Vision needs the camera node: run 'start camera'.", "WARN")
+
             self.state.update_subsystem(name, running=True, health="HEALTHY")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STARTED.", "OK")
             self._refresh_readiness_state()
@@ -168,6 +288,11 @@ class MasterNode:
                 return False
 
         try:
+            if name == "camera" and self._camera_driver is not None:
+                self._camera_driver.stop()
+            elif name == "vision" and self._camera_driver is not None:
+                self._camera_driver.enable_vision(False)
+
             self.node_clis[name].manager.stop()
             self.state.update_subsystem(name, running=False, health="OFFLINE")
             self.state.append_cli_log(f"Node [{name.upper()}] -> STOPPED.", "WARN")
@@ -202,15 +327,24 @@ class MasterNode:
     # CENTRAL CLI ROUTER
     # =========================================================================
 
-    def execute_cli_command(self, raw_cmd: str) -> str:
+    def execute_cli_command(self, raw_cmd: str, from_gcs: bool = True) -> str:
         cmd_clean = raw_cmd.strip()
         if not cmd_clean:
             return ""
 
-        self.state.append_cli_log(f"> {cmd_clean}", "CMD")
+        if from_gcs:
+            self.notify_gcs_activity()
+
         parts = cmd_clean.split()
         verb = parts[0].lower()
         rest = parts[1:]
+
+        # Silent Ground Station link heartbeat (keeps 10s failsafe alive without spamming logs)
+        if verb == "gcs_hb":
+            self.notify_gcs_activity()
+            return "GCS_HB_ACK"
+
+        self.state.append_cli_log(f"> {cmd_clean}", "CMD")
 
         # 0. Terminal confirmation gate (blocks other commands until 'y' or 'n' is answered)
         if self._pending_mission_confirm:
@@ -224,9 +358,16 @@ class MasterNode:
             elif verb != "abort":
                 self.state.append_cli_log(
                     "Are you sure you want to continue? Type 'y' to launch or 'n' to cancel:",
-                    "WARN"
+                    "WARN",
                 )
                 return "AWAITING_CONFIRM"
+
+        # Enforce EMERGENCY_ABORT lockout globally before routing
+        if self.state.get_system_state() == SystemState.EMERGENCY_ABORT:
+            allowed, reason = self.guard.validate(verb, rest[0] if rest else "")
+            if not allowed:
+                self.state.append_cli_log(reason, "BLOCKED")
+                return reason
 
         # 1. Prefixed node command
         if verb in self.node_clis:
@@ -237,6 +378,7 @@ class MasterNode:
             msg = (
                 "Global: status | nodes | ping | sim <on|off> | start <node|all> | stop <node|all> | "
                 "mission <start|stop|land> | abort | reset\n"
+                "Basic Control Flight: control takeoff [alt] | hover | control land\n"
                 "Per-Node: <mavlink|camera|vision|distance|control> <help|status|methods|command...>"
             )
             self.state.append_cli_log(msg, "INFO")
@@ -288,31 +430,49 @@ class MasterNode:
         elif verb == "mission":
             arg = rest[0].lower() if rest else ""
             if arg == "start":
+                allowed, reason = self.guard.validate("mission_start")
+                if not allowed:
+                    self.state.append_cli_log(reason, "BLOCKED")
+                    return reason
+
                 if not self.mavlink_node.is_healthy() and not self.simulator.active:
                     self.state.append_cli_log("MISSION BLOCKED: MAVLink link is OFFLINE.", "BLOCKED")
                     return "MAVLINK_OFFLINE"
 
                 self._pending_mission_alt = float(rest[1]) if len(rest) > 1 else 1.5
                 self._pending_mission_confirm = True
-                self.state.append_cli_log(
-                    f"[CONFIRM] Mission will switch to GUIDED, ARM vehicle, and TAKEOFF to {self._pending_mission_alt:.2f}m (HOVER). "
-                    "Are you sure you want to continue? (y/n)",
-                    "WARN"
-                )
+                if self.mavlink_node.state.is_armed():
+                    prompt = (
+                        "[CONFIRM] Vehicle is already ARMED/AIRBORNE. Mission will start ArUco ALIGNING & PRECISION LANDING immediately. "
+                        "Continue? (y/n)"
+                    )
+                else:
+                    prompt = (
+                        f"[CONFIRM] Mission will switch to GUIDED_NOGPS, ARM, TAKEOFF to {self._pending_mission_alt:.2f}m, "
+                        "and execute ArUco ALIGNING & PRECISION LANDING. Continue? (y/n)"
+                    )
+                self.state.append_cli_log(prompt, "WARN")
                 return "AWAITING_CONFIRM"
 
             elif arg == "stop":
                 self._pending_mission_confirm = False
                 self.control_node.hold_hover()
-                self.control_node.disable_guidance()
                 self.state.set_system_state(SystemState.READY)
-                self.state.append_cli_log("Mission STOPPED -> Control guidance disabled, holding HOVER.", "WARN")
+                self.state.append_cli_log("Mission STOPPED -> Alignment cancelled, ControlNode holding HOVER.", "WARN")
                 return "MISSION_STOPPED"
 
             elif arg == "land":
+                allowed, reason = self.guard.validate("mission_land")
+                if not allowed and not self.simulator.active:
+                    self.state.append_cli_log(reason, "BLOCKED")
+                    return reason
+
                 self._pending_mission_confirm = False
-                self.control_node.disable_guidance()
-                return self.node_clis["mavlink"].execute_cli_command(["land"])
+                self.control_node.command_land()
+                setattr(self.state, "in_controlled_flight", False)
+                self.state.set_system_state(SystemState.LANDING)
+                self.state.append_cli_log("Mission LAND -> Guidance stopped, Pixhawk landing.", "OK")
+                return "LAND_SENT"
 
             self.state.append_cli_log("Usage: mission <start|stop|land>", "ERROR")
             return "INVALID_MISSION_ARG"
@@ -320,14 +480,17 @@ class MasterNode:
         elif verb == "abort":
             self._pending_mission_confirm = False
             self.control_node.abort_mission()
-            self.node_clis["mavlink"].execute_cli_command(["mode", "LOITER"])
+            setattr(self.state, "in_controlled_flight", False)
+            self.node_clis["mavlink"].execute_cli_command(["mode", "LAND"])
             self.state.set_system_state(SystemState.EMERGENCY_ABORT)
-            self.state.append_cli_log("EMERGENCY ABORT! Switched to LOITER & disabled guidance.", "ALERT")
+            self.state.append_cli_log("EMERGENCY ABORT! Switched to LAND & disabled guidance.", "ALERT")
             return "EMERGENCY_ABORT"
 
         elif verb == "reset":
             self._pending_mission_confirm = False
+            self._gcs_failsafe_triggered = False
             self.control_node.disable_guidance()
+            setattr(self.state, "in_controlled_flight", False)
             real_armed = bool(self.mavlink_node.state.is_armed()) if self.mavlink_node.is_healthy() else False
             self.state.set_armed(real_armed)
             self.state.set_system_state(SystemState.IDLE)
@@ -336,6 +499,11 @@ class MasterNode:
             return "RESET_OK"
 
         # 3. Dynamic Standalone Routing
+        if verb == "land":
+            self._pending_mission_confirm = False
+            self.control_node.disable_guidance()
+            setattr(self.state, "in_controlled_flight", False)
+
         for node_cli in self.node_clis.values():
             if node_cli.owns_command(verb):
                 return node_cli.execute_cli_command([verb] + rest)
@@ -345,13 +513,14 @@ class MasterNode:
         return msg
 
     def _launch_confirmed_mission(self) -> str:
-        """Starts ControlManager and verifies Pixhawk actually arms before entering MISSION_ACTIVE."""
+        """Launches full autonomous mission from ground (arm+takeoff+align+land) OR mid-air hover (align+land)."""
         if not self.control_node.is_healthy():
             self.start_node("control")
 
+        was_already_armed = bool(self.mavlink_node.state.is_armed())
         self.control_node.start_mission(altitude_m=self._pending_mission_alt)
 
-        if not self.simulator.active:
+        if not self.simulator.active and not was_already_armed:
             time.sleep(1.3)
             if not self.mavlink_node.state.is_armed():
                 st = self.mavlink_node.state.get_packet("STATUSTEXT") or {}
@@ -364,10 +533,13 @@ class MasterNode:
 
         self.state.set_armed(True)
         self.state.set_system_state(SystemState.MISSION_ACTIVE)
-        self.state.append_cli_log(
-            f"Mission CONFIRMED -> ControlNode active (ARMED + TAKEOFF {self._pending_mission_alt:.2f}m -> HOVER).",
-            "OK"
-        )
+        if was_already_armed:
+            self.state.append_cli_log("Mission CONFIRMED mid-air -> Jumping directly to ArUco ALIGNING.", "OK")
+        else:
+            self.state.append_cli_log(
+                f"Mission CONFIRMED -> Full autonomous flight (ARM + TAKEOFF {self._pending_mission_alt:.2f}m -> ALIGNING).",
+                "OK",
+            )
         return "MISSION_ACTIVE"
 
     def _local_cli_loop(self):
@@ -377,6 +549,6 @@ class MasterNode:
                 if not line:
                     time.sleep(0.2)
                     continue
-                self.execute_cli_command(line)
+                self.execute_cli_command(line, from_gcs=False)
             except Exception:
                 time.sleep(0.2)

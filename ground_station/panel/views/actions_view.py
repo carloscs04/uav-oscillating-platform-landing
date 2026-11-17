@@ -20,6 +20,7 @@ class ActionsView(tk.LabelFrame):
 
         self._live_armed: bool = False
         self._live_fsm_state: str = "OFFLINE"
+        self._last_hb_tx: float = 0.0
 
         btn_grid = tk.Frame(self, bg=BG_CARD)
         btn_grid.pack(anchor="w", padx=10)
@@ -58,8 +59,23 @@ class ActionsView(tk.LabelFrame):
 
         self._sync_ui_loop()
 
+    def _send_silent_heartbeat(self):
+        """Sends a 1 Hz silent ping to RPi MasterNode so the 10s disconnect failsafe knows GCS is alive."""
+        now = time.time()
+        if now - self._last_hb_tx < 1.0:
+            return
+        self._last_hb_tx = now
+
+        rx = getattr(MasterReceiver, "_active_instance", None)
+        if rx and hasattr(rx, "send_terminal_command"):
+            rx.send_terminal_command("gcs_hb")
+        else:
+            self.cmd_tx.send_command("gcs_hb")
+
     def _sync_ui_loop(self):
         """Polls MasterReceiver telemetry to update button labels and actions dynamically."""
+        self._send_silent_heartbeat()
+
         rx = getattr(MasterReceiver, "_active_instance", None)
         armed = False
         fsm_state = "OFFLINE"
@@ -80,11 +96,13 @@ class ActionsView(tk.LabelFrame):
             self.controller.is_armed = armed
             self.controller.in_flight = (fsm_state == "MISSION_ACTIVE")
 
-        # 1. Dynamic ARM / DISARM button
-        if armed:
-            self.btn_arm.config(text="🔓 DISARM DRONE", bg="#455a64")
+        # 1. Dynamic ARM / DISARM button (locked visually while airborne)
+        if fsm_state in ("MISSION_ACTIVE", "LANDING"):
+            self.btn_arm.config(text="🔒 IN FLIGHT", bg="#37474f", state="disabled")
+        elif armed:
+            self.btn_arm.config(text="🔓 DISARM DRONE", bg="#455a64", state="normal")
         else:
-            self.btn_arm.config(text="⚡ ARM DRONE", bg="#d84315")
+            self.btn_arm.config(text="⚡ ARM DRONE", bg="#d84315", state="normal")
 
         # 2. Dynamic START MISSION / STOP MISSION / RESET button
         if fsm_state == "EMERGENCY_ABORT":
@@ -122,7 +140,6 @@ class ActionsView(tk.LabelFrame):
         elif self._live_fsm_state == "MISSION_ACTIVE":
             self._dispatch_to_master("mission stop", "[TX] 'mission stop' sent to MasterNode.")
         else:
-            # Confirmation prompt ('y'/'n') is handled directly inside the MasterNode terminal
             self._dispatch_to_master("mission start", "[TX] 'mission start' sent -> Confirm (y/n) in console.")
 
     def cmd_hover(self):
