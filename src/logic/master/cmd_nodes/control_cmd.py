@@ -2,65 +2,85 @@
 
 from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
+from src.logic.master.master_state import SystemState
 
 
 class ControlCLI(BaseNodeCLI):
-    """All ControlManager CLI commands and aliases."""
+    """CLI commands for basic flight behaviors and autonomous guidance via ControlManager."""
 
     def __init__(self, manager, state, guard):
         super().__init__("control", manager, state, guard)
 
     def _register_commands(self):
-        self.register_cmd("hover", self.cmd_hover, "Hold steady hover at current position", aliases=["hold_hover"])
-        self.register_cmd("phase", self.cmd_phase, "Show current mission phase in ControlManager")
-        self.register_cmd("guidance_on", self.cmd_enable, "Enable closed-loop guidance control", aliases=["enable_guidance", "ctrl_on"])
-        self.register_cmd("guidance_off", self.cmd_disable, "Disable closed-loop guidance control", aliases=["disable_guidance", "ctrl_off"])
-        self.register_cmd("setpoint", self.cmd_setpoint, "Set target offset setpoint <ref_x> <ref_y> <ref_z>", aliases=["set_target_offset", "sp"])
+        self.register_cmd(
+            "takeoff",
+            self.cmd_takeoff,
+            "Basic flight: arm, takeoff [alt_m], and hold HOVER without alignment",
+            global_alias=False,
+        )
+        self.register_cmd(
+            "hover",
+            self.cmd_hover,
+            "Hold current HOVER position (cancels alignment if active)",
+            aliases=["hold"],
+            global_alias=True,
+        )
+        self.register_cmd(
+            "land",
+            self.cmd_land,
+            "Stop guidance and execute landing",
+            global_alias=False,
+        )
 
     def cmd_status(self, _args: List[str]) -> str:
-        sp = self.manager.setpoint
+        healthy = self.manager.is_healthy()
         phase = getattr(self.manager.phase, "value", str(self.manager.phase))
+        guidance = self.manager.active_guidance
+        mission = self.manager.mission_mode
         self.log(
-            f"healthy={self.manager.is_healthy()} | phase={phase} | guidance={'ON' if self.manager.active_guidance else 'OFF'} | setpoint={sp}",
-            "STATUS"
+            f"healthy={healthy} | phase={phase} | guidance={guidance} | mission_mode={mission}",
+            "STATUS",
         )
         return "CONTROL_STATUS"
 
-    def cmd_phase(self, _args: List[str]) -> str:
-        phase = getattr(self.manager.phase, "value", str(self.manager.phase))
-        self.log(f"Current control phase: {phase}", "STATUS")
-        return phase
+    def cmd_takeoff(self, args: List[str]) -> str:
+        allowed, reason = self.guard.validate("control_takeoff")
+        if not allowed:
+            self.log(reason, "BLOCKED")
+            return reason
+
+        alt = float(args[0]) if args else 1.5
+        if not self.manager.is_healthy():
+            self.manager.start()
+
+        started = self.manager.start_basic_flight(altitude_m=alt)
+        if not started:
+            self.log("Basic takeoff failed: MAVLink unavailable.", "ERROR")
+            return "CONTROL_TAKEOFF_FAILED"
+
+        setattr(self.state, "in_controlled_flight", True)
+        self.log(f"Basic flight started -> ARM + TAKEOFF ({alt:.2f}m) -> HOVER (no mission).", "OK")
+        return "CONTROL_TAKEOFF_OK"
 
     def cmd_hover(self, _args: List[str]) -> str:
-        if not self.state.is_armed():
-            self.log("HOVER blocked: Vehicle is DISARMED (arm/takeoff failed or not executed).", "BLOCKED")
-            return "HOVER_BLOCKED_DISARMED"
-
         if not self.manager.hold_hover():
-            self.log("HOVER blocked: ControlManager refused hover transition.", "ERROR")
-            return "HOVER_FAILED"
+            self.log("HOVER blocked: Vehicle must be ARMED first.", "BLOCKED")
+            return "HOVER_BLOCKED"
 
-        self.log("HOVER command dispatched to ControlManager.", "OK")
+        setattr(self.state, "in_controlled_flight", True)
+        if self.state.get_system_state() == SystemState.MISSION_ACTIVE:
+            self.state.set_system_state(SystemState.READY)
+        self.log("ControlNode holding HOVER (mission alignment disabled).", "OK")
         return "HOVER_OK"
 
-    def cmd_enable(self, _args: List[str]) -> str:
-        if not self.state.is_armed():
-            self.log("Guidance blocked: Vehicle is DISARMED.", "BLOCKED")
-            return "GUIDANCE_BLOCKED"
-        self.manager.enable_guidance()
-        self.log("Closed-loop guidance ENABLED.", "OK")
-        return "GUIDANCE_ON"
+    def cmd_land(self, _args: List[str]) -> str:
+        allowed, reason = self.guard.validate("mission_land")
+        if not allowed:
+            self.log(reason, "BLOCKED")
+            return reason
 
-    def cmd_disable(self, _args: List[str]) -> str:
-        self.manager.disable_guidance()
-        self.log("Closed-loop guidance DISABLED.", "WARN")
-        return "GUIDANCE_OFF"
-
-    def cmd_setpoint(self, args: List[str]) -> str:
-        if len(args) < 3:
-            self.log("Usage: setpoint <ref_x> <ref_y> <ref_z>", "ERROR")
-            return "MISSING_SETPOINT"
-        rx, ry, rz = float(args[0]), float(args[1]), float(args[2])
-        self.manager.set_target_offset(rx, ry, rz)
-        self.log(f"Setpoint updated to ({rx}, {ry}, {rz}).", "OK")
-        return "SETPOINT_OK"
+        self.manager.command_land()
+        setattr(self.state, "in_controlled_flight", False)
+        self.state.set_system_state(SystemState.LANDING)
+        self.log("ControlNode stopped guidance and commanded LAND.", "OK")
+        return "CONTROL_LAND_OK"

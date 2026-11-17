@@ -1,3 +1,5 @@
+# src/interfaces/MAVLink/master_mavlink.py
+
 import os
 import sys
 import time
@@ -112,7 +114,7 @@ class MAVLinkManager:
                         attempt_logged = False
                         self.rx_listener.start()
                         self.heartbeat_emitter.start()
-                        self.system_cmd.request_telemetry_streams(rate_hz=10)
+                        self.system_cmd.request_telemetry_streams(rate_hz=50)
                     else:
                         self._cleanup_partial_connection()
 
@@ -165,6 +167,15 @@ class MAVLinkManager:
 
             self.master = None
             print("[MAVLink] Node stopped cleanly.")
+
+    def send_attitude_target(
+        self,
+        roll_deg: float = 0.0,
+        pitch_deg: float = 0.0,
+        yaw_deg: float = 0.0,
+        thrust: float = 0.5,
+    ):
+        self.flight_cmd.send_attitude_target(roll_deg, pitch_deg, yaw_deg, thrust)
 
     # --- FACADE WRAPPERS ---
 
