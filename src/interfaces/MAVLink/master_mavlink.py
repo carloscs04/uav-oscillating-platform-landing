@@ -15,6 +15,7 @@ from src.interfaces.MAVLink.rx.telemetry_ui import TelemetryUI
 from src.interfaces.MAVLink.tx.system_cmd import SystemCommands
 from src.interfaces.MAVLink.tx.flight_cmd import FlightCommands
 from src.interfaces.MAVLink.tx.heartbeat import MAVLinkHeartbeatEmitter
+from src.interfaces.MAVLink.tx.sensor_feed import MAVLinkSensorFeed
 
 
 class MAVLinkManager:
@@ -39,6 +40,11 @@ class MAVLinkManager:
         self.system_cmd = SystemCommands()
         self.flight_cmd = FlightCommands()
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
+        self.sensor_feed = MAVLinkSensorFeed(rate_hz=30.0)
+
+    def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
+        """Binds LiDAR and Optical Flow state buffers to the 30Hz EKF3 sensor feed."""
+        self.sensor_feed.bind_states(distance_state=distance_state, vision_state=vision_state)
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r") as f:
@@ -106,6 +112,7 @@ class MAVLinkManager:
                     self.system_cmd.set_master(self.master)
                     self.flight_cmd.set_master(self.master)
                     self.heartbeat_emitter.set_master(self.master)
+                    self.sensor_feed.set_master(self.master)
 
                     hb = self.rx_listener.wait_for_heartbeat(timeout=hb_timeout)
                     if hb:
@@ -114,6 +121,7 @@ class MAVLinkManager:
                         attempt_logged = False
                         self.rx_listener.start()
                         self.heartbeat_emitter.start()
+                        self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
                     else:
                         self._cleanup_partial_connection()
@@ -134,6 +142,9 @@ class MAVLinkManager:
             self.rx_listener.stop()
         if hasattr(self, "heartbeat_emitter") and self.heartbeat_emitter:
             self.heartbeat_emitter.stop()
+        if hasattr(self, "sensor_feed") and self.sensor_feed:
+            self.sensor_feed.stop()
+            self.sensor_feed.set_master(None)
 
         if self.master:
             try:
@@ -159,6 +170,8 @@ class MAVLinkManager:
 
             self.rx_listener.stop()
             self.heartbeat_emitter.stop()
+            self.sensor_feed.stop()
+            self.sensor_feed.set_master(None)
 
             try:
                 self.master.close()
@@ -210,6 +223,7 @@ class MAVLinkManager:
         self.state.clear_transient_packets()
         return self.system_cmd.debug_force_disarm()
 
+
 # Global stream filter to suppress hardcoded pymavlink "Device ... is dead" terminal prints
 class SuppressDeadDeviceFilter:
     def __init__(self, original_stream):
@@ -229,6 +243,7 @@ class SuppressDeadDeviceFilter:
 
 sys.stdout = SuppressDeadDeviceFilter(sys.stdout)
 sys.stderr = SuppressDeadDeviceFilter(sys.stderr)
+
 
 def _run_interactive_cli(manager: MAVLinkManager):
     """Interactive CLI shell synchronized to confirmed HEARTBEAT state changes."""
