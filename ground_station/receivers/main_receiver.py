@@ -16,7 +16,7 @@ class MainReceiver:
 
     def __init__(self):
         self.master_rx = MasterReceiver(port=5008)      # Dedicated CLI & FSM stream (5001 reserved for PiLink)
-        self.distance_rx = DistanceSensorReceiver(port=5002)
+        self.distance_rx = DistanceSensorReceiver(port=5012)
         self.camera_rx = CameraReceiver(port=5003)      # Dedicated video stream for CameraView
         self.control_rx = ControlReceiver(port=5004)
         self.mavlink_rx = MAVLinkReceiver(port=5005)
