@@ -1,5 +1,6 @@
 # File: src/logic/control/master_control.py
 
+import math
 import threading
 import time
 from enum import Enum
@@ -17,30 +18,54 @@ class MissionPhase(str, Enum):
 
 
 class ControlManager:
-    """Facade API & Unified Flight Controller (GUIDED_NOGPS Continuous Z-PID + ArUco Mission)."""
+    """Facade API & High-Response Cascaded Flight Controller (50Hz Pixhawk EKF/IMU + VL53L1X)."""
 
-    HOVER_THRUST = 0.50
-    FALLBACK_CLIMB_THRUST = 0.56
-    MIN_THRUST = 0.30
-    MAX_THRUST = 0.72
+    GRAVITY_MSS = 9.80665
 
-    # Continuous Z-axis PID gains (active from takeoff through hover/aligning)
-    ALT_KP = 0.22
-    ALT_KI = 0.05
-    ALT_KD = 0.14
-    ALT_I_MAX = 0.14
+    # Battery-compensated hover feedforward (3S LiPo nominal reference)
+    BASE_HOVER_THRUST = 0.500
+    NOMINAL_VOLTAGE_V = 11.40
+    MIN_HOVER_FF = 0.380
+    MAX_HOVER_FF = 0.640
+
+    FALLBACK_CLIMB_THRUST = 0.580
+    MIN_THRUST = 0.220
+    MAX_THRUST = 0.800
+
+    # Outer loop: Altitude reference (m) -> Desired vertical velocity (m/s)
+    POS_KP = 2.40
+    POS_DEADBAND_M = 0.012       # +/- 1.2 cm micro-deadband
+    MAX_CLIMB_VZ = 1.10          # m/s max upward velocity
+    MAX_DESCENT_VZ = 0.85        # m/s max downward velocity
+
+    # Inner fast loop (50 Hz): EKF/IMU velocity & acceleration damping -> Analog Thrust
+    VEL_KP = 0.44
+    VEL_KI = 0.09
+    VEL_KD = 0.06                # Direct velocity-change damping
+    ACC_KD = 0.028               # Instantaneous IMU vertical acceleration damping
+    VEL_I_MAX = 0.07             # Small trim bound (voltage sag handled by feedforward)
+    THRUST_SMOOTH_ALPHA = 0.92   # Near-instant 50Hz analog output
+
+    # Complementary Observer (50Hz Pixhawk EKF/IMU + 30Hz VL53L1X)
+    OBS_KZ = 0.42
+    OBS_KV = 0.55
+    OBS_KB = 0.08
+
+    # Sensor fail-safe thresholds
+    LIDAR_WARN_SEC = 1.5
+    LIDAR_LAND_SEC = 3.5
 
     # Reference stabilization criteria to transition status CLIMBING -> HOVER
-    ALT_TOLERANCE_M = 0.06       # +/- 6 cm around target altitude
-    VZ_STABLE_THRESH = 0.15      # m/s vertical speed threshold
-    STABLE_HOLD_SEC = 0.60       # must remain within tolerance for 0.6s
+    ALT_TOLERANCE_M = 0.05
+    VZ_STABLE_THRESH = 0.15
+    STABLE_HOLD_SEC = 0.40
 
     def __init__(
         self,
         mavlink_node: Optional[Any] = None,
         vision_node: Optional[Any] = None,
         distance_node: Optional[Any] = None,
-        target_hz: float = 20.0,
+        target_hz: float = 50.0,
     ):
         self.mavlink = mavlink_node
         self.vision = vision_node
@@ -53,13 +78,30 @@ class ControlManager:
         self.target_altitude_m: float = 1.5
         self.setpoint: Tuple[float, float, float] = (0.0, 0.0, 1.5)
 
-        # Continuous Z-PID controller state
-        self._alt_integral: float = 0.0
-        self._prev_alt_m: Optional[float] = None
-        self._prev_alt_time: Optional[float] = None
-        self._filtered_vz: float = 0.0
+        # Complementary filter & cascaded controller state
+        self._est_z: float = 0.0
+        self._est_vz: float = 0.0
+        self._prev_est_vz: float = 0.0
+        self._az_bias: float = 0.0
+        self._last_az_corr: float = 0.0
+        self._estimator_initialized: bool = False
+        self._last_est_time: Optional[float] = None
+        self._last_imu_sig: Optional[Tuple[Any, ...]] = None
+        self._last_lidar_val: Optional[float] = None
+        self._last_valid_lidar_time: float = 0.0
+        self._lidar_fault_active: bool = False
+
+        self._vel_integral: float = 0.0
         self._stable_since: Optional[float] = None
-        self.last_thrust: float = self.HOVER_THRUST
+        self._current_hover_ff: float = self.BASE_HOVER_THRUST
+        self.last_thrust: float = self.BASE_HOVER_THRUST
+
+        # Attitude & XY targets
+        self._cmd_roll_deg: float = 0.0
+        self._cmd_pitch_deg: float = 0.0
+        self._cmd_yaw_deg: float = 0.0
+        self._x_est_m: float = 0.0
+        self._y_est_m: float = 0.0
 
         self.state = ControlState()
         self.connected: bool = False
@@ -89,7 +131,8 @@ class ControlManager:
         self.phase = MissionPhase.IDLE
         self.running = False
         self.connected = False
-        self._reset_altitude_pid()
+        self._reset_vertical_controller()
+        self._publish_telemetry_state(vz_sp=0.0, p_term=0.0, d_term=0.0, cur_lidar=None)
         setattr(self.state, "connected", False)
         setattr(self.state, "current_rate_hz", 0.0)
 
@@ -97,7 +140,6 @@ class ControlManager:
         return self.running and self.connected
 
     def is_airborne(self) -> bool:
-        """Returns True whenever ControlManager is actively executing an airborne phase."""
         return self.active_guidance and self.phase in {
             MissionPhase.ARMING,
             MissionPhase.CLIMBING,
@@ -111,54 +153,58 @@ class ControlManager:
     # =========================================================================
 
     def start_basic_flight(self, altitude_m: float = 1.5) -> bool:
-        """Arms (if needed) and runs continuous Z-PID until stabilized at target altitude."""
         if not self.mavlink:
             return False
 
         self.mission_mode = False
         self.target_altitude_m = float(altitude_m)
         self.setpoint = (0.0, 0.0, self.target_altitude_m)
+        self._cmd_roll_deg = 0.0
+        self._cmd_pitch_deg = 0.0
         self._stable_since = None
         self.active_guidance = True
 
         if self.mavlink.state.is_armed() and self.phase in {MissionPhase.CLIMBING, MissionPhase.HOVER, MissionPhase.ALIGNING}:
             self.phase = MissionPhase.CLIMBING
         else:
-            self._reset_altitude_pid(initial_alt=self._get_current_altitude_m())
+            self._reset_vertical_controller(initial_alt=self._get_current_altitude_m())
             self.phase = MissionPhase.ARMING
         return True
 
     def hold_hover(self, force_sim: bool = False) -> bool:
-        """Cancels alignment and keeps holding current/target altitude with the Z-PID."""
         if not self.mavlink:
             return False
         if not force_sim and not self.mavlink.state.is_armed():
             return False
 
-        cur_alt = self._get_current_altitude_m()
+        cur_alt = self._est_z if self._estimator_initialized else self._get_current_altitude_m()
         if cur_alt is not None and self.phase == MissionPhase.CLIMBING:
             self.target_altitude_m = cur_alt
             self.setpoint = (self.setpoint[0], self.setpoint[1], cur_alt)
 
+        self._cmd_roll_deg = 0.0
+        self._cmd_pitch_deg = 0.0
         self._stable_since = None
         self.mission_mode = False
         self.active_guidance = True
         self.phase = MissionPhase.HOVER
 
         if self.mavlink.is_healthy():
-            thrust, _ = self._compute_altitude_thrust(time.monotonic())
-            self.mavlink.send_attitude_target(0.0, 0.0, 0.0, thrust)
+            thrust, _, _ = self._compute_cascaded_thrust(time.monotonic())
+            self.mavlink.send_attitude_target(0.0, 0.0, self._cmd_yaw_deg, thrust)
         return True
 
     def command_land(self) -> bool:
-        """Stops active guidance loop and commands Pixhawk to LAND."""
         if not self.mavlink:
             return False
 
         self.mission_mode = False
         self.active_guidance = False
         self.phase = MissionPhase.IDLE
-        self._reset_altitude_pid()
+        self._cmd_roll_deg = 0.0
+        self._cmd_pitch_deg = 0.0
+        self._reset_vertical_controller()
+        self._publish_telemetry_state(vz_sp=0.0, p_term=0.0, d_term=0.0, cur_lidar=self._get_current_altitude_m())
         if self.mavlink.is_healthy():
             return self.mavlink.land()
         return False
@@ -168,11 +214,6 @@ class ControlManager:
     # =========================================================================
 
     def start_mission(self, altitude_m: float = 1.5) -> bool:
-        """
-        Starts full autonomous ArUco mission:
-        - If disarmed: Arms -> Climbs via Z-PID until stabilized -> Aligns ArUco -> Lands.
-        - If already armed: Climbs/holds via Z-PID and starts Aligning ArUco -> Lands.
-        """
         if not self.mavlink:
             return False
 
@@ -185,7 +226,7 @@ class ControlManager:
         if self.mavlink.state.is_armed():
             self.phase = MissionPhase.ALIGNING
         else:
-            self._reset_altitude_pid(initial_alt=self._get_current_altitude_m())
+            self._reset_vertical_controller(initial_alt=self._get_current_altitude_m())
             self.phase = MissionPhase.ARMING
         return True
 
@@ -193,7 +234,7 @@ class ControlManager:
         self.mission_mode = False
         self.active_guidance = False
         self.phase = MissionPhase.IDLE
-        self._reset_altitude_pid()
+        self._reset_vertical_controller()
 
     def enable_guidance(self):
         self.active_guidance = True
@@ -202,7 +243,7 @@ class ControlManager:
         self.mission_mode = False
         self.active_guidance = False
         self.phase = MissionPhase.IDLE
-        self._reset_altitude_pid()
+        self._reset_vertical_controller()
 
     def set_target_offset(self, ref_x: float, ref_y: float, ref_z: float):
         old_z = self.target_altitude_m
@@ -215,11 +256,41 @@ class ControlManager:
                     self.phase = MissionPhase.CLIMBING
 
     # =========================================================================
-    # ALTITUDE SENSOR & CONTINUOUS Z-AXIS PID CONTROLLER
+    # BATTERY VOLTAGE FEEDFORWARD & SENSOR READERS
     # =========================================================================
 
+    def _get_dynamic_hover_thrust(self) -> float:
+        """Adjusts base hover throttle automatically as battery voltage drops."""
+        if not self.mavlink or not hasattr(self.mavlink, "state"):
+            return self.BASE_HOVER_THRUST
+
+        get_pkt = getattr(self.mavlink.state, "get_packet", None)
+        if not callable(get_pkt):
+            return self.BASE_HOVER_THRUST
+
+        voltage_v: Optional[float] = None
+        sys_st = get_pkt("SYS_STATUS")
+        if isinstance(sys_st, dict) and isinstance(sys_st.get("voltage_battery"), (int, float)):
+            mv = float(sys_st["voltage_battery"])
+            if mv > 1000.0:
+                voltage_v = mv / 1000.0
+
+        if voltage_v is None:
+            bat_st = get_pkt("BATTERY_STATUS")
+            if isinstance(bat_st, dict) and isinstance(bat_st.get("voltages"), (list, tuple)) and bat_st["voltages"]:
+                mv = float(bat_st["voltages"][0])
+                if 1000.0 < mv < 65000.0:
+                    voltage_v = mv / 1000.0
+
+        if voltage_v is None or not (6.0 <= voltage_v <= 26.0):
+            return self.BASE_HOVER_THRUST
+
+        ratio = self.NOMINAL_VOLTAGE_V / voltage_v
+        compensated = self.BASE_HOVER_THRUST * (ratio ** 1.5)
+        self._current_hover_ff = max(self.MIN_HOVER_FF, min(self.MAX_HOVER_FF, compensated))
+        return self._current_hover_ff
+
     def _get_current_altitude_m(self) -> Optional[float]:
-        """Reads downward VL53L1X distance sensor if healthy and reporting a valid target."""
         if not self.distance:
             return None
 
@@ -238,79 +309,263 @@ class ControlManager:
             return float(dist_m)
         return None
 
-    def _reset_altitude_pid(self, initial_alt: Optional[float] = None):
-        self._alt_integral = 0.0
-        self._prev_alt_m = initial_alt
-        self._prev_alt_time = time.monotonic() if initial_alt is not None else None
-        self._filtered_vz = 0.0
+    def _read_mavlink_imu_kinematics(self) -> Tuple[Optional[float], Optional[float]]:
+        """Reads fast 50Hz Pixhawk EKF vertical velocity (LOCAL_POSITION_NED) and IMU acceleration."""
+        if not self.mavlink or not hasattr(self.mavlink, "state"):
+            return None, None
+
+        mstate = self.mavlink.state
+        get_pkt = getattr(mstate, "get_packet", None)
+        if not callable(get_pkt):
+            return None, None
+
+        # Prefer high-rate LOCAL_POSITION_NED.vz (negated because NED is positive down)
+        mav_vz_up: Optional[float] = None
+        local_pos = get_pkt("LOCAL_POSITION_NED")
+        if isinstance(local_pos, dict) and isinstance(local_pos.get("vz"), (int, float)):
+            mav_vz_up = -float(local_pos["vz"])
+        else:
+            vfr = get_pkt("VFR_HUD")
+            if isinstance(vfr, dict) and isinstance(vfr.get("climb"), (int, float)):
+                mav_vz_up = float(vfr["climb"])
+
+        att = get_pkt("ATTITUDE") or {}
+        roll = float(att.get("roll", 0.0)) if isinstance(att, dict) else 0.0
+        pitch = float(att.get("pitch", 0.0)) if isinstance(att, dict) else 0.0
+
+        highres = get_pkt("HIGHRES_IMU")
+        raw_imu = get_pkt("RAW_IMU")
+
+        fx = fy = fz = None
+        imu_sig = None
+
+        if isinstance(highres, dict) and all(k in highres for k in ("xacc", "yacc", "zacc")):
+            fx = float(highres["xacc"])
+            fy = float(highres["yacc"])
+            fz = float(highres["zacc"])
+            imu_sig = ("HIGHRES", highres.get("time_usec"), round(fx, 4), round(fy, 4), round(fz, 4))
+        elif isinstance(raw_imu, dict) and all(k in raw_imu for k in ("xacc", "yacc", "zacc")):
+            scale = self.GRAVITY_MSS / 1000.0
+            fx = float(raw_imu["xacc"]) * scale
+            fy = float(raw_imu["yacc"]) * scale
+            fz = float(raw_imu["zacc"]) * scale
+            imu_sig = ("RAW", raw_imu.get("time_usec"), raw_imu["xacc"], raw_imu["yacc"], raw_imu["zacc"])
+
+        if fx is None or imu_sig == self._last_imu_sig:
+            return None, mav_vz_up
+
+        self._last_imu_sig = imu_sig
+
+        f_earth_down = (
+            -fx * math.sin(pitch)
+            + fy * math.sin(roll) * math.cos(pitch)
+            + fz * math.cos(roll) * math.cos(pitch)
+        )
+        az_up = -(f_earth_down + self.GRAVITY_MSS)
+        az_up = max(-15.0, min(15.0, az_up))
+        return az_up, mav_vz_up
+
+    # =========================================================================
+    # COMPLEMENTARY ESTIMATOR & HIGH-RESPONSE ANALOG THRUST CONTROLLER
+    # =========================================================================
+
+    def _reset_vertical_controller(self, initial_alt: Optional[float] = None):
+        now = time.monotonic()
+        self._est_z = float(initial_alt) if initial_alt is not None else 0.0
+        self._est_vz = 0.0
+        self._prev_est_vz = 0.0
+        self._az_bias = 0.0
+        self._last_az_corr = 0.0
+        self._estimator_initialized = initial_alt is not None
+        self._last_est_time = now
+        self._last_imu_sig = None
+        self._last_lidar_val = initial_alt
+        self._last_valid_lidar_time = now if initial_alt is not None else 0.0
+        self._lidar_fault_active = False
+
+        self._vel_integral = 0.0
         self._stable_since = None
-        self.last_thrust = self.HOVER_THRUST
+        self._current_hover_ff = self._get_dynamic_hover_thrust()
+        self.last_thrust = self._current_hover_ff
 
     def _clamp_thrust(self, thrust: float) -> float:
         return max(self.MIN_THRUST, min(self.MAX_THRUST, thrust))
 
-    def _compute_altitude_thrust(self, now: float) -> Tuple[float, Optional[float]]:
-        """Computes continuous Z-axis PID thrust correction around HOVER_THRUST."""
+    def _publish_telemetry_state(
+        self,
+        vz_sp: float,
+        p_term: float,
+        d_term: float,
+        cur_lidar: Optional[float],
+    ):
         target_z = self.setpoint[2] if self.setpoint[2] > 0.05 else self.target_altitude_m
-        cur_alt = self._get_current_altitude_m()
+        if cur_lidar is not None and self._last_imu_sig is not None:
+            src = "IMU+LIDAR"
+        elif self._last_imu_sig is not None:
+            src = "IMU_ONLY"
+        elif cur_lidar is not None:
+            src = "LIDAR_ONLY"
+        else:
+            src = "OPEN_LOOP"
 
-        if cur_alt is None:
-            had_lock = self._prev_alt_m is not None
-            self._prev_alt_m = None
-            self._prev_alt_time = None
-            self._stable_since = None
-            base = (self.HOVER_THRUST + self._alt_integral) if had_lock else self.FALLBACK_CLIMB_THRUST
-            self.last_thrust = self._clamp_thrust(base)
-            return self.last_thrust, None
+        self.state.update_control_telemetry(
+            phase=self.phase.value,
+            active_guidance=self.active_guidance,
+            mission_mode=self.mission_mode,
+            sensor_source=src,
+            thrust=self.last_thrust,
+            hover_trim=self._current_hover_ff + self._vel_integral,
+            p_term=p_term,
+            i_term=self._vel_integral,
+            d_term=d_term,
+            z_est_m=self._est_z,
+            z_ref_m=target_z,
+            vz_est_mps=self._est_vz,
+            vz_ref_mps=vz_sp,
+            lidar_m=cur_lidar,
+            imu_az_mps2=self._last_az_corr,
+            x_est_m=self._x_est_m,
+            y_est_m=self._y_est_m,
+            x_ref_m=self.setpoint[0],
+            y_ref_m=self.setpoint[1],
+            roll_deg=self._cmd_roll_deg,
+            pitch_deg=self._cmd_pitch_deg,
+            yaw_deg=self._cmd_yaw_deg,
+        )
 
-        if self._prev_alt_time is None:
+    def _compute_cascaded_thrust(self, now: float) -> Tuple[float, Optional[float], bool]:
+        if self._last_est_time is None:
             dt = 1.0 / max(1.0, self.target_hz)
         else:
-            dt = max(1e-3, min(0.25, now - self._prev_alt_time))
+            dt = max(1e-3, min(0.10, now - self._last_est_time))
+        self._last_est_time = now
 
-        if self._prev_alt_m is not None:
-            raw_vz = (cur_alt - self._prev_alt_m) / dt
-            self._filtered_vz = 0.65 * self._filtered_vz + 0.35 * raw_vz
+        hover_ff = self._get_dynamic_hover_thrust()
+
+        # 1. Fast 50Hz Pixhawk IMU + EKF3 vertical velocity fusion
+        fresh_az_up, mav_vz_up = self._read_mavlink_imu_kinematics()
+        if fresh_az_up is not None:
+            a_corr = fresh_az_up - self._az_bias
+            self._last_az_corr = a_corr
+            self._est_vz += a_corr * dt
         else:
-            self._filtered_vz = 0.0
+            a_corr = self._last_az_corr * 0.80
+            self._last_az_corr = a_corr
 
-        self._prev_alt_m = cur_alt
-        self._prev_alt_time = now
+        # Trust Pixhawk's onboard 400Hz EKF3 vertical velocity strongly (zero-latency climb/descent)
+        if mav_vz_up is not None:
+            self._est_vz = 0.40 * self._est_vz + 0.60 * mav_vz_up
+        elif fresh_az_up is None:
+            self._est_vz *= 0.96
 
-        error = target_z - cur_alt
+        self._est_z += self._est_vz * dt
 
-        # Proportional + Derivative on measurement velocity (avoids setpoint kick & damps overshoot)
-        p_term = self.ALT_KP * error
-        d_term = -self.ALT_KD * self._filtered_vz
+        # 2. VL53L1X external reference correction (30Hz)
+        cur_lidar = self._get_current_altitude_m()
+        if cur_lidar is not None:
+            self._last_valid_lidar_time = now
+            if self._lidar_fault_active:
+                self._lidar_fault_active = False
+                print("[Control] VL53L1X reference RESTORED.")
 
-        # Integral with anti-windup clamping
-        candidate_i = max(-self.ALT_I_MAX, min(self.ALT_I_MAX, self._alt_integral + self.ALT_KI * error * dt))
-        raw_thrust = self.HOVER_THRUST + p_term + candidate_i + d_term
-        thrust = self._clamp_thrust(raw_thrust)
+            if not self._estimator_initialized:
+                self._est_z = cur_lidar
+                self._est_vz = mav_vz_up if mav_vz_up is not None else 0.0
+                self._estimator_initialized = True
+            else:
+                is_new_sample = (self._last_lidar_val is None) or (abs(cur_lidar - self._last_lidar_val) > 1e-4)
+                kz = self.OBS_KZ if is_new_sample else (self.OBS_KZ * 0.30)
+                kv = self.OBS_KV if is_new_sample else (self.OBS_KV * 0.30)
 
-        if raw_thrust == thrust or (raw_thrust > thrust and error < 0.0) or (raw_thrust < thrust and error > 0.0):
-            self._alt_integral = candidate_i
+                err_z = cur_lidar - self._est_z
+                self._est_z += kz * err_z
+                self._est_vz += kv * err_z
+                self._az_bias = max(-1.5, min(1.5, self._az_bias - self.OBS_KB * err_z * dt))
 
-        self.last_thrust = thrust
-        return thrust, cur_alt
+            self._last_lidar_val = cur_lidar
+        else:
+            lost_sec = (now - self._last_valid_lidar_time) if self._last_valid_lidar_time > 0.0 else 999.0
+
+            if not self._estimator_initialized:
+                self.last_thrust = max(self.FALLBACK_CLIMB_THRUST, hover_ff + 0.06)
+                self._publish_telemetry_state(vz_sp=0.30, p_term=0.0, d_term=0.0, cur_lidar=None)
+                return self.last_thrust, None, False
+
+            if lost_sec >= self.LIDAR_LAND_SEC:
+                print(f"[Control] FAILSAFE: VL53L1X lost for {lost_sec:.1f}s -> Commanding safe LAND.")
+                return hover_ff, self._est_z, True
+
+            if lost_sec >= self.LIDAR_WARN_SEC and not self._lidar_fault_active:
+                self._lidar_fault_active = True
+                print(f"[Control] WARN: VL53L1X lost for {lost_sec:.1f}s -> IMU-damped controlled descent.")
+
+        self._est_z = max(0.0, self._est_z)
+
+        # 3. Outer Position Loop -> Desired vertical velocity (vz_sp)
+        target_z = self.setpoint[2] if self.setpoint[2] > 0.05 else self.target_altitude_m
+        if self._lidar_fault_active:
+            vz_sp = -0.25
+        else:
+            z_err = target_z - self._est_z
+            if abs(z_err) <= self.POS_DEADBAND_M:
+                vz_sp = 0.0
+            else:
+                vz_sp = max(-self.MAX_DESCENT_VZ, min(self.MAX_CLIMB_VZ, self.POS_KP * z_err))
+
+        # 4. Fast 50Hz Inner Loop -> High-authority Analog Thrust
+        vz_err = vz_sp - self._est_vz
+        p_vel = self.VEL_KP * vz_err
+
+        dvz_dt = (self._est_vz - self._prev_est_vz) / dt
+        self._prev_est_vz = self._est_vz
+        d_term = -(self.ACC_KD * a_corr + self.VEL_KD * dvz_dt)
+
+        # Fast integral bleed when error flips sign
+        if (vz_err > 0.0 and self._vel_integral < 0.0) or (vz_err < 0.0 and self._vel_integral > 0.0):
+            self._vel_integral *= 0.80
+
+        candidate_i = max(-self.VEL_I_MAX, min(self.VEL_I_MAX, self._vel_integral + self.VEL_KI * vz_err * dt))
+        raw_thrust = hover_ff + p_vel + candidate_i + d_term
+        target_thrust = self._clamp_thrust(raw_thrust)
+
+        if raw_thrust == target_thrust or (raw_thrust > target_thrust and vz_err < 0.0) or (raw_thrust < target_thrust and vz_err > 0.0):
+            self._vel_integral = candidate_i
+
+        self.last_thrust = (
+            self.THRUST_SMOOTH_ALPHA * target_thrust
+            + (1.0 - self.THRUST_SMOOTH_ALPHA) * self.last_thrust
+        )
+        self.last_thrust = self._clamp_thrust(self.last_thrust)
+
+        self._publish_telemetry_state(
+            vz_sp=vz_sp,
+            p_term=p_vel,
+            d_term=d_term,
+            cur_lidar=cur_lidar,
+        )
+        return self.last_thrust, self._est_z, False
 
     # =========================================================================
-    # 20 HZ CLOSED-LOOP EXECUTION ENGINE
+    # 50 HZ CLOSED-LOOP EXECUTION ENGINE
     # =========================================================================
 
     def _control_loop(self):
         interval = 1.0 / max(1.0, self.target_hz)
         while self.running:
             if not self.active_guidance or not self.mavlink:
-                time.sleep(interval)
+                cur_lidar = self._get_current_altitude_m()
+                if cur_lidar is not None:
+                    self._est_z = cur_lidar
+                self._get_dynamic_hover_thrust()
+                self._publish_telemetry_state(vz_sp=0.0, p_term=0.0, d_term=0.0, cur_lidar=cur_lidar)
+                time.sleep(0.1)
                 continue
 
-            # Safety watchdog: immediately halt guidance if MAVLink drops mid-flight
             if not self.mavlink.is_healthy():
                 self.mission_mode = False
                 self.active_guidance = False
                 self.phase = MissionPhase.IDLE
-                self._reset_altitude_pid()
+                self._reset_vertical_controller()
                 time.sleep(interval)
                 continue
 
@@ -320,28 +575,38 @@ class ControlManager:
                 self._execute_arming()
 
             elif self.phase == MissionPhase.CLIMBING:
-                thrust, cur_alt = self._compute_altitude_thrust(now)
-                self.mavlink.send_attitude_target(0.0, 0.0, 0.0, thrust)
+                thrust, fused_alt, trigger_land = self._compute_cascaded_thrust(now)
+                if trigger_land:
+                    self.command_land()
+                    time.sleep(interval)
+                    continue
+
+                self.mavlink.send_attitude_target(self._cmd_roll_deg, self._cmd_pitch_deg, self._cmd_yaw_deg, thrust)
 
                 target_z = self.setpoint[2] if self.setpoint[2] > 0.05 else self.target_altitude_m
-                if cur_alt is not None:
-                    alt_err = abs(target_z - cur_alt)
-                    if alt_err <= self.ALT_TOLERANCE_M and abs(self._filtered_vz) <= self.VZ_STABLE_THRESH:
+                if fused_alt is not None and not self._lidar_fault_active:
+                    alt_err = abs(target_z - fused_alt)
+                    if alt_err <= self.ALT_TOLERANCE_M and abs(self._est_vz) <= self.VZ_STABLE_THRESH:
                         if self._stable_since is None:
                             self._stable_since = now
                         elif (now - self._stable_since) >= self.STABLE_HOLD_SEC:
                             next_phase = MissionPhase.ALIGNING if self.mission_mode else MissionPhase.HOVER
                             print(
                                 f"[Control] Reference stabilized -> {next_phase.value} "
-                                f"(alt={cur_alt:.2f}m, ref={target_z:.2f}m, thrust={thrust:.3f})"
+                                f"(z_est={fused_alt:.2f}m, ref={target_z:.2f}m, thrust={thrust:.3f})"
                             )
                             self.phase = next_phase
                     else:
                         self._stable_since = None
 
             elif self.phase in {MissionPhase.HOVER, MissionPhase.ALIGNING}:
-                thrust, _ = self._compute_altitude_thrust(now)
-                self.mavlink.send_attitude_target(0.0, 0.0, 0.0, thrust)
+                thrust, _, trigger_land = self._compute_cascaded_thrust(now)
+                if trigger_land:
+                    self.command_land()
+                    time.sleep(interval)
+                    continue
+
+                self.mavlink.send_attitude_target(self._cmd_roll_deg, self._cmd_pitch_deg, self._cmd_yaw_deg, thrust)
 
             elif self.phase == MissionPhase.LANDING:
                 self.command_land()
@@ -355,7 +620,6 @@ class ControlManager:
         if not self.mavlink.state.is_armed():
             self.mavlink.arm()
 
-        # Poll up to 2.5s for Pixhawk HEARTBEAT confirmation (runs at ~1Hz)
         deadline = time.time() + 2.5
         while time.time() < deadline and self.running and self.active_guidance:
             if self.mavlink.state.is_armed():
@@ -370,9 +634,12 @@ class ControlManager:
             return
 
         init_alt = self._get_current_altitude_m()
-        self._reset_altitude_pid(initial_alt=init_alt)
-        thrust, _ = self._compute_altitude_thrust(time.monotonic())
-        print(f"[Control] Armed confirmed -> CLIMBING with Z-PID (ref={self.target_altitude_m:.2f}m, thrust={thrust:.3f})")
+        self._reset_vertical_controller(initial_alt=init_alt)
+        thrust, _, _ = self._compute_cascaded_thrust(time.monotonic())
+        print(
+            f"[Control] Armed confirmed -> CLIMBING with 50Hz EKF/IMU+LiDAR Z control "
+            f"(ref={self.target_altitude_m:.2f}m, hover_ff={self._current_hover_ff:.3f}, thrust={thrust:.3f})"
+        )
         self.phase = MissionPhase.CLIMBING
 
 

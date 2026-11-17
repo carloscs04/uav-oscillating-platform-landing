@@ -114,7 +114,7 @@ class MAVLinkManager:
                         attempt_logged = False
                         self.rx_listener.start()
                         self.heartbeat_emitter.start()
-                        self.system_cmd.request_telemetry_streams(rate_hz=10)
+                        self.system_cmd.request_telemetry_streams(rate_hz=50)
                     else:
                         self._cleanup_partial_connection()
 
