@@ -1,6 +1,7 @@
 # file: ground_station/utils/flight_logger.py
 import csv
 import os
+import random
 import threading
 import time
 from datetime import datetime
@@ -9,6 +10,29 @@ from typing import Any, Dict, Optional, TextIO
 
 class FlightExperimentLogger:
     """Automatic flight telemetry recorder triggered exclusively while the vehicle is armed."""
+
+    FLIGHT_CODENAMES = [
+        "falcon",
+        "kestrel",
+        "osprey",
+        "harrier",
+        "merlin",
+        "peregrine",
+        "albatross",
+        "condor",
+        "vortex",
+        "zenith",
+        "horizon",
+        "altitude",
+        "thermals",
+        "vector",
+        "beacon",
+        "azimuth",
+        "glide",
+        "hover",
+        "thrust",
+        "aeris",
+    ]
 
     ARDUPILOT_MODES = {
         0: "STABILIZE",
@@ -24,6 +48,7 @@ class FlightExperimentLogger:
     }
 
     CSV_HEADERS = [
+        "codename",
         "timestamp_iso",
         "elapsed_s",
         "armed",
@@ -54,6 +79,18 @@ class FlightExperimentLogger:
         "rollspeed_dps",
         "pitchspeed_dps",
         "yawspeed_dps",
+        # Navigation Controller Targets
+        "nav_roll_deg",
+        "nav_pitch_deg",
+        "nav_bearing",
+        "target_bearing",
+        "wp_dist_m",
+        "alt_error_m",
+        # Motor PWM Outputs
+        "motor_1",
+        "motor_2",
+        "motor_3",
+        "motor_4",
         # EKF3 Variances & Flags
         "ekf_flags",
         "ekf_vel_var",
@@ -95,6 +132,7 @@ class FlightExperimentLogger:
         self._csv_writer: Optional[csv.writer] = None
         self._event_file: Optional[TextIO] = None
         self._current_csv_path: Optional[str] = None
+        self._current_codename: str = ""
         self._last_statustext: str = ""
         self._last_mode: int = -1
         self._row_count: int = 0
@@ -117,12 +155,13 @@ class FlightExperimentLogger:
         now = datetime.now()
         date_folder = now.strftime("%Y-%m-%d")
         time_tag = now.strftime("%H-%M-%S")
+        codename = random.choice(self.FLIGHT_CODENAMES)
 
         session_dir = os.path.join(self.base_dir, date_folder)
         os.makedirs(session_dir, exist_ok=True)
 
-        csv_path = os.path.join(session_dir, f"flight_{time_tag}.csv")
-        event_path = os.path.join(session_dir, f"flight_{time_tag}_events.log")
+        csv_path = os.path.join(session_dir, f"flight_{time_tag}_{codename}.csv")
+        event_path = os.path.join(session_dir, f"flight_{time_tag}_{codename}_events.log")
 
         self._csv_file = open(csv_path, mode="w", newline="", encoding="utf-8")
         self._csv_writer = csv.writer(self._csv_file)
@@ -132,22 +171,26 @@ class FlightExperimentLogger:
         self._arm_start_time = time.time()
         self._is_recording = True
         self._current_csv_path = csv_path
+        self._current_codename = codename
         self._last_statustext = ""
         self._last_mode = -1
         self._row_count = 0
 
         self._log_event(
-            f"ARMED | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
+            f"ARMED [{codename.upper()}] | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
             f"Voltage={health_info.get('voltage_v', 0.0)}V | Link={health_info.get('status', 'UNKNOWN')}"
         )
-        print(f"[FLIGHT_LOGGER] Recording started -> {csv_path}")
+        print(f"[FLIGHT_LOGGER] Recording started [{codename}] -> {csv_path}")
 
     def _stop_session(self):
         if not self._is_recording:
             return
 
         duration = round(time.time() - self._arm_start_time, 2)
-        self._log_event(f"DISARMED | Duration={duration}s | Total_samples={self._row_count}")
+        self._log_event(
+            f"DISARMED [{self._current_codename.upper()}] | Duration={duration}s | "
+            f"Total_samples={self._row_count}"
+        )
 
         try:
             if self._csv_file:
@@ -160,8 +203,8 @@ class FlightExperimentLogger:
             pass
 
         print(
-            f"[FLIGHT_LOGGER] Recording saved ({self._row_count} samples, {duration}s) -> "
-            f"{self._current_csv_path}"
+            f"[FLIGHT_LOGGER] Recording saved [{self._current_codename}] "
+            f"({self._row_count} samples, {duration}s) -> {self._current_csv_path}"
         )
 
         self._is_recording = False
@@ -169,6 +212,7 @@ class FlightExperimentLogger:
         self._csv_writer = None
         self._event_file = None
         self._current_csv_path = None
+        self._current_codename = ""
 
     def _write_sample(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         if not self._csv_writer:
@@ -196,12 +240,15 @@ class FlightExperimentLogger:
         flow = packets.get("optical_flow") or {}
         dist = packets.get("distance_sensor") or {}
         att = packets.get("attitude") or {}
+        nav = packets.get("nav_output") or {}
+        servo = packets.get("servo_output") or {}
         ekf = packets.get("ekf_status") or {}
         rc = packets.get("rc_channels") or {}
         vib = packets.get("vibration") or {}
         sys_st = packets.get("sys_status") or {}
 
         row = [
+            self._current_codename,
             iso_str,
             elapsed,
             int(bool(hb.get("armed", False))),
@@ -228,6 +275,16 @@ class FlightExperimentLogger:
             att.get("rollspeed", 0.0),
             att.get("pitchspeed", 0.0),
             att.get("yawspeed", 0.0),
+            nav.get("nav_roll", 0.0),
+            nav.get("nav_pitch", 0.0),
+            nav.get("nav_bearing", 0),
+            nav.get("target_bearing", 0),
+            nav.get("wp_dist", 0),
+            nav.get("alt_error", 0.0),
+            servo.get("m1", 0),
+            servo.get("m2", 0),
+            servo.get("m3", 0),
+            servo.get("m4", 0),
             ekf.get("flags", 0),
             ekf.get("vel_var", 0.0),
             ekf.get("pos_h_var", 0.0),

@@ -17,10 +17,24 @@ class NodeHealthView(tk.LabelFrame):
     """Sub-Nodes Health Matrix & Isolated Multi-Tab Packet Terminal Inspector."""
 
     KNOWN_NODE_PACKETS = {
-        "MAVLink Node": ["velocity", "attitude", "sys_status", "heartbeat"],
+        "MAVLink Node": [
+            "velocity",
+            "attitude",
+            "sys_status",
+            "heartbeat",
+            "local_position",
+            "optical_flow",
+            "distance_sensor",
+            "ekf_status",
+            "nav_output",
+            "servo_output",
+            "vibration",
+            "rc_channels",
+            "statustext"
+        ],
         "Control Node": ["control_state", "pid_output"],
         "Vision-ArUco Node": ["aruco_pose", "status"],
-        "Camera-Aruco Node": ["aruco_pose", "status"],
+        "Camera-ArUco Node": ["aruco_pose", "status"],
         "Distance-Sensor Node": ["distance_sensor"]
     }
 
