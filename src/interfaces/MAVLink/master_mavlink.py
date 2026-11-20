@@ -1,4 +1,4 @@
-# src/interfaces/MAVLink/master_mavlink.py
+# file: src/interfaces/MAVLink/master_mavlink.py
 
 import os
 import sys
@@ -40,7 +40,7 @@ class MAVLinkManager:
         self.system_cmd = SystemCommands()
         self.flight_cmd = FlightCommands()
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
-        self.sensor_feed = MAVLinkSensorFeed(rate_hz=30.0)
+        self.sensor_feed = MAVLinkSensorFeed(rate_hz=20.0)
 
     def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
         """Binds LiDAR and Optical Flow state buffers to the 30Hz EKF3 sensor feed."""
@@ -59,7 +59,7 @@ class MAVLinkManager:
         self._reconnect_thread = threading.Thread(
             target=self._connection_supervisor,
             args=(mode.upper(),),
-            daemon=True
+            daemon=True,
         )
         self._reconnect_thread.start()
 
@@ -123,6 +123,7 @@ class MAVLinkManager:
                         self.heartbeat_emitter.start()
                         self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
+                        self.system_cmd.set_ekf_origin()
                     else:
                         self._cleanup_partial_connection()
 
@@ -192,6 +193,9 @@ class MAVLinkManager:
 
     # --- FACADE WRAPPERS ---
 
+    def set_ekf_origin(self, lat: int = 256866000, lon: int = -1003161000, alt: int = 500000) -> bool:
+        return self.system_cmd.set_ekf_origin(lat=lat, lon=lon, alt=alt)
+
     def arm(self) -> bool:
         self.state.clear_transient_packets()
         return self.system_cmd.arm()
@@ -254,7 +258,7 @@ def _run_interactive_cli(manager: MAVLinkManager):
     print("\n=======================================================")
     print("      MAVLink Modular Interactive CLI Inspector        ")
     print("=======================================================")
-    print(" Commands: arm, disarm, mode <MODE>, force_arm, force_disarm")
+    print(" Commands: arm, disarm, mode <MODE>, origin, force_arm, force_disarm")
     print("           watch, add <PKT>, remove <PKT>, rate <SEC>, quit")
     print("=======================================================\n")
 
@@ -285,6 +289,8 @@ def _run_interactive_cli(manager: MAVLinkManager):
             elif cmd == "mode" and len(parts) > 1:
                 manager.set_mode(parts[1])
                 target_arm_state = None
+            elif cmd == "origin":
+                manager.set_ekf_origin()
             elif cmd == "takeoff":
                 alt = float(parts[1]) if len(parts) > 1 else 1.5
                 manager.takeoff(alt)

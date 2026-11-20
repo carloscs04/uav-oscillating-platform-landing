@@ -1,0 +1,274 @@
+# file: ground_station/utils/flight_logger.py
+import csv
+import os
+import threading
+import time
+from datetime import datetime
+from typing import Any, Dict, Optional, TextIO
+
+
+class FlightExperimentLogger:
+    """Automatic flight telemetry recorder triggered exclusively while the vehicle is armed."""
+
+    ARDUPILOT_MODES = {
+        0: "STABILIZE",
+        1: "ACRO",
+        2: "ALT_HOLD",
+        3: "AUTO",
+        4: "GUIDED",
+        5: "LOITER",
+        6: "RTL",
+        7: "CIRCLE",
+        9: "LAND",
+        16: "POSHOLD",
+    }
+
+    CSV_HEADERS = [
+        "timestamp_iso",
+        "elapsed_s",
+        "armed",
+        "flight_mode",
+        "custom_mode",
+        # Local NED Position & Velocity (m, m/s)
+        "pos_x",
+        "pos_y",
+        "pos_z",
+        "vel_x",
+        "vel_y",
+        "vel_z",
+        # Optical Flow metrics
+        "flow_x",
+        "flow_y",
+        "flow_comp_mx",
+        "flow_comp_my",
+        "flow_quality",
+        "flow_ground_dist",
+        "flow_int_x",
+        "flow_int_y",
+        # RangeFinder / LiDAR
+        "lidar_cm",
+        # Attitude & Angular Rates (deg, deg/s)
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg",
+        "rollspeed_dps",
+        "pitchspeed_dps",
+        "yawspeed_dps",
+        # EKF3 Variances & Flags
+        "ekf_flags",
+        "ekf_vel_var",
+        "ekf_pos_h_var",
+        "ekf_pos_v_var",
+        "ekf_compass_var",
+        # RC Pilot Inputs (PWM)
+        "rc1_roll",
+        "rc2_pitch",
+        "rc3_throttle",
+        "rc4_yaw",
+        "rc5_mode",
+        # Vibration & Clipping
+        "vib_x",
+        "vib_y",
+        "vib_z",
+        "clip_0",
+        "clip_1",
+        "clip_2",
+        # Power & System Health
+        "voltage_v",
+        "current_a",
+        "battery_pct",
+        "cpu_load_pct",
+        "link_status",
+        "link_rate_hz",
+    ]
+
+    def __init__(self, base_dir: Optional[str] = None):
+        if base_dir is None:
+            gs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            base_dir = os.path.join(gs_root, "experiments")
+
+        self.base_dir = base_dir
+        self._lock = threading.Lock()
+        self._is_recording = False
+        self._arm_start_time: float = 0.0
+        self._csv_file: Optional[TextIO] = None
+        self._csv_writer: Optional[csv.writer] = None
+        self._event_file: Optional[TextIO] = None
+        self._current_csv_path: Optional[str] = None
+        self._last_statustext: str = ""
+        self._last_mode: int = -1
+        self._row_count: int = 0
+
+    def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
+        """Evaluates arming state and records telemetry rows while armed."""
+        hb = packets.get("heartbeat") or {}
+        armed = bool(hb.get("armed", False))
+
+        with self._lock:
+            if armed and not self._is_recording:
+                self._start_session(hb, health_info)
+            elif not armed and self._is_recording:
+                self._stop_session()
+
+            if self._is_recording:
+                self._write_sample(packets, health_info)
+
+    def _start_session(self, hb: Dict[str, Any], health_info: Dict[str, Any]):
+        now = datetime.now()
+        date_folder = now.strftime("%Y-%m-%d")
+        time_tag = now.strftime("%H-%M-%S")
+
+        session_dir = os.path.join(self.base_dir, date_folder)
+        os.makedirs(session_dir, exist_ok=True)
+
+        csv_path = os.path.join(session_dir, f"flight_{time_tag}.csv")
+        event_path = os.path.join(session_dir, f"flight_{time_tag}_events.log")
+
+        self._csv_file = open(csv_path, mode="w", newline="", encoding="utf-8")
+        self._csv_writer = csv.writer(self._csv_file)
+        self._csv_writer.writerow(self.CSV_HEADERS)
+
+        self._event_file = open(event_path, mode="w", encoding="utf-8")
+        self._arm_start_time = time.time()
+        self._is_recording = True
+        self._current_csv_path = csv_path
+        self._last_statustext = ""
+        self._last_mode = -1
+        self._row_count = 0
+
+        self._log_event(
+            f"ARMED | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
+            f"Voltage={health_info.get('voltage_v', 0.0)}V | Link={health_info.get('status', 'UNKNOWN')}"
+        )
+        print(f"[FLIGHT_LOGGER] Recording started -> {csv_path}")
+
+    def _stop_session(self):
+        if not self._is_recording:
+            return
+
+        duration = round(time.time() - self._arm_start_time, 2)
+        self._log_event(f"DISARMED | Duration={duration}s | Total_samples={self._row_count}")
+
+        try:
+            if self._csv_file:
+                self._csv_file.flush()
+                self._csv_file.close()
+            if self._event_file:
+                self._event_file.flush()
+                self._event_file.close()
+        except Exception:
+            pass
+
+        print(
+            f"[FLIGHT_LOGGER] Recording saved ({self._row_count} samples, {duration}s) -> "
+            f"{self._current_csv_path}"
+        )
+
+        self._is_recording = False
+        self._csv_file = None
+        self._csv_writer = None
+        self._event_file = None
+        self._current_csv_path = None
+
+    def _write_sample(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
+        if not self._csv_writer:
+            return
+
+        now_ts = time.time()
+        elapsed = round(now_ts - self._arm_start_time, 3)
+        iso_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+        hb = packets.get("heartbeat") or {}
+        custom_mode = hb.get("custom_mode", -1)
+        mode_str = self._mode_name(custom_mode)
+
+        if custom_mode != self._last_mode:
+            self._log_event(f"MODE_CHANGE -> {mode_str} ({custom_mode}) at t+{elapsed}s")
+            self._last_mode = custom_mode
+
+        st = packets.get("statustext") or {}
+        st_text = str(st.get("text", "")).strip()
+        if st_text and st_text != self._last_statustext:
+            self._log_event(f"STATUSTEXT [sev={st.get('severity', -1)}]: {st_text}")
+            self._last_statustext = st_text
+
+        lpos = packets.get("local_position") or {}
+        flow = packets.get("optical_flow") or {}
+        dist = packets.get("distance_sensor") or {}
+        att = packets.get("attitude") or {}
+        ekf = packets.get("ekf_status") or {}
+        rc = packets.get("rc_channels") or {}
+        vib = packets.get("vibration") or {}
+        sys_st = packets.get("sys_status") or {}
+
+        row = [
+            iso_str,
+            elapsed,
+            int(bool(hb.get("armed", False))),
+            mode_str,
+            custom_mode,
+            lpos.get("x", 0.0),
+            lpos.get("y", 0.0),
+            lpos.get("z", 0.0),
+            lpos.get("vx", 0.0),
+            lpos.get("vy", 0.0),
+            lpos.get("vz", 0.0),
+            flow.get("flow_x", 0),
+            flow.get("flow_y", 0),
+            flow.get("comp_m_x", 0.0),
+            flow.get("comp_m_y", 0.0),
+            flow.get("quality", 0),
+            flow.get("ground_distance", 0.0),
+            flow.get("int_x", 0.0),
+            flow.get("int_y", 0.0),
+            dist.get("current_cm", 0),
+            att.get("roll", 0.0),
+            att.get("pitch", 0.0),
+            att.get("yaw", 0.0),
+            att.get("rollspeed", 0.0),
+            att.get("pitchspeed", 0.0),
+            att.get("yawspeed", 0.0),
+            ekf.get("flags", 0),
+            ekf.get("vel_var", 0.0),
+            ekf.get("pos_h_var", 0.0),
+            ekf.get("pos_v_var", 0.0),
+            ekf.get("compass_var", 0.0),
+            rc.get("roll_ch1", 0),
+            rc.get("pitch_ch2", 0),
+            rc.get("throttle_ch3", 0),
+            rc.get("yaw_ch4", 0),
+            rc.get("mode_ch5", 0),
+            vib.get("vib_x", 0.0),
+            vib.get("vib_y", 0.0),
+            vib.get("vib_z", 0.0),
+            vib.get("clip_0", 0),
+            vib.get("clip_1", 0),
+            vib.get("clip_2", 0),
+            sys_st.get("voltage_v", 0.0),
+            sys_st.get("current_a", 0.0),
+            sys_st.get("battery_pct", -1),
+            sys_st.get("cpu_load_pct", 0.0),
+            health_info.get("status", "UNKNOWN"),
+            health_info.get("rate_hz", 0.0),
+        ]
+
+        self._csv_writer.writerow(row)
+        self._row_count += 1
+
+        if self._row_count % 20 == 0 and self._csv_file:
+            self._csv_file.flush()
+
+    def _log_event(self, message: str):
+        if self._event_file:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            self._event_file.write(f"[{ts}] {message}\n")
+            self._event_file.flush()
+
+    def _mode_name(self, custom_mode: int) -> str:
+        return self.ARDUPILOT_MODES.get(custom_mode, f"MODE_{custom_mode}")
+
+    def close(self):
+        """Ensures active log files are flushed and closed on shutdown."""
+        with self._lock:
+            if self._is_recording:
+                self._stop_session()
