@@ -45,6 +45,8 @@ class FlightExperimentLogger:
         7: "CIRCLE",
         9: "LAND",
         16: "POSHOLD",
+        17: "BRAKE",
+        20: "GUIDED_NOGPS",
     }
 
     CSV_HEADERS = [

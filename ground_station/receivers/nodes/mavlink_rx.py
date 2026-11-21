@@ -1,3 +1,4 @@
+import atexit
 import json
 import socket
 import threading
@@ -5,6 +6,7 @@ import time
 from typing import Dict, Any, Optional, Tuple
 
 from ground_station.comms.pi_bridge import PiLink, LinkState
+from ground_station.utils.flight_logger import FlightExperimentLogger
 
 
 class MavlinkReceiver(threading.Thread):
@@ -36,6 +38,10 @@ class MavlinkReceiver(threading.Thread):
             "battery_pct": -1,
             "voltage_v": 0.0
         }
+
+        # Records ground_station/experiments/<date>/flight_*.csv while the Pixhawk is ARMED
+        self.flight_logger = FlightExperimentLogger()
+        atexit.register(self.flight_logger.close)
 
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
@@ -143,6 +149,16 @@ class MavlinkReceiver(threading.Thread):
                             self.velocity = pkt_data
                         elif pkt_type == "distance_sensor":
                             self.distance_sensor = pkt_data
+                    packets_snapshot = dict(self.packets)
+                    health_snapshot = dict(self.health_info)
+
+                # Flight logger: starts a CSV on ARM, closes it on DISARM (outside the lock)
+                try:
+                    self.flight_logger.process_telemetry(packets_snapshot, health_snapshot)
+                except Exception as e:
+                    if not getattr(self, "_logger_err_shown", False):
+                        print(f"[GCS FLIGHT_LOGGER_ERR] {type(e).__name__}: {e}")
+                        self._logger_err_shown = True
 
             except socket.timeout:
                 continue
@@ -155,6 +171,7 @@ class MavlinkReceiver(threading.Thread):
 
     def stop(self):
         self.running = False
+        self.flight_logger.close()
 
 
 MAVLinkReceiver = MavlinkReceiver
