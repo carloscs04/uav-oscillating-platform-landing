@@ -211,7 +211,12 @@ class MAVLinkSensorFeed:
     def _send_optical_flow(self, master: Any, flow: dict, ground_dist_m: Optional[float]):
         """OPTICAL_FLOW (msg 100) with flow_rate_x/y in rad/s, as ArduPilot expects."""
         time_usec = int((time.monotonic() - self._boot_time) * 1_000_000)
-        airborne = ground_dist_m is not None and ground_dist_m >= self.MIN_FLOW_HEIGHT_M
+        # Hold the flow back only when the rangefinder says we are on/near the ground.
+        # With NO rangefinder reading (sensor out of range above ~1.4 m in the
+        # 2026-11-21 flight) the camera still tracks fine, and ArduPilot scales the flow
+        # with its own height estimate, so keep sending it: gating it as well made the
+        # EKF lose flow AND rangefinder together and trigger an EKF failsafe.
+        airborne = ground_dist_m is None or ground_dist_m >= self.MIN_FLOW_HEIGHT_M
         if airborne:
             rate_x, rate_y, quality = flow["rate_x"], flow["rate_y"], flow["quality"]
         else:
