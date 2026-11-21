@@ -261,7 +261,9 @@ def report_rotation(res: dict, title: str, raw: bool) -> List[Line]:
                 sc = int(round((1.0 / gain - 1.0) * 1000.0))
                 tag = "PASS" if abs(sc) <= 100 else ("WARN" if abs(sc) <= 800 else "FAIL")
                 lines.append((tag, f"flow{axis}: scale {gain:.2f}x gyro -> suggested {param} = {sc}"
-                                   + ("" if abs(sc) <= 800 else " (out of range: check focal length / calibration)")))
+                                   + ("" if abs(sc) <= 800 else " (out of range: check focal length / calibration)")
+                                   + " (valid only if rotated about the camera; hand-held rocking that also "
+                                     "slides the camera reads high: confirm with a flight log before applying)"))
             else:
                 lines.append(("PASS" if 0.85 <= gain <= 1.15 else "WARN",
                               f"flow{axis} as used by the Pixhawk: {gain:.2f}x gyro (want 0.85-1.15)"))
@@ -306,7 +308,8 @@ class FlowTester:
         self.running = True
         try:
             log(f"flowtest: ROCK the drone now for {seconds:.0f} s (roll AND pitch, +-15 deg, "
-                "about 0.5-1 m above a textured floor, props OFF)", "WARN")
+                "about 0.5-1 m above a textured floor, props OFF). Pivot around the CAMERA "
+                "lens (keep the lens in place): sliding the camera adds flow and inflates the scale", "WARN")
             gyro, pi_flow, fc_flow = self._collect(seconds)
             if len(gyro) < 50:
                 log(f"flowtest: only {len(gyro)} ATTITUDE samples: is the Pixhawk streaming?", "FAIL")

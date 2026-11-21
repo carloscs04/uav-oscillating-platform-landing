@@ -26,8 +26,8 @@ EK3_SRC1_YAW,0
 EK3_RNG_USE_HGT,-1
 # Use flow for navigation
 EK3_FLOW_USE,1
-# Camera + Pi + link delay in ms. Starting value; measure it with 'flowtest'.
-EK3_FLOW_DELAY,60
+# Camera + Pi + link delay in ms, measured with 'flowtest' (2026-11-21: ~50 ms)
+EK3_FLOW_DELAY,50
 
 # --- Optical flow (MAVLink) ---
 FLOW_TYPE,5
@@ -36,6 +36,10 @@ FLOW_ORIENT_YAW,0
 # Scale corrections (parts per thousand). Start at 0; 'flowtest' suggests values.
 FLOW_FXSCALER,0
 FLOW_FYSCALER,0
+
+# --- Visual odometry: OFF (the Pi no longer sends VISION_POSITION_ESTIMATE;
+# leaving it on gives "PreArm: VisOdom: not healthy" and blocks arming) ---
+VISO_TYPE,0
 
 # --- Rangefinder (MAVLink, pointing down) ---
 RNGFND1_TYPE,10

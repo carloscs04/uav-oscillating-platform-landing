@@ -31,6 +31,7 @@ class MAVLinkRXListener:
         "FLOW_ORIENT_YAW",
         "FLOW_FXSCALER",
         "FLOW_FYSCALER",
+        "VISO_TYPE",
         "RNGFND1_TYPE",
         "RNGFND1_ORIENT",
         "RNGFND1_MIN",
