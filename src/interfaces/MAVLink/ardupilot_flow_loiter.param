@@ -44,6 +44,21 @@ VISO_TYPE,0
 # --- Rangefinder (MAVLink, pointing down) ---
 RNGFND1_TYPE,10
 RNGFND1_ORIENT,25
+# Metres. VL53L1X is unreliable below 4 cm; 3.5 m is a safe indoor maximum.
+RNGFND1_MIN,0.04
+RNGFND1_MAX,3.5
+# What the lidar reads with the drone standing on the floor (measured: ~0.088 m)
+RNGFND1_GNDCLR,0.09
+
+# --- Flight modes (channel 5, 3-position switch) ---
+# Down = Guided_NoGPS (20, the Pi flies), middle = Loiter (5), up = AltHold (2).
+# Slots 2-5 are Loiter so a slightly off-centre switch never lands in another mode.
+FLTMODE1,20
+FLTMODE2,5
+FLTMODE3,5
+FLTMODE4,5
+FLTMODE5,5
+FLTMODE6,2
 
 # --- No compass ---
 COMPASS_ENABLE,0
@@ -52,7 +67,7 @@ COMPASS_USE2,0
 COMPASS_USE3,0
 
 # --- Safety (debug_force_arm sets these to 0: restore before any real flight) ---
-# ArduPilot 4.7+ (this vehicle runs 4.7.2): ARMING_SKIPCHK replaces ARMING_CHECK.
+# ArduPilot 4.7+ (this vehicle runs 4.7.3): ARMING_SKIPCHK replaces ARMING_CHECK.
 # Set bits = checks SKIPPED, so 0 = run every pre-arm check.
 # (On ArduPilot 4.6 or older use ARMING_CHECK,1 instead.)
 ARMING_SKIPCHK,0

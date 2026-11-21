@@ -29,6 +29,8 @@ PARAM_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter.para
 MAV_PARAM_TYPES = {
     "FLOW_FXSCALER": 4, "FLOW_FYSCALER": 4, "FLOW_ORIENT_YAW": 4,
     "ARMING_CHECK": 6, "ARMING_SKIPCHK": 5,
+    # AP_Float (metres) in ArduPilot 4.6+
+    "RNGFND1_MIN": 9, "RNGFND1_MAX": 9, "RNGFND1_GNDCLR": 9,
 }
 DEFAULT_MAV_PARAM_TYPE = 2   # every other parameter in the file is an 8-bit integer
 QGC_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_qgc.params")
@@ -104,10 +106,6 @@ def check_params(params: dict) -> List[Line]:
             lines.append(("INFO", f"{name} = {have:g} (file starting value {want:g}; tuned values are fine)"))
         else:
             lines.append(("FAIL", f"{name} = {have:g}, want {want:g}"))
-    for lo, hi, unit in (("RNGFND1_MIN", "RNGFND1_MAX", "m"), ("RNGFND1_MIN_CM", "RNGFND1_MAX_CM", "cm")):
-        if lo in params or hi in params:
-            lines.append(("INFO", f"{lo}/{hi} = {params.get(lo)}/{params.get(hi)} {unit} "
-                                  f"(should cover 0.04-4.0 m)"))
     return lines
 
 
