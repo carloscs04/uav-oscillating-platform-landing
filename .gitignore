@@ -31,4 +31,3 @@ ros2_ws/log/
 # Sensitive Configuration Files
 # ==========================================
 configs/*.env
-*.log

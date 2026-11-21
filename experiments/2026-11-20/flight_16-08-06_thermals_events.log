@@ -1,0 +1,4 @@
+[16:08:06.722] ARMED [THERMALS] | Initial mode=STABILIZE | Voltage=10.89V | Link=HEALTHY
+[16:08:06.722] MODE_CHANGE -> STABILIZE (0) at t+0.0s
+[16:08:06.722] STATUSTEXT [sev=4]: Terrain: clamping offset -47 to -30
+[16:08:15.733] DISARMED [THERMALS] | Duration=9.01s | Total_samples=179
