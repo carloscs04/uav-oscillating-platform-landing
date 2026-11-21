@@ -121,8 +121,8 @@ class FlightExperimentLogger:
 
     def __init__(self, base_dir: Optional[str] = None):
         if base_dir is None:
-            gs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            base_dir = os.path.join(gs_root, "experiments")
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            base_dir = os.path.join(repo_root, "experiments")
 
         self.base_dir = base_dir
         self._lock = threading.Lock()
@@ -135,6 +135,7 @@ class FlightExperimentLogger:
         self._current_codename: str = ""
         self._last_statustext: str = ""
         self._last_mode: int = -1
+        self._logged_params_snapshot: Dict[str, Any] = {}
         self._row_count: int = 0
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
@@ -144,14 +145,14 @@ class FlightExperimentLogger:
 
         with self._lock:
             if armed and not self._is_recording:
-                self._start_session(hb, health_info)
+                self._start_session(hb, packets, health_info)
             elif not armed and self._is_recording:
                 self._stop_session()
 
             if self._is_recording:
                 self._write_sample(packets, health_info)
 
-    def _start_session(self, hb: Dict[str, Any], health_info: Dict[str, Any]):
+    def _start_session(self, hb: Dict[str, Any], packets: Dict[str, Any], health_info: Dict[str, Any]):
         now = datetime.now()
         date_folder = now.strftime("%Y-%m-%d")
         time_tag = now.strftime("%H-%M-%S")
@@ -174,12 +175,22 @@ class FlightExperimentLogger:
         self._current_codename = codename
         self._last_statustext = ""
         self._last_mode = -1
+        self._logged_params_snapshot = {}
         self._row_count = 0
 
         self._log_event(
             f"ARMED [{codename.upper()}] | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
             f"Voltage={health_info.get('voltage_v', 0.0)}V | Link={health_info.get('status', 'UNKNOWN')}"
         )
+
+        params = packets.get("pixhawk_params") or {}
+        if isinstance(params, dict) and params:
+            self._logged_params_snapshot = dict(params)
+            formatted_params = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
+            self._log_event(f"PIXHAWK_PARAMS | {formatted_params}")
+        else:
+            self._log_event("PIXHAWK_PARAMS | Pending sync from Pixhawk...")
+
         print(f"[FLIGHT_LOGGER] Recording started [{codename}] -> {csv_path}")
 
     def _stop_session(self):
@@ -213,6 +224,7 @@ class FlightExperimentLogger:
         self._event_file = None
         self._current_csv_path = None
         self._current_codename = ""
+        self._logged_params_snapshot = {}
 
     def _write_sample(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         if not self._csv_writer:
@@ -221,6 +233,18 @@ class FlightExperimentLogger:
         now_ts = time.time()
         elapsed = round(now_ts - self._arm_start_time, 3)
         iso_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+        # Log any late-arriving Pixhawk parameter updates into _events.log
+        params = packets.get("pixhawk_params") or {}
+        if isinstance(params, dict) and params != self._logged_params_snapshot:
+            new_or_changed = {
+                k: v for k, v in params.items()
+                if self._logged_params_snapshot.get(k) != v
+            }
+            if new_or_changed:
+                self._logged_params_snapshot = dict(params)
+                formatted = ", ".join(f"{k}={v}" for k, v in sorted(new_or_changed.items()))
+                self._log_event(f"PIXHAWK_PARAMS_SYNC | {formatted}")
 
         hb = packets.get("heartbeat") or {}
         custom_mode = hb.get("custom_mode", -1)

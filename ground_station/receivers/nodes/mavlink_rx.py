@@ -1,3 +1,4 @@
+# file: ground_station/receivers/nodes/mavlink_rx.py
 import json
 import socket
 import threading
@@ -5,10 +6,11 @@ import time
 from typing import Dict, Any, Optional, Tuple
 
 from ground_station.comms.pi_bridge import PiLink, LinkState
+from ground_station.utils.flight_logger import FlightExperimentLogger
 
 
 class MavlinkReceiver(threading.Thread):
-    """Modular UDP receiver for PX4 MAVLink Telemetry."""
+    """Modular UDP receiver for MAVLink Telemetry with automatic armed flight logging."""
 
     _active_instance = None
 
@@ -29,7 +31,7 @@ class MavlinkReceiver(threading.Thread):
         self.velocity: Dict[str, float] = {}
         self.distance_sensor: Dict[str, float] = {}
 
-        # Isolated health metadata
+        # Isolated health metadata (untouched for UI NodeHealthView)
         self.health_info: Dict[str, Any] = {
             "status": "OFFLINE",
             "rate_hz": 0.0,
@@ -37,6 +39,7 @@ class MavlinkReceiver(threading.Thread):
             "voltage_v": 0.0
         }
 
+        self.flight_logger = FlightExperimentLogger()
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
         self._sock: Optional[socket.socket] = None
@@ -112,7 +115,7 @@ class MavlinkReceiver(threading.Thread):
                 continue
 
             try:
-                data, addr = self._sock.recvfrom(4096)
+                data, addr = self._sock.recvfrom(8192)
                 if not data:
                     continue
 
@@ -132,7 +135,7 @@ class MavlinkReceiver(threading.Thread):
                     self.last_seen = time.time()
                     incoming_packets = payload["packets"]
 
-                    # Extract node_health cleanly without polluting telemetry inspection tables
+                    # Extract node_health cleanly for UI matrix only
                     if "node_health" in incoming_packets:
                         self.health_info = incoming_packets.pop("node_health")
 
@@ -144,17 +147,25 @@ class MavlinkReceiver(threading.Thread):
                         elif pkt_type == "distance_sensor":
                             self.distance_sensor = pkt_data
 
+                    current_packets = dict(self.packets)
+                    current_health = dict(self.health_info)
+
+                # Record flight data automatically while armed
+                self.flight_logger.process_telemetry(current_packets, current_health)
+
             except socket.timeout:
                 continue
-            except Exception as e:
+            except Exception:
                 if self.running:
                     time.sleep(0.05)
 
+        self.flight_logger.close()
         if self._sock:
             self._sock.close()
 
     def stop(self):
         self.running = False
+        self.flight_logger.close()
 
 
 MAVLinkReceiver = MavlinkReceiver
