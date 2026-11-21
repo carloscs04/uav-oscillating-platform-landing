@@ -6,7 +6,14 @@ import time
 import threading
 import yaml
 from typing import Any, Optional
-from pymavlink import mavutil
+
+# Speak MAVLink 2 from the first packet. pymavlink otherwise starts in MAVLink 1 and
+# only switches after it receives a MAVLink 2 packet; until then OPTICAL_FLOW has no
+# flow_rate_x/y fields and optical_flow_send() raises TypeError (seen 2026-11-21:
+# flow_tx=0 for a whole session). ArduPilot always accepts MAVLink 2.
+os.environ.setdefault("MAVLINK20", "1")
+from pymavlink import mavutil  # noqa: E402
+mavutil.set_dialect("ardupilotmega")  # re-select v2 even if pymavlink was imported earlier
 
 
 from src.interfaces.MAVLink.state.vehicle_state import VehicleState
