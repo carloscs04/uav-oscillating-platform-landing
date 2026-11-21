@@ -22,6 +22,17 @@ import numpy as np
 
 PARAM_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter.param")
 
+# MAVLink parameter types (MAV_PARAM_TYPE) as ArduPilot declares them, checked in
+# the ArduPilot source (Copter-4.5 and master): AP_Int8 / AP_Enum -> 2 (INT8),
+# AP_Int16 -> 4 (INT16), AP_Int32 -> 6 (INT32), AP_UInt32 -> 5. QGroundControl
+# skips any parameter whose type in the file differs from the vehicle's.
+MAV_PARAM_TYPES = {
+    "FLOW_FXSCALER": 4, "FLOW_FYSCALER": 4, "FLOW_ORIENT_YAW": 4,
+    "ARMING_CHECK": 6, "ARMING_SKIPCHK": 5,
+}
+DEFAULT_MAV_PARAM_TYPE = 2   # every other parameter in the file is an 8-bit integer
+QGC_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_qgc.params")
+
 # Values that are tuned per vehicle: a difference from the file is not an error.
 TUNED_PARAMS = {"EK3_FLOW_DELAY", "FLOW_FXSCALER", "FLOW_FYSCALER", "DISARM_DELAY"}
 
@@ -48,6 +59,25 @@ def load_expected(path: str = PARAM_FILE) -> List[Tuple[str, float]]:
     return out
 
 
+def export_qgc(src: str = PARAM_FILE, dst: str = QGC_FILE) -> str:
+    """Write the .param file in QGroundControl's format (tab separated, with types)."""
+    rows = [
+        "# Onboard parameters for Vehicle 1",
+        "#",
+        f"# Generated from {os.path.basename(src)} by flow_check.export_qgc(). Edit that file, not this one.",
+        "# Load in QGroundControl: Vehicle Setup > Parameters > Tools > Load from file, then reboot.",
+        "#",
+        "# Vehicle-Id Component-Id Name Value Type",
+    ]
+    for name, value in load_expected(src):
+        ptype = MAV_PARAM_TYPES.get(name, DEFAULT_MAV_PARAM_TYPE)
+        text = f"{value:.6f}" if ptype == 9 else str(int(round(value)))
+        rows.append(f"1\t1\t{name}\t{text}\t{ptype}")
+    with open(dst, "w") as f:
+        f.write("\n".join(rows) + "\n")
+    return dst
+
+
 def decode_ekf_flags(flags: int) -> List[str]:
     return [name for bit, name in EKF_FLAGS if flags & bit]
 
@@ -61,6 +91,11 @@ def check_params(params: dict) -> List[Line]:
     lines: List[Line] = []
     for name, want in load_expected():
         have = params.get(name)
+        if name == "ARMING_CHECK" and have is None and "ARMING_SKIPCHK" in params:
+            skip = params["ARMING_SKIPCHK"]   # ArduPilot 4.7+: set bits = checks SKIPPED
+            lines.append(("PASS" if skip == 0 else "FAIL",
+                          f"ARMING_SKIPCHK = {skip:g} (ArduPilot 4.7+ replaces ARMING_CHECK; want 0 = run all checks)"))
+            continue
         if have is None:
             lines.append(("WARN", f"{name}: not read (wait a few s and rerun, or not on this firmware); want {want:g}"))
         elif abs(float(have) - want) < 1e-3:
@@ -309,3 +344,10 @@ def watch(vehicle_state: Any, feed: Any, seconds: float, log: Callable[[str, str
             f"EKF pos=({lp.get('x', 0):+.2f}, {lp.get('y', 0):+.2f}) v=({lp.get('vx', 0):+.2f}, {lp.get('vy', 0):+.2f}) "
             f"rel={'OK' if rel else 'NO'} | bench=({feed._pos_x_m:+.2f}, {feed._pos_y_m:+.2f})", "STATUS")
         time.sleep(1.0)
+
+
+if __name__ == "__main__":
+    # Regenerate the QGroundControl file after editing ardupilot_flow_loiter.param:
+    #   python -m src.interfaces.MAVLink.flow_check
+    print(f"Wrote {export_qgc()}")
+

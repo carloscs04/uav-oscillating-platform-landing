@@ -43,6 +43,7 @@ class MAVLinkRXListener:
         "COMPASS_USE3",
         # Safety parameters that debug_force_arm overwrites (must be restored before flight)
         "ARMING_CHECK",
+        "ARMING_SKIPCHK",
         "FS_THR_ENABLE",
         "DISARM_DELAY",
         "BRD_SAFETYENABLE",
