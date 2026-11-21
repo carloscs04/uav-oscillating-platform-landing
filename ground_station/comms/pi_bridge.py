@@ -78,6 +78,11 @@ class PiLink:
             self.health_state = HealthState.OFFLINE
             self._thread = threading.Thread(target=self._worker_loop, daemon=True)
             self._thread.start()
+            # Handshake keep-alive in its own thread: the ping in _worker_loop can block
+            # for ping_timeout (2 s) on a lost reply, which delayed the handshake past the
+            # Pi's 3 s timeout and paused all telemetry.
+            self._hs_thread = threading.Thread(target=self._handshake_loop, daemon=True)
+            self._hs_thread.start()
 
     def stop(self):
         """Stops background worker thread instantly without blocking the main GUI thread."""
@@ -210,8 +215,15 @@ class PiLink:
                     else:
                         self.link_state = LinkState.RECONNECTING
 
-            self._send_handshake()
             time.sleep(1.0)
+
+    HANDSHAKE_PERIOD_S = 0.5
+
+    def _handshake_loop(self):
+        """Keep-alive to the Pi every 0.5 s, independent of the ping."""
+        while self.running:
+            self._send_handshake()
+            time.sleep(self.HANDSHAKE_PERIOD_S)
 
     def get_health(self) -> dict:
         """Returns thread-safe connection and health state parameters."""

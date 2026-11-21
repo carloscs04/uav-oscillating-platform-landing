@@ -71,15 +71,16 @@ class PCBridgeListener(threading.Thread):
                         self.last_heartbeat = now
                         was_connected = self.is_gcs_connected
                         self.is_gcs_connected = True
+                        ip_changed = self.active_gcs_ip != discovered_ip
+                        self.active_gcs_ip = discovered_ip
 
-                    if cmd == "GCS_CONNECT":
-                        with self._lock:
-                            ip_changed = self.active_gcs_ip != discovered_ip
-                            self.active_gcs_ip = discovered_ip
-
-                        if (ip_changed or not was_connected) and self.on_ip_discovered:
-                            print(f"[PC_BRIDGE] Connection established from Laptop GCS IP: {discovered_ip}")
-                            self.on_ip_discovered(discovered_ip)
+                    # ANY packet from the GCS (handshake or command) re-establishes the link.
+                    # Previously only GCS_CONNECT did: a command arriving first after a
+                    # timeout marked the GCS connected without resuming the paused
+                    # telemetry, and it then stayed paused forever.
+                    if (ip_changed or not was_connected) and self.on_ip_discovered:
+                        print(f"[PC_BRIDGE] Connection established from Laptop GCS IP: {discovered_ip}")
+                        self.on_ip_discovered(discovered_ip)
 
                     # Forward command payload to MasterTelecom callback handler
                     if self.on_command_received and cmd:
