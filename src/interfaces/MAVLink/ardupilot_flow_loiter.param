@@ -1,4 +1,4 @@
-# ArduPilot (ArduCopter 4.x) parameters for indoor Loiter with:
+# ArduPilot (ArduCopter 4.7) parameters for indoor Loiter with:
 #   - optical flow from the Pi camera, sent as MAVLink OPTICAL_FLOW (msg 100)
 #   - VL53L1X rangefinder, sent as MAVLink DISTANCE_SENSOR (pointing down)
 #   - no GPS, no compass
@@ -47,7 +47,9 @@ COMPASS_USE2,0
 COMPASS_USE3,0
 
 # --- Safety (debug_force_arm sets these to 0: restore before any real flight) ---
-# ArduPilot 4.7+ has no ARMING_CHECK: QGC will skip that line; set ARMING_SKIPCHK = 0 instead.
-ARMING_CHECK,1
+# ArduPilot 4.7+ (this vehicle runs 4.7.2): ARMING_SKIPCHK replaces ARMING_CHECK.
+# Set bits = checks SKIPPED, so 0 = run every pre-arm check.
+# (On ArduPilot 4.6 or older use ARMING_CHECK,1 instead.)
+ARMING_SKIPCHK,0
 FS_THR_ENABLE,1
 DISARM_DELAY,10
