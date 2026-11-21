@@ -123,6 +123,32 @@ class SystemCommands:
             print(f"[System TX Error] RUN_PREARM_CHECKS: {e}")
             return False
 
+    # MAV_CMD_PREFLIGHT_CALIBRATION param index (1-based) and value for each calibration
+    CALIBRATIONS = {
+        "gyro": (1, 1),    # gyro offsets (keep the vehicle perfectly still)
+        "baro": (3, 1),    # ground pressure / altitude
+        "level": (5, 2),   # board level ("level horizon", trims AHRS_TRIM_X/Y)
+    }
+
+    def preflight_calibration(self, kind: str) -> bool:
+        if not self.master or kind not in self.CALIBRATIONS:
+            return False
+        idx, val = self.CALIBRATIONS[kind]
+        params = [0.0] * 7
+        params[idx - 1] = float(val)
+        try:
+            self.master.mav.command_long_send(
+                self.master.target_system,
+                self.master.target_component,
+                mavutil.mavlink.MAV_CMD_PREFLIGHT_CALIBRATION,
+                0,
+                *params,
+            )
+            return True
+        except Exception as e:
+            print(f"[System TX Error] PREFLIGHT_CALIBRATION {kind}: {e}")
+            return False
+
     def stop_telemetry_streams(self):
         if not self.master:
             return

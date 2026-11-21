@@ -255,6 +255,9 @@ class MAVLinkManager:
         self.state.clear_transient_packets()
         return self.system_cmd.set_mode(mode_name)
 
+    def preflight_calibration(self, kind: str) -> bool:
+        return self.system_cmd.preflight_calibration(kind)
+
     def run_prearm_checks(self) -> bool:
         return self.system_cmd.run_prearm_checks()
 

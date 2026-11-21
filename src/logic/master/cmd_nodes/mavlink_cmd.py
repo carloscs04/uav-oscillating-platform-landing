@@ -18,6 +18,7 @@ class MAVLinkCLI(BaseNodeCLI):
         mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
         mavutil.mavlink.MAV_CMD_NAV_LAND,
         401,  # MAV_CMD_RUN_PREARM_CHECKS
+        mavutil.mavlink.MAV_CMD_PREFLIGHT_CALIBRATION,
     }
     SEVERITY_TAG = {0: "ERROR", 1: "ERROR", 2: "ERROR", 3: "ERROR", 4: "WARN", 5: "STATUS", 6: "INFO", 7: "INFO"}
     SEVERITY_NAME = {0: "EMERG", 1: "ALERT", 2: "CRIT", 3: "ERR", 4: "WARN", 5: "NOTICE", 6: "INFO", 7: "DEBUG"}
@@ -131,6 +132,7 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("rm_pkt", self.cmd_rm_pkt, "Unsubscribe from MAVLink packet <PKT>", aliases=["watch_remove"])
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
         self.register_cmd("prearm", self.cmd_prearm, "Why won't it arm? Runs the Pixhawk pre-arm checks and lists failing sensors", aliases=["why", "checks"])
+        self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro>", aliases=["cal"])
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
         self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
@@ -307,6 +309,40 @@ class MAVLinkCLI(BaseNodeCLI):
         self.log("No PreArm text received (ACK="
                  f"{'none' if result is None else self._enum_name('MAV_RESULT', result, 'MAV_RESULT_')}).", "WARN")
         return "PREARM_UNKNOWN"
+
+    CAL_HINTS = {
+        "gyro": "Keep the drone completely STILL on the ground.",
+        "level": "Drone must sit LEVEL on a flat surface (in its flying attitude) and still.",
+        "baro": "Keep the drone still.",
+    }
+
+    def cmd_calibrate(self, args: List[str]) -> str:
+        kind = args[0].lower() if args else ""
+        if kind not in self.CAL_HINTS:
+            self.log("Usage: calibrate <gyro|level|baro>", "ERROR")
+            return "CAL_USAGE"
+        if not self.manager.is_healthy():
+            self.log("calibrate: MAVLink is OFFLINE (no Pixhawk heartbeat). Is the Pixhawk powered?", "ERROR")
+            return "MAVLINK_OFFLINE"
+        if self.manager.state.is_armed():
+            self.log("calibrate refused: vehicle is ARMED.", "BLOCKED")
+            return "CAL_REFUSED_ARMED"
+        self.log(f"Calibrating {kind.upper()}... {self.CAL_HINTS[kind]}", "WARN")
+        seq = self._event_seq()
+        if not self.manager.preflight_calibration(kind):
+            self.log("calibrate: could not send the command.", "ERROR")
+            return "CAL_SEND_FAILED"
+        # gyro/level take a few seconds; the ACK arrives when they finish
+        result = self._wait_ack(mavutil.mavlink.MAV_CMD_PREFLIGHT_CALIBRATION, seq, timeout=15.0)
+        if result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            self.log(f"{kind.upper()} calibration done.", "OK")
+            return "CAL_OK"
+        if result is None:
+            self.log(f"{kind.upper()} calibration: no answer in 15 s. Check the 'Pixhawk:' lines above.", "WARN")
+            return "CAL_NO_ACK"
+        self.log(f"{kind.upper()} calibration FAILED "
+                 f"({self._enum_name('MAV_RESULT', result, 'MAV_RESULT_')}). Reason in the 'Pixhawk:' lines above.", "ERROR")
+        return "CAL_FAILED"
 
     def cmd_flowcheck(self, _args: List[str]) -> str:
         if not self.manager.is_healthy():
