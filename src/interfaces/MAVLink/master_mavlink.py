@@ -50,6 +50,7 @@ class MAVLinkManager:
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
         self.sensor_feed = MAVLinkSensorFeed(rate_hz=20.0)
         self.sensor_feed.bind_states(vehicle_state=self.state)
+        self.state.attach_sensor_feed(self.sensor_feed)
 
     def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
         """Binds LiDAR, Optical Flow, and VehicleState buffers to the EKF3 sensor feed."""
@@ -168,6 +169,7 @@ class MAVLinkManager:
                         self.heartbeat_emitter.start()
                         self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
+                        self.system_cmd.request_message_intervals()
                         self.system_cmd.set_ekf_origin()
                     else:
                         self._cleanup_partial_connection()
@@ -252,6 +254,9 @@ class MAVLinkManager:
     def set_mode(self, mode_name: str) -> bool:
         self.state.clear_transient_packets()
         return self.system_cmd.set_mode(mode_name)
+
+    def run_prearm_checks(self) -> bool:
+        return self.system_cmd.run_prearm_checks()
 
     def takeoff(self, altitude_m: float = 1.5) -> bool:
         self.state.clear_transient_packets()

@@ -118,7 +118,7 @@ class MavlinkReceiver(threading.Thread):
                 continue
 
             try:
-                data, addr = self._sock.recvfrom(4096)
+                data, addr = self._sock.recvfrom(65535)  # telemetry JSON is ~3 KB and growing; 4096 would silently drop it
                 if not data:
                     continue
 

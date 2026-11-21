@@ -99,6 +99,8 @@ class FlightExperimentLogger:
         "ekf_pos_h_var",
         "ekf_pos_v_var",
         "ekf_compass_var",
+        "ekf_terrain_var",
+        "ekf_age_ms",
         # RC Pilot Inputs (PWM)
         "rc1_roll",
         "rc2_pitch",
@@ -112,6 +114,17 @@ class FlightExperimentLogger:
         "clip_0",
         "clip_1",
         "clip_2",
+        "vib_age_ms",
+        # Pi-side optical flow actually sent to the Pixhawk (raw camera, before gating)
+        "pi_flow_rate_x",
+        "pi_flow_rate_y",
+        "pi_flow_quality",
+        "pi_flow_sent_quality",
+        "pi_flow_gated",
+        "pi_lidar_m",
+        "pi_flow_samples",
+        "pi_flow_age_ms",
+        "pi_flow_tx_hz",
         # Power & System Health
         "voltage_v",
         "current_a",
@@ -136,8 +149,11 @@ class FlightExperimentLogger:
         self._current_csv_path: Optional[str] = None
         self._current_codename: str = ""
         self._last_statustext: str = ""
+        self._last_statustext_seq: int = 0
         self._last_mode: int = -1
         self._row_count: int = 0
+        # Pre-arm/arming texts are logged even while DISARMED (that is when the arm fails)
+        self._pending_texts: list = []
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         """Evaluates arming state and records telemetry rows while armed."""
@@ -145,6 +161,7 @@ class FlightExperimentLogger:
         armed = bool(hb.get("armed", False))
 
         with self._lock:
+            self._collect_statustexts(packets)
             if armed and not self._is_recording:
                 self._start_session(hb, health_info)
             elif not armed and self._is_recording:
@@ -177,6 +194,12 @@ class FlightExperimentLogger:
         self._last_statustext = ""
         self._last_mode = -1
         self._row_count = 0
+
+        # Texts from the last 30 s before arming (PreArm, EKF, ...) head the events log
+        for ts, sev, text in self._pending_texts:
+            if time.time() - ts < 30.0:
+                self._log_event(f"(before arm) STATUSTEXT [sev={sev}]: {text}")
+        self._pending_texts = []
 
         self._log_event(
             f"ARMED [{codename.upper()}] | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
@@ -232,11 +255,13 @@ class FlightExperimentLogger:
             self._log_event(f"MODE_CHANGE -> {mode_str} ({custom_mode}) at t+{elapsed}s")
             self._last_mode = custom_mode
 
-        st = packets.get("statustext") or {}
-        st_text = str(st.get("text", "")).strip()
-        if st_text and st_text != self._last_statustext:
-            self._log_event(f"STATUSTEXT [sev={st.get('severity', -1)}]: {st_text}")
-            self._last_statustext = st_text
+        if not packets.get("statustext_log"):
+            # Older Pi software: only the latest STATUSTEXT is available
+            st = packets.get("statustext") or {}
+            st_text = str(st.get("text", "")).strip()
+            if st_text and st_text != self._last_statustext:
+                self._log_event(f"STATUSTEXT [sev={st.get('severity', -1)}]: {st_text}")
+                self._last_statustext = st_text
 
         lpos = packets.get("local_position") or {}
         flow = packets.get("optical_flow") or {}
@@ -248,6 +273,7 @@ class FlightExperimentLogger:
         rc = packets.get("rc_channels") or {}
         vib = packets.get("vibration") or {}
         sys_st = packets.get("sys_status") or {}
+        pif = packets.get("pi_flow") or {}
 
         row = [
             self._current_codename,
@@ -292,6 +318,8 @@ class FlightExperimentLogger:
             ekf.get("pos_h_var", 0.0),
             ekf.get("pos_v_var", 0.0),
             ekf.get("compass_var", 0.0),
+            ekf.get("terrain_var", 0.0),
+            ekf.get("age_ms", -1),
             rc.get("roll_ch1", 0),
             rc.get("pitch_ch2", 0),
             rc.get("throttle_ch3", 0),
@@ -303,6 +331,16 @@ class FlightExperimentLogger:
             vib.get("clip_0", 0),
             vib.get("clip_1", 0),
             vib.get("clip_2", 0),
+            vib.get("age_ms", -1),
+            pif.get("rate_x", 0.0),
+            pif.get("rate_y", 0.0),
+            pif.get("quality", 0),
+            pif.get("sent_quality", 0),
+            pif.get("gated", 0),
+            pif.get("lidar_m", -1.0),
+            pif.get("samples", 0),
+            pif.get("age_ms", -1),
+            pif.get("tx_hz", 0.0),
             sys_st.get("voltage_v", 0.0),
             sys_st.get("current_a", 0.0),
             sys_st.get("battery_pct", -1),
@@ -316,6 +354,28 @@ class FlightExperimentLogger:
 
         if self._row_count % 20 == 0 and self._csv_file:
             self._csv_file.flush()
+
+    def _collect_statustexts(self, packets: Dict[str, Any]):
+        """Every new Pixhawk STATUSTEXT (the Pi sends the last 10 with a sequence number)."""
+        log = packets.get("statustext_log")
+        if not isinstance(log, list) or not log:
+            return
+        newest = max(int(e[0]) for e in log)
+        if newest < self._last_statustext_seq:      # Pi restarted: sequence starts again
+            self._last_statustext_seq = 0
+        for entry in log:
+            try:
+                seq, sev, text = int(entry[0]), entry[1], str(entry[2]).strip()
+            except (TypeError, ValueError, IndexError):
+                continue
+            if seq <= self._last_statustext_seq or not text:
+                continue
+            if self._is_recording:
+                self._log_event(f"STATUSTEXT [sev={sev}]: {text}")
+            else:
+                self._pending_texts.append((time.time(), sev, text))
+        self._last_statustext_seq = max(self._last_statustext_seq, newest)
+        self._pending_texts = self._pending_texts[-30:]
 
     def _log_event(self, message: str):
         if self._event_file:

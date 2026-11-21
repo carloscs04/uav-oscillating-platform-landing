@@ -1,7 +1,9 @@
 # File: src/logic/master/cmd_nodes/mavlink_cmd.py
 
+import threading
 import time
-from typing import List
+from typing import List, Optional
+from pymavlink import mavutil
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 from src.logic.master.master_state import SystemState
 
@@ -9,9 +11,111 @@ from src.logic.master.master_state import SystemState
 class MAVLinkCLI(BaseNodeCLI):
     """All MAVLinkManager & VehicleState CLI commands and aliases."""
 
+    # COMMAND_ACKs always shown; any other command's ACK is shown only when it failed
+    USER_COMMANDS = {
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        mavutil.mavlink.MAV_CMD_DO_SET_MODE,
+        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+        mavutil.mavlink.MAV_CMD_NAV_LAND,
+        401,  # MAV_CMD_RUN_PREARM_CHECKS
+    }
+    SEVERITY_TAG = {0: "ERROR", 1: "ERROR", 2: "ERROR", 3: "ERROR", 4: "WARN", 5: "STATUS", 6: "INFO", 7: "INFO"}
+    SEVERITY_NAME = {0: "EMERG", 1: "ALERT", 2: "CRIT", 3: "ERR", 4: "WARN", 5: "NOTICE", 6: "INFO", 7: "DEBUG"}
+
     def __init__(self, manager, state, guard, sim_ref=None):
         self.sim_ref = sim_ref
         super().__init__("mavlink", manager, state, guard)
+        self._recent_texts = {}
+        self._fwd_seq = 0
+        threading.Thread(target=self._pixhawk_message_forwarder, name="PixhawkMsgToCLI", daemon=True).start()
+
+    # --- Pixhawk messages -> master panel CLI ---
+    def _vehicle_state(self):
+        return getattr(self.manager, "state", None) if self.manager else None
+
+    def _pixhawk_message_forwarder(self):
+        """Prints every Pixhawk STATUSTEXT (PreArm/Arm reasons, EKF, failsafes...) and the
+        COMMAND_ACK of user commands in the master panel, as they arrive."""
+        while True:
+            try:
+                vs = self._vehicle_state()
+                if vs is not None and hasattr(vs, "get_events_since"):
+                    for seq, _t, kind, data in vs.get_events_since(self._fwd_seq):
+                        self._fwd_seq = seq
+                        if kind == "STATUSTEXT":
+                            self._show_statustext(data)
+                        elif kind == "COMMAND_ACK":
+                            self._show_ack(data)
+            except Exception as e:
+                print(f"[MAVLINK_CLI] message forwarder error: {e}")
+                time.sleep(1.0)
+            time.sleep(0.1)
+
+    def _show_statustext(self, data: dict):
+        text = str(data.get("text", "")).strip()
+        if not text:
+            return
+        now = time.time()
+        if now - self._recent_texts.get(text, 0.0) < 5.0:   # same line repeated in a burst
+            return
+        self._recent_texts[text] = now
+        if len(self._recent_texts) > 200:
+            self._recent_texts = {k: v for k, v in self._recent_texts.items() if now - v < 60.0}
+        sev = int(data.get("severity", 6))
+        self.log(f"Pixhawk [{self.SEVERITY_NAME.get(sev, sev)}]: {text}", self.SEVERITY_TAG.get(sev, "INFO"))
+
+    @staticmethod
+    def _enum_name(enum: str, value: int, prefix: str) -> str:
+        entry = mavutil.mavlink.enums.get(enum, {}).get(value)
+        return entry.name.replace(prefix, "") if entry else str(value)
+
+    def _show_ack(self, data: dict):
+        cmd = int(data.get("command", -1))
+        result = int(data.get("result", -1))
+        ok = result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+        if cmd not in self.USER_COMMANDS and ok:
+            return
+        cmd_name = "RUN_PREARM_CHECKS" if cmd == 401 else self._enum_name("MAV_CMD", cmd, "MAV_CMD_")
+        res_name = self._enum_name("MAV_RESULT", result, "MAV_RESULT_")
+        self.log(f"Pixhawk ACK: {cmd_name} -> {res_name}", "OK" if ok else "ERROR")
+
+    def _wait_ack(self, command: int, after_seq: int, timeout: float = 2.0) -> Optional[int]:
+        """MAV_RESULT of the first COMMAND_ACK for command after after_seq (None = no answer)."""
+        vs = self._vehicle_state()
+        if vs is None or not hasattr(vs, "get_events_since"):
+            return None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for _seq, _t, kind, data in vs.get_events_since(after_seq):
+                if kind == "COMMAND_ACK" and int(data.get("command", -1)) == command:
+                    return int(data.get("result", -1))
+            time.sleep(0.05)
+        return None
+
+    def _event_seq(self) -> int:
+        vs = self._vehicle_state()
+        return vs.last_event_seq() if vs is not None and hasattr(vs, "last_event_seq") else 0
+
+    def _report_arm_result(self, after_seq: int, label: str) -> bool:
+        """Waits for the arm ACK + HEARTBEAT and says clearly whether the Pixhawk armed."""
+        result = self._wait_ack(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, after_seq)
+        armed = False
+        for _ in range(10):
+            armed = self.manager.state.is_armed()
+            if armed or result not in (None, mavutil.mavlink.MAV_RESULT_ACCEPTED):
+                break
+            time.sleep(0.1)
+        if armed:
+            self.log(f"{label}: Pixhawk is ARMED.", "OK")
+            return True
+        if result is None:
+            self.log(f"{label}: no answer from the Pixhawk in 2 s (link? USB?). Not armed.", "ERROR")
+        else:
+            time.sleep(0.3)  # let the 'PreArm:'/'Arm:' texts print first
+            self.log(f"{label} REJECTED ({self._enum_name('MAV_RESULT', result, 'MAV_RESULT_')}). "
+                     f"Reason = the 'Pixhawk: PreArm/Arm ...' lines above. Type 'prearm' to list all checks.",
+                     "ERROR")
+        return False
 
     def _register_commands(self):
         self.register_cmd("arm", self.cmd_arm, "Standard Pixhawk arming")
@@ -26,6 +130,7 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("add_pkt", self.cmd_add_pkt, "Subscribe to MAVLink packet <PKT>", aliases=["watch_add"])
         self.register_cmd("rm_pkt", self.cmd_rm_pkt, "Unsubscribe from MAVLink packet <PKT>", aliases=["watch_remove"])
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
+        self.register_cmd("prearm", self.cmd_prearm, "Why won't it arm? Runs the Pixhawk pre-arm checks and lists failing sensors", aliases=["why", "checks"])
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
         self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
@@ -34,10 +139,8 @@ class MAVLinkCLI(BaseNodeCLI):
         return bool(self.sim_ref and getattr(self.sim_ref, "active", False))
 
     def _log_pixhawk_feedback(self):
-        time.sleep(0.15)
-        st = self.manager.state.get_packet("STATUSTEXT")
-        if isinstance(st, dict) and st.get("text"):
-            self.log(f"Pixhawk: {st['text']}", "STATUS")
+        """Pixhawk texts/ACKs are printed by _pixhawk_message_forwarder; just give them time."""
+        time.sleep(0.3)
 
     def cmd_status(self, _args: List[str]) -> str:
         healthy = self.manager.is_healthy()
@@ -56,22 +159,30 @@ class MAVLinkCLI(BaseNodeCLI):
             self.log("ARM blocked: MAVLink is OFFLINE.", "ERROR")
             return "MAVLINK_OFFLINE"
 
+        seq = self._event_seq()
         self.manager.arm()
-        self.state.set_armed(True)
-        self.log("ARM command sent to Pixhawk.", "WARN")
-        self._log_pixhawk_feedback()
-        return "ARMED"
+        self.log("ARM command sent to Pixhawk...", "WARN")
+        if self._is_sim_active():
+            self.state.set_armed(True)
+            return "ARMED"
+        ok = self._report_arm_result(seq, "ARM")
+        self.state.set_armed(ok)
+        return "ARMED" if ok else "ARM_REJECTED"
 
     def cmd_force_arm(self, _args: List[str]) -> str:
         if not self.manager.is_healthy() and not self._is_sim_active():
             self.log("FORCE_ARM blocked: MAVLink is OFFLINE.", "ERROR")
             return "MAVLINK_OFFLINE"
 
+        seq = self._event_seq()
         self.manager.debug_force_arm()
-        self.state.set_armed(True)
-        self.log("FORCE ARM command sent to Pixhawk (pre-arm checks bypassed).", "WARN")
-        self._log_pixhawk_feedback()
-        return "FORCE_ARMED"
+        self.log("FORCE ARM command sent to Pixhawk (pre-arm checks bypassed)...", "WARN")
+        if self._is_sim_active():
+            self.state.set_armed(True)
+            return "FORCE_ARMED"
+        ok = self._report_arm_result(seq, "FORCE ARM")
+        self.state.set_armed(ok)
+        return "FORCE_ARMED" if ok else "FORCE_ARM_REJECTED"
 
     def cmd_disarm(self, _args: List[str]) -> str:
         allowed, reason = self.guard.validate("disarm")
@@ -158,6 +269,44 @@ class MAVLinkCLI(BaseNodeCLI):
         data = self.manager.state.get_packet(pkt)
         self.log(f"{pkt} -> {data}", "STATUS")
         return str(data)
+
+    def cmd_prearm(self, _args: List[str]) -> str:
+        if not self.manager.is_healthy():
+            self.log("prearm: MAVLink is OFFLINE (no Pixhawk heartbeat).", "ERROR")
+            return "MAVLINK_OFFLINE"
+        vs = self.manager.state
+        if vs.is_armed():
+            self.log("prearm: the Pixhawk is already ARMED.", "OK")
+        sys_st = vs.get_packet("SYS_STATUS") or {}
+        present = int(sys_st.get("onboard_control_sensors_present", 0))
+        enabled = int(sys_st.get("onboard_control_sensors_enabled", 0))
+        health = int(sys_st.get("onboard_control_sensors_health", 0))
+        bad = enabled & present & ~health
+        names = []
+        for bit, entry in mavutil.mavlink.enums.get("MAV_SYS_STATUS_SENSOR", {}).items():
+            if bit and (bad & bit) and (bit & (bit - 1)) == 0:
+                names.append(entry.name.replace("MAV_SYS_STATUS_", ""))
+        if sys_st:
+            self.log("Unhealthy sensors: " + (", ".join(names) if names else "none"),
+                     "ERROR" if names else "OK")
+        else:
+            self.log("No SYS_STATUS received yet: cannot list sensor health.", "WARN")
+        seq = self._event_seq()
+        self.manager.run_prearm_checks()
+        self.log("Pre-arm checks requested; failures arrive as 'Pixhawk: PreArm: ...' lines.", "STATUS")
+        result = self._wait_ack(401, seq, timeout=1.5)
+        time.sleep(0.5)
+        failures = [d for _s, _t, k, d in vs.get_events_since(seq)
+                    if k == "STATUSTEXT" and str(d.get("text", "")).startswith(("PreArm", "Arm"))]
+        if failures:
+            self.log(f"{len(failures)} pre-arm failure(s) reported (see lines above).", "ERROR")
+            return "PREARM_FAIL"
+        if result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            self.log("No PreArm failures reported: the Pixhawk should arm.", "OK")
+            return "PREARM_OK"
+        self.log("No PreArm text received (ACK="
+                 f"{'none' if result is None else self._enum_name('MAV_RESULT', result, 'MAV_RESULT_')}).", "WARN")
+        return "PREARM_UNKNOWN"
 
     def cmd_flowcheck(self, _args: List[str]) -> str:
         if not self.manager.is_healthy():
