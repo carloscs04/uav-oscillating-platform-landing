@@ -16,13 +16,14 @@ EK3_ENABLE,1
 EK3_SRC1_POSXY,0
 # Horizontal velocity: optical flow
 EK3_SRC1_VELXY,5
-# Height: barometer, switching to the rangefinder when low (EK3_RNG_USE_HGT)
-EK3_SRC1_POSZ,1
+# Height: rangefinder (VL53L1X). The barometer is unreliable on this vehicle.
+# Needs a flat floor below the drone and a working rangefinder at all times.
+EK3_SRC1_POSZ,2
 EK3_SRC1_VELZ,0
 # Yaw: none (gyro only, slow drift; no compass indoors). See flowcheck notes.
 EK3_SRC1_YAW,0
-# Use the rangefinder for height below 70% of its max range (4 m -> 2.8 m)
-EK3_RNG_USE_HGT,70
+# Baro->rangefinder switching: not used, because the rangefinder is the main height source
+EK3_RNG_USE_HGT,-1
 # Use flow for navigation
 EK3_FLOW_USE,1
 # Camera + Pi + link delay in ms. Starting value; measure it with 'flowtest'.
@@ -51,5 +52,6 @@ COMPASS_USE3,0
 # Set bits = checks SKIPPED, so 0 = run every pre-arm check.
 # (On ArduPilot 4.6 or older use ARMING_CHECK,1 instead.)
 ARMING_SKIPCHK,0
-FS_THR_ENABLE,1
+# RC / throttle failsafe: 3 = always LAND (RTL needs a position; indoors, no GPS)
+FS_THR_ENABLE,3
 DISARM_DELAY,10
