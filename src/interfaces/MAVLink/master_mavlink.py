@@ -1,4 +1,4 @@
-# src/interfaces/MAVLink/master_mavlink.py
+# file: src/interfaces/MAVLink/master_mavlink.py
 
 import os
 import sys
@@ -15,6 +15,7 @@ from src.interfaces.MAVLink.rx.telemetry_ui import TelemetryUI
 from src.interfaces.MAVLink.tx.system_cmd import SystemCommands
 from src.interfaces.MAVLink.tx.flight_cmd import FlightCommands
 from src.interfaces.MAVLink.tx.heartbeat import MAVLinkHeartbeatEmitter
+from src.interfaces.MAVLink.tx.sensor_feed import MAVLinkSensorFeed
 
 
 class MAVLinkManager:
@@ -39,6 +40,22 @@ class MAVLinkManager:
         self.system_cmd = SystemCommands()
         self.flight_cmd = FlightCommands()
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
+        self.sensor_feed = MAVLinkSensorFeed(rate_hz=20.0)
+        self.sensor_feed.bind_states(vehicle_state=self.state)
+
+    def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
+        """Binds LiDAR, Optical Flow, and VehicleState buffers to the EKF3 sensor feed."""
+        self.sensor_feed.bind_states(
+            distance_state=distance_state,
+            vision_state=vision_state,
+            vehicle_state=self.state,
+        )
+
+    def check_axes(self, samples: int = 25, interval_s: float = 0.25):
+        """Runs on-demand optical flow axis check when triggered by user command."""
+        for _ in range(samples):
+            self.sensor_feed.print_axis_check()
+            time.sleep(interval_s)
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r") as f:
@@ -53,7 +70,7 @@ class MAVLinkManager:
         self._reconnect_thread = threading.Thread(
             target=self._connection_supervisor,
             args=(mode.upper(),),
-            daemon=True
+            daemon=True,
         )
         self._reconnect_thread.start()
 
@@ -106,6 +123,7 @@ class MAVLinkManager:
                     self.system_cmd.set_master(self.master)
                     self.flight_cmd.set_master(self.master)
                     self.heartbeat_emitter.set_master(self.master)
+                    self.sensor_feed.set_master(self.master)
 
                     hb = self.rx_listener.wait_for_heartbeat(timeout=hb_timeout)
                     if hb:
@@ -114,7 +132,9 @@ class MAVLinkManager:
                         attempt_logged = False
                         self.rx_listener.start()
                         self.heartbeat_emitter.start()
+                        self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
+                        self.system_cmd.set_ekf_origin()
                     else:
                         self._cleanup_partial_connection()
 
@@ -134,6 +154,9 @@ class MAVLinkManager:
             self.rx_listener.stop()
         if hasattr(self, "heartbeat_emitter") and self.heartbeat_emitter:
             self.heartbeat_emitter.stop()
+        if hasattr(self, "sensor_feed") and self.sensor_feed:
+            self.sensor_feed.stop()
+            self.sensor_feed.set_master(None)
 
         if self.master:
             try:
@@ -159,6 +182,8 @@ class MAVLinkManager:
 
             self.rx_listener.stop()
             self.heartbeat_emitter.stop()
+            self.sensor_feed.stop()
+            self.sensor_feed.set_master(None)
 
             try:
                 self.master.close()
@@ -178,6 +203,9 @@ class MAVLinkManager:
         self.flight_cmd.send_attitude_target(roll_deg, pitch_deg, yaw_deg, thrust)
 
     # --- FACADE WRAPPERS ---
+
+    def set_ekf_origin(self, lat: int = 256866000, lon: int = -1003161000, alt: int = 500000) -> bool:
+        return self.system_cmd.set_ekf_origin(lat=lat, lon=lon, alt=alt)
 
     def arm(self) -> bool:
         self.state.clear_transient_packets()
@@ -210,6 +238,7 @@ class MAVLinkManager:
         self.state.clear_transient_packets()
         return self.system_cmd.debug_force_disarm()
 
+
 # Global stream filter to suppress hardcoded pymavlink "Device ... is dead" terminal prints
 class SuppressDeadDeviceFilter:
     def __init__(self, original_stream):
@@ -230,6 +259,7 @@ class SuppressDeadDeviceFilter:
 sys.stdout = SuppressDeadDeviceFilter(sys.stdout)
 sys.stderr = SuppressDeadDeviceFilter(sys.stderr)
 
+
 def _run_interactive_cli(manager: MAVLinkManager):
     """Interactive CLI shell synchronized to confirmed HEARTBEAT state changes."""
     running = True
@@ -239,8 +269,8 @@ def _run_interactive_cli(manager: MAVLinkManager):
     print("\n=======================================================")
     print("      MAVLink Modular Interactive CLI Inspector        ")
     print("=======================================================")
-    print(" Commands: arm, disarm, mode <MODE>, force_arm, force_disarm")
-    print("           watch, add <PKT>, remove <PKT>, rate <SEC>, quit")
+    print(" Commands: arm, disarm, mode <MODE>, origin, force_arm, force_disarm")
+    print("           watch, add <PKT>, remove <PKT>, rate <SEC>, axis, quit")
     print("=======================================================\n")
 
     while running:
@@ -270,6 +300,8 @@ def _run_interactive_cli(manager: MAVLinkManager):
             elif cmd == "mode" and len(parts) > 1:
                 manager.set_mode(parts[1])
                 target_arm_state = None
+            elif cmd == "origin":
+                manager.set_ekf_origin()
             elif cmd == "takeoff":
                 alt = float(parts[1]) if len(parts) > 1 else 1.5
                 manager.takeoff(alt)
@@ -293,6 +325,8 @@ def _run_interactive_cli(manager: MAVLinkManager):
             elif cmd == "rate" and len(parts) > 1:
                 display_interval = max(0.1, float(parts[1]))
                 print(f"[CLI] Print interval updated to {display_interval}s.")
+            elif cmd == "axis":
+                manager.check_axes()
             else:
                 print(f"[CLI Error] Unknown command or missing parameters: '{cmd_input}'")
 
