@@ -34,6 +34,7 @@ class PCBridgeListener(threading.Thread):
         self.is_gcs_connected: bool = False
         self.sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
+        self._last_reject_log: Dict[str, float] = {}
 
     def run(self):
         self.running = True
@@ -66,6 +67,20 @@ class PCBridgeListener(threading.Thread):
                     payload = json.loads(data.decode("utf-8"))
                     cmd = payload.get("cmd")
                     discovered_ip = addr[0]
+
+                    # Single-GCS lock: while the active laptop is still alive, ignore every
+                    # packet (handshake AND commands) from any other laptop. Otherwise two
+                    # ground stations steal the telemetry target from each other every ~0.5 s.
+                    with self._lock:
+                        locked_ip = self.active_gcs_ip if self.is_gcs_connected else None
+                    if locked_ip is not None and discovered_ip != locked_ip:
+                        if now - self._last_reject_log.get(discovered_ip, 0.0) > 10.0:
+                            self._last_reject_log[discovered_ip] = now
+                            print(
+                                f"[PC_BRIDGE] Ignoring second GCS {discovered_ip}: locked to {locked_ip} "
+                                f"until it is silent for {self.timeout_sec}s."
+                            )
+                        continue
 
                     with self._lock:
                         self.last_heartbeat = now

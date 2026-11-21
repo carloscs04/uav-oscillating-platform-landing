@@ -29,6 +29,15 @@ class VisionState:
         self.flow_seq: int = 0
         self.last_flow_ts: float = 0.0
 
+        # Flow accumulator drained by MAVLinkSensorFeed (take_optical_flow), so no
+        # camera frame is lost when the feed loop runs slower than the camera.
+        self._acc_rad_x: float = 0.0
+        self._acc_rad_y: float = 0.0
+        self._acc_dt_s: float = 0.0        # time covered by good (quality > 0) frames
+        self._acc_quality_sum: int = 0     # quality summed over ALL frames (bad frames count as 0)
+        self._acc_frames: int = 0
+        self._acc_good_frames: int = 0
+
     def update_aruco_pose(
         self,
         detected: bool,
@@ -84,6 +93,46 @@ class VisionState:
             self.flow_px_dy = round(float(px_dy), 2)
             self.flow_seq += 1
             self.last_flow_ts = time.time()
+
+            self._acc_frames += 1
+            self._acc_quality_sum += int(quality)
+            if int(quality) > 0 and dt_s > 0.0:
+                self._acc_rad_x += float(rad_x)
+                self._acc_rad_y += float(rad_y)
+                self._acc_dt_s += float(dt_s)
+                self._acc_good_frames += 1
+
+    def take_optical_flow(self) -> Optional[Dict[str, Any]]:
+        """Return flow summed over every frame since the previous call, then reset.
+
+        rate_x/rate_y are the mean angular rates (rad/s) over the good frames.
+        quality is averaged over all frames, so rejected frames pull it down.
+        Returns None when no frame arrived since the previous call.
+        """
+        with self._lock:
+            frames = self._acc_frames
+            if frames == 0:
+                return None
+            good = self._acc_good_frames
+            dt = self._acc_dt_s
+            out = {
+                "rad_x": self._acc_rad_x,
+                "rad_y": self._acc_rad_y,
+                "dt_s": dt,
+                "rate_x": self._acc_rad_x / dt if dt > 0.0 else 0.0,
+                "rate_y": self._acc_rad_y / dt if dt > 0.0 else 0.0,
+                "quality": int(round(self._acc_quality_sum / frames)) if good > 0 else 0,
+                "frames": frames,
+                "good_frames": good,
+                "ts": self.last_flow_ts,
+            }
+            self._acc_rad_x = 0.0
+            self._acc_rad_y = 0.0
+            self._acc_dt_s = 0.0
+            self._acc_quality_sum = 0
+            self._acc_frames = 0
+            self._acc_good_frames = 0
+            return out
 
     def get_optical_flow(self) -> Dict[str, Any]:
         """Return latest optical flow sample snapshot."""

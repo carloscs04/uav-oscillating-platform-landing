@@ -6,6 +6,9 @@ import time
 import threading
 import yaml
 from typing import Any, Optional
+
+# OPTICAL_FLOW flow_rate_x/y are MAVLink2-only fields (also set in src/main.py).
+os.environ.setdefault("MAVLINK20", "1")
 from pymavlink import mavutil
 
 
@@ -92,7 +95,12 @@ class MAVLinkManager:
 
         raw_uri = target_info["uri"]
         baud = target_info.get("baud_rate", 921600)
-        hb_timeout = self.config.get("settings", {}).get("heartbeat_timeout", 3.0)
+        settings = self.config.get("settings", {})
+        hb_timeout = settings.get("heartbeat_timeout", 3.0)
+        # Companion-computer identity: same system as the vehicle, onboard-computer component.
+        # pymavlink's default (255/0) collides with QGroundControl's system id.
+        src_sys = int(settings.get("source_system", 255))
+        src_comp = int(settings.get("source_component", 0))
 
         attempt_logged = False
 
@@ -115,9 +123,13 @@ class MAVLinkManager:
 
                 try:
                     if "udp:" in raw_uri:
-                        self.master = mavutil.mavlink_connection(raw_uri)
+                        self.master = mavutil.mavlink_connection(
+                            raw_uri, source_system=src_sys, source_component=src_comp
+                        )
                     else:
-                        self.master = mavutil.mavlink_connection(raw_uri, baud=baud)
+                        self.master = mavutil.mavlink_connection(
+                            raw_uri, baud=baud, source_system=src_sys, source_component=src_comp
+                        )
 
                     self.rx_listener.set_master(self.master)
                     self.system_cmd.set_master(self.master)

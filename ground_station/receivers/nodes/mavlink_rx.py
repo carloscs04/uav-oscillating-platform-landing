@@ -115,7 +115,7 @@ class MavlinkReceiver(threading.Thread):
                 continue
 
             try:
-                data, addr = self._sock.recvfrom(8192)
+                data, addr = self._sock.recvfrom(65535)
                 if not data:
                     continue
 

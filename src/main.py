@@ -1,5 +1,11 @@
 # File: src/main.py
 
+import os
+
+# Must be set before anything imports pymavlink: OPTICAL_FLOW flow_rate_x/y are
+# MAVLink2-only fields and are silently dropped on a MAVLink1 link.
+os.environ.setdefault("MAVLINK20", "1")
+
 import time
 from src.interfaces.Bridge_WIFI.master_wifi import MasterWIFI
 from src.logic.master.master_node import MasterNode

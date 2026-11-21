@@ -25,6 +25,13 @@ class MAVLinkRXListener:
         "FLOW_ORIENT_YAW",
         "RNGFND1_TYPE",
         "COMPASS_USE",
+        # Paired with the OPTICAL_FLOW change (logged at arm so each flight records its config)
+        "COMPASS_ENABLE",
+        "VISO_TYPE",
+        "FLOW_FXSCALER",
+        "FLOW_FYSCALER",
+        "FS_THR_ENABLE",
+        "LOIT_SPEED_MS",
     ]
 
     def __init__(self, state: VehicleState):

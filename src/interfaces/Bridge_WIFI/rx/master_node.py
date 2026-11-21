@@ -4,19 +4,31 @@ import json
 import socket
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 class MasterCommandReceiver(threading.Thread):
-    """Dedicated UDP receiver inside Bridge_WIFI/rx that forwards GCS CLI commands to MasterNode."""
+    """Dedicated UDP receiver inside Bridge_WIFI/rx that forwards GCS CLI commands to MasterNode.
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 5009, master_node: Optional[Any] = None):
+    If allowed_ip_getter is given, commands are only accepted from the GCS the bridge is
+    currently locked to (or from anyone while no GCS is linked).
+    """
+
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 5009,
+        master_node: Optional[Any] = None,
+        allowed_ip_getter: Optional[Callable[[], Optional[str]]] = None,
+    ):
         super().__init__(daemon=True)
         self.host = host
         self.port = port
         self.master_node = master_node
+        self.allowed_ip_getter = allowed_ip_getter
         self.running = False
         self._sock: Optional[socket.socket] = None
+        self._last_reject_log: Dict[str, float] = {}
 
     def set_master_node(self, node: Any):
         self.master_node = node
@@ -36,8 +48,16 @@ class MasterCommandReceiver(threading.Thread):
 
         while self.running:
             try:
-                data, _addr = self._sock.recvfrom(4096)
+                data, addr = self._sock.recvfrom(4096)
                 if not data:
+                    continue
+
+                allowed_ip = self.allowed_ip_getter() if self.allowed_ip_getter else None
+                if allowed_ip is not None and addr[0] != allowed_ip:
+                    now = time.time()
+                    if now - self._last_reject_log.get(addr[0], 0.0) > 10.0:
+                        self._last_reject_log[addr[0]] = now
+                        print(f"[MASTER_RX] Ignoring CLI command from {addr[0]}: GCS locked to {allowed_ip}.")
                     continue
 
                 raw_str = data.decode("utf-8").strip()

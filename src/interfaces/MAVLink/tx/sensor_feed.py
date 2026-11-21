@@ -8,13 +8,39 @@ from pymavlink import mavutil
 
 
 class MAVLinkSensorFeed:
-    """Dedicated 20Hz MAVLink transmitter injecting LiDAR, Optical Flow, and ExternalNav into Pixhawk EKF3."""
+    """Dedicated 20Hz MAVLink transmitter feeding the rangefinder and optical flow to ArduPilot EKF3.
+
+    Optical flow is sent as OPTICAL_FLOW (#100) using the flow_rate_x/y fields (rad/s).
+    That is the only flow message ArduPilot's MAVLink flow driver (FLOW_TYPE=5) reads;
+    OPTICAL_FLOW_RAD (#106) is silently ignored. ArduPilot subtracts its own gyro from
+    the flow (bodyRate), so rotation is removed on the Pixhawk, not here.
+
+    Pixhawk params that go with this (USE_EXTNAV = False):
+        FLOW_TYPE=5, EK3_SRC1_VELXY=5, EK3_SRC1_POSXY=0, VISO_TYPE=0,
+        EK3_SRC1_YAW=1 + COMPASS_ENABLE=1 + COMPASS_USE=1, FLOW_FXSCALER=FLOW_FYSCALER=0
+    """
 
     MIN_FLOW_HEIGHT_M = 0.15
-    # Sign multipliers aligning camera optical flow axes with ArduPilot body NED frame:
-    # +rad_y -> forward (+X body), -rad_x -> right (+Y body)
+    MAX_FLOW_AGE_S = 0.25
+
+    # Legacy ExternalNav path: integrate flow on the Pi and send VISION_POSITION_ESTIMATE.
+    # It has no gyro compensation (tilting reads as motion) and feeds the EKF's own yaw back
+    # to it. Kept only to roll back to the old behaviour; needs EK3_SRC1_POSXY=6 + VISO_TYPE=1.
+    USE_EXTNAV = False
+
+    # Sign multipliers aligning camera optical flow axes with the Pi "rad" convention
+    # (verified by hand test 2026-11-20): +rad_y -> forward (+X body), -rad_x -> right (+Y body)
     FLOW_SIGN_X = 1.0
     FLOW_SIGN_Y = 1.0
+
+    # Pi convention -> ArduPilot flowRate convention. In ArduPilot a pure rotation gives
+    # flowRate == gyro (right-hand rule about body axes), so:
+    #   roll right  (+gyro X) == moving right   -> flow_rate_x > 0   (Pi: rad_x < 0)
+    #   nose down   (-gyro Y) == moving forward -> flow_rate_y < 0   (Pi: rad_y > 0)
+    # Confirm with the rocking test (OF.flowX ~ OF.bodyX, OF.flowY ~ OF.bodyY in the .bin log);
+    # if one axis has the opposite sign, flip it here.
+    AP_FLOW_SIGN_X = -1.0
+    AP_FLOW_SIGN_Y = -1.0
 
     def __init__(self, rate_hz: float = 20.0):
         self.rate_hz = max(5.0, float(rate_hz))
@@ -27,11 +53,11 @@ class MAVLinkSensorFeed:
         self._thread: Optional[threading.Thread] = None
         self._tx_lock = threading.Lock()
         self._boot_time = time.monotonic()
-        self._last_flow_seq: int = -1
         self._last_lidar_us: int = 0
         self._loop_count: int = 0
+        self._warned_mavlink1 = False
 
-        # Integrated visual odometry state (NED local frame in meters)
+        # Integrated flow odometry (NED, m). Diagnostic only unless USE_EXTNAV is True.
         self._pos_x_m: float = 0.0
         self._pos_y_m: float = 0.0
         self._was_armed: bool = False
@@ -40,6 +66,12 @@ class MAVLinkSensorFeed:
         self.flow_packets_sent: int = 0
         self.vision_packets_sent: int = 0
         self.actual_rate_hz: float = 0.0
+
+        # Last OPTICAL_FLOW actually sent to the Pixhawk (exported to the flight logger)
+        self.last_flow_tx: dict = {
+            "rate_x": 0.0, "rate_y": 0.0, "quality": 0,
+            "frames": 0, "good_frames": 0, "ground_dist_m": -1.0, "ts": 0.0,
+        }
 
     def set_master(self, master: Any):
         with self._tx_lock:
@@ -113,7 +145,7 @@ class MAVLinkSensorFeed:
         return rad_x, rad_y
 
     def _integrate_odometry(self, flow: dict, ground_dist_m: Optional[float], yaw_rad: float):
-        """Integrates optical flow angular displacement into local NED X/Y meters for ExternalNav."""
+        """Integrates flow displacement into local NED X/Y meters (no gyro compensation)."""
         if ground_dist_m is None or ground_dist_m < self.MIN_FLOW_HEIGHT_M:
             # Keep origin anchored at (0, 0) while sitting on the ground
             self._pos_x_m = 0.0
@@ -126,7 +158,6 @@ class MAVLinkSensorFeed:
 
         rad_x, rad_y = self._aligned_flow_rads(flow)
 
-        # ArduPilot optical_flow_rad convention:
         # +rad_y -> forward (+X body), -rad_x -> right (+Y body)
         dx_body = rad_y * ground_dist_m
         dy_body = -rad_x * ground_dist_m
@@ -158,41 +189,65 @@ class MAVLinkSensorFeed:
             )
         self.lidar_packets_sent += 1
 
-    def _send_optical_flow_rad(self, master: Any, flow: dict, ground_dist_m: Optional[float]):
+    def _check_mavlink2(self, master: Any):
+        """flow_rate_x/y are MAVLink2 extension fields: over MAVLink1 they are dropped silently."""
+        if self._warned_mavlink1:
+            return
+        try:
+            is_v2 = bool(master.mavlink20())
+        except Exception:
+            is_v2 = True
+        if not is_v2:
+            print(
+                "[SensorFeed WARN] Link is MAVLink1: OPTICAL_FLOW flow_rate_x/y will be dropped and the "
+                "Pixhawk will see zero flow. Set MAVLINK20=1 before pymavlink is imported "
+                "(src/main.py does this) and SERIALx_PROTOCOL=2 on the Pixhawk.",
+                flush=True,
+            )
+            self._warned_mavlink1 = True
+
+    def _send_optical_flow(self, master: Any, acc: dict, ground_dist_m: Optional[float]):
+        """Sends OPTICAL_FLOW with the mean angular rate (rad/s) over every frame since the last send."""
+        self._check_mavlink2(master)
         now_mono = time.monotonic()
         time_usec = int((now_mono - self._boot_time) * 1_000_000)
-        dt_s = max(1e-3, min(0.5, float(flow.get("dt_s", 0.033))))
-        integration_time_us = int(round(dt_s * 1_000_000))
 
-        # Only report valid optical flow once airborne (>= 15 cm)
-        if ground_dist_m is not None and ground_dist_m >= self.MIN_FLOW_HEIGHT_M:
-            rad_x, rad_y = self._aligned_flow_rads(flow)
-            quality = max(0, min(255, int(flow.get("quality", 0))))
+        # Only report valid optical flow once airborne (>= 15 cm); on the ground the
+        # camera is too close to the floor to track and the EKF does not need flow.
+        if ground_dist_m is not None and ground_dist_m >= self.MIN_FLOW_HEIGHT_M and acc["good_frames"] > 0:
+            rate_x = self.AP_FLOW_SIGN_X * self.FLOW_SIGN_X * float(acc["rate_x"])
+            rate_y = self.AP_FLOW_SIGN_Y * self.FLOW_SIGN_Y * float(acc["rate_y"])
+            quality = max(0, min(255, int(acc["quality"])))
             distance = float(ground_dist_m)
-            time_delta_distance_us = max(0, time_usec - self._last_lidar_us) if self._last_lidar_us > 0 else 0
         else:
-            rad_x = 0.0
-            rad_y = 0.0
+            rate_x = 0.0
+            rate_y = 0.0
             quality = 0
             distance = float(ground_dist_m) if ground_dist_m is not None else -1.0
-            time_delta_distance_us = 0
 
         with self._tx_lock:
-            master.mav.optical_flow_rad_send(
+            master.mav.optical_flow_send(
                 time_usec,
-                0,
-                integration_time_us,
-                rad_x,
-                rad_y,
-                0.0,
-                0.0,
-                0.0,
-                0,
+                0,          # sensor_id
+                0,          # flow_x  (pixels, unused: ArduPilot uses flow_rate_x when non-zero)
+                0,          # flow_y
+                0.0,        # flow_comp_m_x (unused by ArduPilot on receive)
+                0.0,        # flow_comp_m_y
                 quality,
-                time_delta_distance_us,
-                distance,
+                distance,   # ground_distance (informational; EKF uses DISTANCE_SENSOR)
+                rate_x,     # flow_rate_x (rad/s)
+                rate_y,     # flow_rate_y (rad/s)
             )
         self.flow_packets_sent += 1
+        self.last_flow_tx = {
+            "rate_x": round(rate_x, 4),
+            "rate_y": round(rate_y, 4),
+            "quality": quality,
+            "frames": int(acc["frames"]),
+            "good_frames": int(acc["good_frames"]),
+            "ground_dist_m": round(distance, 3),
+            "ts": time.time(),
+        }
 
     def _send_vision_position_estimate(self, master: Any, yaw_rad: float = 0.0):
         now_mono = time.monotonic()
@@ -221,10 +276,12 @@ class MAVLinkSensorFeed:
         dist = lidar_m if lidar_m is not None else 0.0
         dx = rad_y * dist
         dy = -rad_x * dist
+        tx = self.last_flow_tx
         print(
             f"[SensorFeed CHECK] lidar={dist:.2f}m qual={flow.get('quality', 0)} "
             f"aligned_rad=({rad_x:+.4f}, {rad_y:+.4f}) -> body_step=({dx:+.4f}m Fwd, {dy:+.4f}m Right) "
-            f"ned_pos=({self._pos_x_m:+.2f}, {self._pos_y_m:+.2f})",
+            f"| sent flow_rate=({tx['rate_x']:+.3f}, {tx['rate_y']:+.3f}) rad/s q={tx['quality']} "
+            f"| ned_pos=({self._pos_x_m:+.2f}, {self._pos_y_m:+.2f})",
             flush=True,
         )
 
@@ -251,16 +308,14 @@ class MAVLinkSensorFeed:
                     if lidar_m is not None:
                         self._send_distance_sensor(master, lidar_m)
 
-                    if self.vision_state is not None and hasattr(self.vision_state, "get_optical_flow"):
-                        flow = self.vision_state.get_optical_flow()
-                        seq = int(flow.get("seq", -1))
-                        if seq > self._last_flow_seq and (time.time() - float(flow.get("ts", 0.0))) < 0.25:
-                            self._last_flow_seq = seq
-                            self._integrate_odometry(flow, lidar_m, yaw_rad)
-                            self._send_optical_flow_rad(master, flow, lidar_m)
+                    if self.vision_state is not None and hasattr(self.vision_state, "take_optical_flow"):
+                        acc = self.vision_state.take_optical_flow()
+                        if acc is not None and (time.time() - float(acc.get("ts", 0.0))) < self.MAX_FLOW_AGE_S:
+                            self._integrate_odometry(acc, lidar_m, yaw_rad)
+                            self._send_optical_flow(master, acc, lidar_m)
 
-                    # Keep ExternalNav alive at 10Hz for EK3_SRC1_POSXY & EK3_SRC1_YAW = ExternalNav
-                    if self._loop_count % 2 == 0:
+                    # Legacy ExternalNav position (only with EK3_SRC1_POSXY=6 / VISO_TYPE=1)
+                    if self.USE_EXTNAV and self._loop_count % 2 == 0:
                         self._send_vision_position_estimate(master, yaw_rad)
 
                 except Exception as e:
@@ -269,11 +324,10 @@ class MAVLinkSensorFeed:
                         self._err_logged = True
 
             if not getattr(self, "_diag_logged", False) and (time.monotonic() - self._boot_time) > 3.0:
-                flow_snap = self.vision_state.get_optical_flow() if (self.vision_state and hasattr(self.vision_state, "get_optical_flow")) else None
                 print(
                     f"[SensorFeed DIAG] lidar_tx={self.lidar_packets_sent} "
                     f"flow_tx={self.flow_packets_sent} vision_tx={self.vision_packets_sent} "
-                    f"pos=({self._pos_x_m:.2f}, {self._pos_y_m:.2f}) flow={flow_snap}",
+                    f"extnav={'ON' if self.USE_EXTNAV else 'OFF'} last_flow={self.last_flow_tx}",
                     flush=True,
                 )
                 self._diag_logged = True

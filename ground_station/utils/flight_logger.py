@@ -45,7 +45,12 @@ class FlightExperimentLogger:
         7: "CIRCLE",
         9: "LAND",
         16: "POSHOLD",
+        20: "GUIDED_NOGPS",
+        22: "FLOWHOLD",
     }
+
+    # Pixhawk data older than this on the Pi = frozen telemetry (link to the Pixhawk lost)
+    STALE_RX_AGE_S = 1.0
 
     CSV_HEADERS = [
         "codename",
@@ -117,6 +122,17 @@ class FlightExperimentLogger:
         "cpu_load_pct",
         "link_status",
         "link_rate_hz",
+        # Pi <-> Pixhawk link freshness (stale=1: every Pixhawk column above is a repeated old value)
+        "pi_rx_age_s",
+        "stale",
+        "pi_feed_hz",
+        # OPTICAL_FLOW exactly as the Pi sent it to the Pixhawk (rad/s, ArduPilot axes)
+        "pi_flow_rate_x",
+        "pi_flow_rate_y",
+        "pi_flow_quality",
+        "pi_flow_frames",
+        "pi_flow_good_frames",
+        "pi_flow_tx_age_s",
     ]
 
     def __init__(self, base_dir: Optional[str] = None):
@@ -137,6 +153,7 @@ class FlightExperimentLogger:
         self._last_mode: int = -1
         self._logged_params_snapshot: Dict[str, Any] = {}
         self._row_count: int = 0
+        self._stale_since: Optional[float] = None
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         """Evaluates arming state and records telemetry rows while armed."""
@@ -177,6 +194,7 @@ class FlightExperimentLogger:
         self._last_mode = -1
         self._logged_params_snapshot = {}
         self._row_count = 0
+        self._stale_since = None
 
         self._log_event(
             f"ARMED [{codename.upper()}] | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
@@ -270,6 +288,28 @@ class FlightExperimentLogger:
         rc = packets.get("rc_channels") or {}
         vib = packets.get("vibration") or {}
         sys_st = packets.get("sys_status") or {}
+        pi_link = packets.get("pi_link") or {}
+        flow_tx = pi_link.get("flow_tx") or {}
+
+        # Stale detection: the Pi keeps streaming its last cached Pixhawk values when the
+        # serial link drops, so rows look normal but are frozen. rx_age_s exposes that.
+        rx_age = pi_link.get("rx_age_s", -1.0)
+        try:
+            rx_age = float(rx_age)
+        except (TypeError, ValueError):
+            rx_age = -1.0
+        stale = bool(pi_link) and (rx_age < 0.0 or rx_age > self.STALE_RX_AGE_S or not pi_link.get("connected", True))
+        if stale and self._stale_since is None:
+            self._stale_since = elapsed
+            self._log_event(
+                f"STALE_TELEMETRY START at t+{elapsed}s | Pixhawk data age={rx_age}s "
+                f"connected={pi_link.get('connected')} (Pi lost the Pixhawk link)"
+            )
+        elif not stale and self._stale_since is not None:
+            self._log_event(
+                f"STALE_TELEMETRY END at t+{elapsed}s | lasted {round(elapsed - self._stale_since, 2)}s"
+            )
+            self._stale_since = None
 
         row = [
             self._current_codename,
@@ -331,6 +371,15 @@ class FlightExperimentLogger:
             sys_st.get("cpu_load_pct", 0.0),
             health_info.get("status", "UNKNOWN"),
             health_info.get("rate_hz", 0.0),
+            rx_age,
+            int(stale),
+            pi_link.get("feed_hz", 0.0),
+            flow_tx.get("rate_x", 0.0),
+            flow_tx.get("rate_y", 0.0),
+            flow_tx.get("quality", 0),
+            flow_tx.get("frames", 0),
+            flow_tx.get("good_frames", 0),
+            pi_link.get("flow_tx_age_s", -1.0),
         ]
 
         self._csv_writer.writerow(row)
