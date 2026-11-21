@@ -44,9 +44,11 @@ VISO_TYPE,0
 # --- Rangefinder (MAVLink, pointing down) ---
 RNGFND1_TYPE,10
 RNGFND1_ORIENT,25
-# Metres. VL53L1X is unreliable below 4 cm; 3.5 m is a safe indoor maximum.
+# Metres. VL53L1X is unreliable below 4 cm. Bench test 2026-11-21: over the bare
+# floor it fails above ~1.4 m ("signal fail"); over white card it is 100% valid at
+# 1.9 m. Fly over a light surface, below ~1.7 m.
 RNGFND1_MIN,0.04
-RNGFND1_MAX,3.5
+RNGFND1_MAX,2.2
 # What the lidar reads with the drone standing on the floor (measured: ~0.088 m)
 RNGFND1_GNDCLR,0.09
 
