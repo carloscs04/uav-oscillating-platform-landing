@@ -50,16 +50,6 @@ RNGFND1_MAX,3.5
 # What the lidar reads with the drone standing on the floor (measured: ~0.088 m)
 RNGFND1_GNDCLR,0.09
 
-# --- Flight modes (channel 5, 3-position switch) ---
-# Down = Guided_NoGPS (20, the Pi flies), middle = Loiter (5), up = AltHold (2).
-# Slots 2-5 are Loiter so a slightly off-centre switch never lands in another mode.
-FLTMODE1,20
-FLTMODE2,5
-FLTMODE3,5
-FLTMODE4,5
-FLTMODE5,5
-FLTMODE6,2
-
 # --- No compass ---
 COMPASS_ENABLE,0
 COMPASS_USE,0
