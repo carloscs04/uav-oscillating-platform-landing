@@ -155,7 +155,7 @@ def check_live(vehicle_state: Any, feed: Any) -> List[Line]:
         lines.append(("PASS" if q > 0 else "WARN",
                       f"Pixhawk: flow received, quality {q}, rate=({rx:+.3f}, {ry:+.3f}) rad/s, "
                       f"hagl {of.get('ground_distance', 0.0):.2f} m" +
-                      ("" if q > 0 else " (quality 0: lift above 0.15 m over a textured floor)")))
+                      ("" if q > 0 else f" (quality 0: check the rangefinder (>= {feed.MIN_FLOW_HEIGHT_M} m) and floor texture/light)")))
 
     rng = vehicle_state.get_packet("RANGEFINDER")
     ds, ds_t = vehicle_state.get_packet_with_time("DISTANCE_SENSOR")
@@ -322,7 +322,7 @@ class FlowTester:
                                          "Flow as the Pixhawk uses it (after FLOW_* params)", raw=False)
             else:
                 lines.append(("WARN", f"Pixhawk reported only {len(fc_flow)} OPTICAL_FLOW samples: "
-                                      "cannot check the Pixhawk side (FLOW_TYPE=5? rebooted? above 0.15 m?)"))
+                                      "cannot check the Pixhawk side (FLOW_TYPE=5? rebooted? rangefinder valid?)"))
             for tag, text in lines:
                 log(text, tag)
         finally:

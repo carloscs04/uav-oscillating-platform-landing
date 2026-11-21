@@ -26,7 +26,11 @@ class MAVLinkSensorFeed:
     (EK3_SRC1_VELXY = 5) and work out the relative position itself.
     """
 
-    MIN_FLOW_HEIGHT_M = 0.15
+    # Flow is sent with real quality whenever the rangefinder is valid and above
+    # this height. Was 0.15 m: below it the EKF had no flow on the ground and in the
+    # last part of a landing, dead-reckoned on the accelerometer and drifted
+    # (measured up to 1.8 m/s on the floor). The camera tracks fine at 0.09 m.
+    MIN_FLOW_HEIGHT_M = 0.05
     # Final sign multipliers on the sent rates. Keep at 1.0: set the camera -> body
     # mapping only in camera_driver/config.yaml (optical_flow: swap_xy / invert_x /
     # invert_y), using the 'flowtest' rotation test to choose the values.
