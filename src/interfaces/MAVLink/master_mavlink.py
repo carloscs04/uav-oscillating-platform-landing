@@ -16,6 +16,7 @@ from src.interfaces.MAVLink.tx.system_cmd import SystemCommands
 from src.interfaces.MAVLink.tx.flight_cmd import FlightCommands
 from src.interfaces.MAVLink.tx.heartbeat import MAVLinkHeartbeatEmitter
 from src.interfaces.MAVLink.tx.sensor_feed import MAVLinkSensorFeed
+from src.interfaces.MAVLink import flow_check
 
 
 class MAVLinkManager:
@@ -56,6 +57,32 @@ class MAVLinkManager:
         for _ in range(samples):
             self.sensor_feed.print_axis_check()
             time.sleep(interval_s)
+
+    # --- No-flight optical flow checks (see flow_check.py) ---
+    def flow_check(self) -> list:
+        """Snapshot of parameters, Pi flow, Pixhawk flow and EKF state as (tag, text) lines."""
+        self.rx_listener.refresh_params()
+        lines = flow_check.check_params(self.state.get_params())
+        lines += flow_check.check_live(self.state, self.sensor_feed)
+        lines.append(flow_check.verdict(lines))
+        return lines
+
+    def flow_test(self, seconds: float, log) -> bool:
+        """Rotation test in a background thread; results go to log(text, tag). Disarmed only."""
+        if self.state.is_armed():
+            log("flowtest refused: vehicle is ARMED. Disarm, props off.", "BLOCKED")
+            return False
+        if not hasattr(self, "_flow_tester"):
+            self._flow_tester = flow_check.FlowTester(self.state, self.sensor_feed)
+        threading.Thread(target=self._flow_tester.run, args=(seconds, log), daemon=True).start()
+        return True
+
+    def flow_watch(self, seconds: float, log) -> bool:
+        """Live one-line-per-second flow/EKF monitor in a background thread."""
+        self.sensor_feed.reset_bench_odometry()
+        threading.Thread(target=flow_check.watch, args=(self.state, self.sensor_feed, seconds, log),
+                         daemon=True).start()
+        return True
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r") as f:

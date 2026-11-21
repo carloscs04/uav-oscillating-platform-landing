@@ -16,15 +16,37 @@ class MAVLinkRXListener:
         "PSC_D_ACC_P",
         "PSC_D_VEL_P",
         "PSC_D_POS_P",
+        # Optical flow + rangefinder navigation (checked by the 'flowcheck' command)
+        "AHRS_EKF_TYPE",
+        "EK3_ENABLE",
         "EK3_FLOW_DELAY",
+        "EK3_FLOW_USE",
+        "EK3_RNG_USE_HGT",
         "EK3_SRC1_POSXY",
         "EK3_SRC1_VELXY",
         "EK3_SRC1_POSZ",
+        "EK3_SRC1_VELZ",
         "EK3_SRC1_YAW",
         "FLOW_TYPE",
         "FLOW_ORIENT_YAW",
+        "FLOW_FXSCALER",
+        "FLOW_FYSCALER",
         "RNGFND1_TYPE",
+        "RNGFND1_ORIENT",
+        "RNGFND1_MIN",
+        "RNGFND1_MAX",
+        "RNGFND1_MIN_CM",
+        "RNGFND1_MAX_CM",
+        "COMPASS_ENABLE",
         "COMPASS_USE",
+        "COMPASS_USE2",
+        "COMPASS_USE3",
+        # Safety parameters that debug_force_arm overwrites (must be restored before flight)
+        "ARMING_CHECK",
+        "FS_THR_ENABLE",
+        "DISARM_DELAY",
+        "BRD_SAFETYENABLE",
+        "BRD_SAFETY_DEFLT",
     ]
 
     def __init__(self, state: VehicleState):
@@ -83,6 +105,11 @@ class MAVLinkRXListener:
             self._thread.join(timeout=0.2)
         self._thread = None
         self.master = None
+
+    def refresh_params(self):
+        """Re-read every CRITICAL_PARAMS entry from the Pixhawk (non-blocking)."""
+        self._param_queue_idx = 0
+        self._param_sync_rounds = 0
 
     def _poll_next_critical_param(self):
         """Requests one critical parameter at a time without blocking the RX thread."""

@@ -1,5 +1,6 @@
 # file: src/interfaces/MAVLink/state/vehicle_state.py
 import threading
+import time
 from typing import Any, Dict, List, Optional, Set
 from pymavlink import mavutil
 import math
@@ -51,11 +52,24 @@ class VehicleState:
         self._lock = threading.Lock()
         self._watched_packets: Set[str] = set(self.DEFAULT_WATCHED_PACKETS)
         self._latest_telemetry_cache: Dict[str, Dict[str, Any]] = {}
+        self._rx_time: Dict[str, float] = {}
         self._pixhawk_params: Dict[str, float] = {}
 
     def update_packet(self, pkt_type: str, data: Dict[str, Any]):
         with self._lock:
             self._latest_telemetry_cache[pkt_type] = data
+            self._rx_time[pkt_type] = time.time()
+
+    def get_packet_age(self, pkt_type: str) -> Optional[float]:
+        """Seconds since pkt_type was last received from the Pixhawk (None = never)."""
+        with self._lock:
+            t = self._rx_time.get(pkt_type)
+        return None if t is None else time.time() - t
+
+    def get_packet_with_time(self, pkt_type: str):
+        """(data, receive_time) for pkt_type, or (None, None)."""
+        with self._lock:
+            return self._latest_telemetry_cache.get(pkt_type), self._rx_time.get(pkt_type)
 
     def get_packet(self, pkt_type: str) -> Optional[Dict[str, Any]]:
         with self._lock:

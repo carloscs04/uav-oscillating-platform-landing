@@ -29,6 +29,14 @@ class VisionState:
         self.flow_seq: int = 0
         self.last_flow_ts: float = 0.0
 
+        # Accumulator: every camera flow sample (30 Hz) is summed here until the
+        # MAVLink feed (20 Hz) takes it, so no motion is lost between sends.
+        self._acc_rad_x: float = 0.0
+        self._acc_rad_y: float = 0.0
+        self._acc_dt_s: float = 0.0
+        self._acc_quality_sum: int = 0
+        self._acc_count: int = 0
+
     def update_aruco_pose(
         self,
         detected: bool,
@@ -84,6 +92,30 @@ class VisionState:
             self.flow_px_dy = round(float(px_dy), 2)
             self.flow_seq += 1
             self.last_flow_ts = time.time()
+
+            self._acc_rad_x += float(rad_x)
+            self._acc_rad_y += float(rad_y)
+            self._acc_dt_s += float(dt_s)
+            self._acc_quality_sum += int(quality)
+            self._acc_count += 1
+
+    def take_optical_flow(self) -> Optional[Dict[str, Any]]:
+        """Return all flow accumulated since the last call (summed angles, summed dt,
+        mean quality) and reset the accumulator. None if no new sample arrived."""
+        with self._lock:
+            if self._acc_count == 0:
+                return None
+            out = {
+                "rad_x": self._acc_rad_x,
+                "rad_y": self._acc_rad_y,
+                "dt_s": self._acc_dt_s,
+                "quality": int(round(self._acc_quality_sum / self._acc_count)),
+                "samples": self._acc_count,
+                "ts": self.last_flow_ts,
+            }
+            self._acc_rad_x = self._acc_rad_y = self._acc_dt_s = 0.0
+            self._acc_quality_sum = self._acc_count = 0
+            return out
 
     def get_optical_flow(self) -> Dict[str, Any]:
         """Return latest optical flow sample snapshot."""

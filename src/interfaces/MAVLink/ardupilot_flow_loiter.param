@@ -1,0 +1,50 @@
+# ArduPilot (ArduCopter 4.x) parameters for indoor Loiter with:
+#   - optical flow from the Pi camera, sent as MAVLink OPTICAL_FLOW (msg 100)
+#   - VL53L1X rangefinder, sent as MAVLink DISTANCE_SENSOR (pointing down)
+#   - no GPS, no compass
+#
+# Load in Mission Planner (Config > Full Parameter List > Load from file) and
+# REBOOT the Pixhawk. The onboard 'flowcheck' command compares the live values
+# with this file. Lines are NAME,VALUE ; '#' lines are comments.
+
+# --- EKF3 ---
+AHRS_EKF_TYPE,3
+EK3_ENABLE,1
+# Horizontal position: none (EKF dead-reckons a relative position from flow velocity)
+EK3_SRC1_POSXY,0
+# Horizontal velocity: optical flow
+EK3_SRC1_VELXY,5
+# Height: barometer, switching to the rangefinder when low (EK3_RNG_USE_HGT)
+EK3_SRC1_POSZ,1
+EK3_SRC1_VELZ,0
+# Yaw: none (gyro only, slow drift; no compass indoors). See flowcheck notes.
+EK3_SRC1_YAW,0
+# Use the rangefinder for height below 70% of its max range (4 m -> 2.8 m)
+EK3_RNG_USE_HGT,70
+# Use flow for navigation
+EK3_FLOW_USE,1
+# Camera + Pi + link delay in ms. Starting value; measure it with 'flowtest'.
+EK3_FLOW_DELAY,60
+
+# --- Optical flow (MAVLink) ---
+FLOW_TYPE,5
+# Axis mapping is done on the Pi (camera_driver/config.yaml), so keep 0 here.
+FLOW_ORIENT_YAW,0
+# Scale corrections (parts per thousand). Start at 0; 'flowtest' suggests values.
+FLOW_FXSCALER,0
+FLOW_FYSCALER,0
+
+# --- Rangefinder (MAVLink, pointing down) ---
+RNGFND1_TYPE,10
+RNGFND1_ORIENT,25
+
+# --- No compass ---
+COMPASS_ENABLE,0
+COMPASS_USE,0
+COMPASS_USE2,0
+COMPASS_USE3,0
+
+# --- Safety (debug_force_arm sets these to 0: restore before any real flight) ---
+ARMING_CHECK,1
+FS_THR_ENABLE,1
+DISARM_DELAY,10

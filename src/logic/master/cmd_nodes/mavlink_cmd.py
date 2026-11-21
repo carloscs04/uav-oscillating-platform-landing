@@ -26,6 +26,9 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("add_pkt", self.cmd_add_pkt, "Subscribe to MAVLink packet <PKT>", aliases=["watch_add"])
         self.register_cmd("rm_pkt", self.cmd_rm_pkt, "Unsubscribe from MAVLink packet <PKT>", aliases=["watch_remove"])
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
+        self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
+        self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
+        self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
 
     def _is_sim_active(self) -> bool:
         return bool(self.sim_ref and getattr(self.sim_ref, "active", False))
@@ -155,3 +158,26 @@ class MAVLinkCLI(BaseNodeCLI):
         data = self.manager.state.get_packet(pkt)
         self.log(f"{pkt} -> {data}", "STATUS")
         return str(data)
+
+    def cmd_flowcheck(self, _args: List[str]) -> str:
+        if not self.manager.is_healthy():
+            self.log("flowcheck: MAVLink is OFFLINE.", "ERROR")
+            return "MAVLINK_OFFLINE"
+        lines = self.manager.flow_check()
+        for tag, text in lines:
+            self.log(text, tag)
+        return f"FLOWCHECK_{lines[-1][0]}"
+
+    def cmd_flowtest(self, args: List[str]) -> str:
+        if not self.manager.is_healthy():
+            self.log("flowtest: MAVLink is OFFLINE.", "ERROR")
+            return "MAVLINK_OFFLINE"
+        seconds = float(args[0]) if args else 15.0
+        ok = self.manager.flow_test(max(5.0, min(60.0, seconds)), self.log)
+        return "FLOWTEST_STARTED" if ok else "FLOWTEST_REFUSED"
+
+    def cmd_flowwatch(self, args: List[str]) -> str:
+        seconds = float(args[0]) if args else 30.0
+        self.manager.flow_watch(max(1.0, min(300.0, seconds)), self.log)
+        return "FLOWWATCH_STARTED"
+
