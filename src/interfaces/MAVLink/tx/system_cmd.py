@@ -126,7 +126,6 @@ class SystemCommands:
     # MAV_CMD_PREFLIGHT_CALIBRATION param index (1-based) and value for each calibration
     CALIBRATIONS = {
         "gyro": (1, 1),    # gyro offsets (keep the vehicle perfectly still)
-        "baro": (3, 1),    # ground pressure / altitude
         "level": (5, 2),   # board level ("level horizon", trims AHRS_TRIM_X/Y)
     }
 

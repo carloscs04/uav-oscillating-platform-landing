@@ -132,7 +132,7 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("rm_pkt", self.cmd_rm_pkt, "Unsubscribe from MAVLink packet <PKT>", aliases=["watch_remove"])
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
         self.register_cmd("prearm", self.cmd_prearm, "Why won't it arm? Runs the Pixhawk pre-arm checks and lists failing sensors", aliases=["why", "checks"])
-        self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro>", aliases=["cal"])
+        self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level>", aliases=["cal"])
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
         self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
@@ -313,13 +313,12 @@ class MAVLinkCLI(BaseNodeCLI):
     CAL_HINTS = {
         "gyro": "Keep the drone completely STILL on the ground.",
         "level": "Drone must sit LEVEL on a flat surface (in its flying attitude) and still.",
-        "baro": "Keep the drone still.",
     }
 
     def cmd_calibrate(self, args: List[str]) -> str:
         kind = args[0].lower() if args else ""
         if kind not in self.CAL_HINTS:
-            self.log("Usage: calibrate <gyro|level|baro>", "ERROR")
+            self.log("Usage: calibrate <gyro|level>", "ERROR")
             return "CAL_USAGE"
         if not self.manager.is_healthy():
             self.log("calibrate: MAVLink is OFFLINE (no Pixhawk heartbeat). Is the Pixhawk powered?", "ERROR")
