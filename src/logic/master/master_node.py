@@ -480,7 +480,7 @@ class MasterNode:
         # 2. Global Supervisor Commands
         if verb == "help":
             msg = (
-                "Global: status | nodes | ping | sim <on|off> | start <node|all> | stop <node|all> | "
+                "Global: status | nodes | ping | axis | sim <on|off> | start <node|all> | stop <node|all> | "
                 "mission <start|stop|land> | abort | reset\n"
                 "RC-Master Prerequisite: Arm via RC sticks & set RC mode switch to GUIDED_NOGPS before 'mission start'.\n"
                 "Per-Node: <mavlink|camera|vision|distance|control> <help|status|methods|command...>"
@@ -491,6 +491,33 @@ class MasterNode:
         elif verb == "ping":
             self.state.append_cli_log("PONG! MasterNode link alive.", "OK")
             return "PONG"
+
+        elif verb == "axis":
+            def _run_axis_diag():
+                self.state.append_cli_log(
+                    "[AXIS] Iniciando lectura de ejes (6s)... Mueve el dron ADELANTE y luego a la DERECHA.",
+                    "SYSTEM",
+                )
+                sf = self.mavlink_node.sensor_feed
+                for _ in range(25):
+                    if not self._running:
+                        break
+                    lidar_m = sf._read_valid_lidar_m()
+                    flow = self.vision_state.get_optical_flow() if hasattr(self.vision_state, "get_optical_flow") else {}
+                    rad_x, rad_y = sf._aligned_flow_rads(flow)
+                    dist = lidar_m if lidar_m is not None else 0.0
+                    dx = rad_y * dist
+                    dy = -rad_x * dist
+                    self.state.append_cli_log(
+                        f"[AXIS] lidar={dist:.2f}m qual={flow.get('quality', 0)} "
+                        f"rad=({rad_x:+.4f}, {rad_y:+.4f}) -> step=({dx:+.4f}m Fwd, {dy:+.4f}m Right)",
+                        "INFO",
+                    )
+                    time.sleep(0.25)
+                self.state.append_cli_log("[AXIS] Lectura finalizada.", "OK")
+
+            threading.Thread(target=_run_axis_diag, daemon=True).start()
+            return "AXIS_DIAG_STARTED"
 
         elif verb == "sim":
             arg = rest[0].lower() if rest else ""

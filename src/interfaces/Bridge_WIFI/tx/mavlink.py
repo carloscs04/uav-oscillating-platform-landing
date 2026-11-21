@@ -1,3 +1,4 @@
+# file: src/interfaces/Bridge_WIFI/tx/mavlink.py
 import json
 import socket
 import threading
@@ -6,9 +7,8 @@ from typing import Any, Dict, Optional
 
 
 class MavlinkTransmitter(threading.Thread):
-    """Modular UDP transmitter for PX4 MAVLink Telemetry."""
+    """Modular UDP transmitter for PX4/ArduPilot MAVLink Telemetry."""
 
-    # Supported node alias identifiers for incoming command matching
     VALID_NODE_NAMES = {"MAVLink Node", "PX4-MAVLink Node"}
 
     def __init__(
@@ -21,7 +21,7 @@ class MavlinkTransmitter(threading.Thread):
         super().__init__(daemon=True)
         self.target_ip = kwargs.get("broadcast_ip", target_ip)
         self.port = port
-        self.mavlink_node = mavlink_node  # Este es el MAVLinkManager
+        self.mavlink_node = mavlink_node
         self.node_name = kwargs.get("node_name", "MAVLink Node")
 
         self.running = False
@@ -35,16 +35,13 @@ class MavlinkTransmitter(threading.Thread):
         target_node = command.get("node")
         legacy_node = command.get("legacy_node")
 
-        # Validate target node against supported alias identifiers
         if target_node in self.VALID_NODE_NAMES or legacy_node in self.VALID_NODE_NAMES:
             cmd_type = command.get("cmd") or command.get("command")
 
-            # Update telemetry packet filter selection
             new_filter = command.get("filter") or command.get("packet")
             if new_filter:
                 self.set_active_filter(new_filter)
 
-            # Handle stream activation toggles
             if cmd_type == "START_STREAM":
                 self.resume_stream()
             elif cmd_type == "STOP_STREAM":
@@ -96,30 +93,28 @@ class MavlinkTransmitter(threading.Thread):
             self._sock.close()
 
     def _build_packets_payload(self, elapsed: float) -> Dict[str, Any]:
-        """Pulls telemetry and health directly from VehicleState, bypassing master wrapper."""
-        payload = {}
+        """Pulls telemetry and health directly from VehicleState."""
+        payload: Dict[str, Any] = {}
 
         with self._lock:
             if self.mavlink_node and hasattr(self.mavlink_node, "state"):
                 try:
                     vehicle_state = self.mavlink_node.state
-                    
-                    # Extraer variables necesarias del master para calcular la salud
                     is_connected = getattr(self.mavlink_node, "connected", False)
                     rate_hz = 0.0
                     if hasattr(self.mavlink_node, "rx_listener") and self.mavlink_node.rx_listener:
                         rate_hz = getattr(self.mavlink_node.rx_listener, "current_rate_hz", 0.0)
 
-                    # 1. Extraer siempre la salud (bypassing filtros)
+                    # 1. Always export node health for UI matrix
                     if hasattr(vehicle_state, "export_node_health"):
                         payload["node_health"] = vehicle_state.export_node_health(rate_hz, is_connected)
 
-                    # 2. Extraer datos y aplicar el filtro
+                    # 2. Export telemetry packets (always keep heartbeat for armed flight logger)
                     if hasattr(vehicle_state, "export_telemetry_data"):
                         telemetry_data = vehicle_state.export_telemetry_data()
                         if isinstance(telemetry_data, dict):
                             for pkt_name, pkt_data in telemetry_data.items():
-                                if self.active_filter == "ALL" or self.active_filter == pkt_name:
+                                if self.active_filter == "ALL" or pkt_name in (self.active_filter, "heartbeat"):
                                     payload[pkt_name] = pkt_data
 
                     return payload
@@ -127,7 +122,6 @@ class MavlinkTransmitter(threading.Thread):
                 except Exception as e:
                     print(f"[MAVLINK_TX_ERR] Failed to pull data from state: {e}")
 
-            # Fallback en caso de que el nodo esté desconectado o falle
             payload["node_health"] = {
                 "status": "RECONNECTING",
                 "rate_hz": 0.0,

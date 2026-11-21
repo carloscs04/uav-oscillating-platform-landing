@@ -10,11 +10,18 @@ from pymavlink import mavutil
 class MAVLinkSensorFeed:
     """Dedicated 20Hz MAVLink transmitter injecting LiDAR, Optical Flow, and ExternalNav into Pixhawk EKF3."""
 
+    MIN_FLOW_HEIGHT_M = 0.15
+    # Sign multipliers aligning camera optical flow axes with ArduPilot body NED frame:
+    # +rad_y -> forward (+X body), -rad_x -> right (+Y body)
+    FLOW_SIGN_X = 1.0
+    FLOW_SIGN_Y = 1.0
+
     def __init__(self, rate_hz: float = 20.0):
         self.rate_hz = max(5.0, float(rate_hz))
         self.master: Optional[Any] = None
         self.distance_state: Optional[Any] = None
         self.vision_state: Optional[Any] = None
+        self.vehicle_state: Optional[Any] = None
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -38,9 +45,13 @@ class MAVLinkSensorFeed:
         with self._tx_lock:
             self.master = master
 
-    def bind_states(self, distance_state: Any = None, vision_state: Any = None):
-        self.distance_state = distance_state
-        self.vision_state = vision_state
+    def bind_states(self, distance_state: Any = None, vision_state: Any = None, vehicle_state: Any = None):
+        if distance_state is not None:
+            self.distance_state = distance_state
+        if vision_state is not None:
+            self.vision_state = vision_state
+        if vehicle_state is not None:
+            self.vehicle_state = vehicle_state
 
     def start(self):
         if self._running:
@@ -58,6 +69,8 @@ class MAVLinkSensorFeed:
 
     def _is_vehicle_armed(self, master: Any) -> bool:
         try:
+            if self.vehicle_state is not None and hasattr(self.vehicle_state, "is_armed"):
+                return bool(self.vehicle_state.is_armed())
             if hasattr(master, "motors_armed") and callable(master.motors_armed):
                 return bool(master.motors_armed())
         except Exception:
@@ -65,8 +78,12 @@ class MAVLinkSensorFeed:
         return False
 
     def _get_current_yaw_rad(self, master: Any) -> float:
-        """Reads the latest ATTITUDE yaw from pymavlink cache if available, defaulting to 0.0."""
+        """Reads live ATTITUDE yaw from VehicleState (preferred) or pymavlink cache."""
         try:
+            if self.vehicle_state is not None and hasattr(self.vehicle_state, "get_packet"):
+                att_pkt = self.vehicle_state.get_packet("ATTITUDE")
+                if att_pkt and "yaw" in att_pkt:
+                    return float(att_pkt["yaw"])
             att = master.messages.get("ATTITUDE") if hasattr(master, "messages") else None
             if att is not None and hasattr(att, "yaw"):
                 return float(att.yaw)
@@ -90,26 +107,30 @@ class MAVLinkSensorFeed:
             return dist_m
         return None
 
+    def _aligned_flow_rads(self, flow: dict) -> tuple[float, float]:
+        rad_x = self.FLOW_SIGN_X * float(flow.get("rad_x", 0.0))
+        rad_y = self.FLOW_SIGN_Y * float(flow.get("rad_y", 0.0))
+        return rad_x, rad_y
+
     def _integrate_odometry(self, flow: dict, ground_dist_m: Optional[float], yaw_rad: float):
         """Integrates optical flow angular displacement into local NED X/Y meters for ExternalNav."""
-        if ground_dist_m is None or ground_dist_m < 0.15:
+        if ground_dist_m is None or ground_dist_m < self.MIN_FLOW_HEIGHT_M:
+            # Keep origin anchored at (0, 0) while sitting on the ground
+            self._pos_x_m = 0.0
+            self._pos_y_m = 0.0
             return
 
         quality = int(flow.get("quality", 0))
         if quality < 50:
             return
 
-        # ArduPilot optical_flow_rad convention:
-        # integrated_x = rotation around X (roll rate * dt) -> lateral Y velocity
-        # integrated_y = rotation around Y (pitch rate * dt) -> forward X velocity
-        rad_x = float(flow.get("rad_x", 0.0))
-        rad_y = float(flow.get("rad_y", 0.0))
+        rad_x, rad_y = self._aligned_flow_rads(flow)
 
-        # Body-frame incremental displacement (meters)
+        # ArduPilot optical_flow_rad convention:
+        # +rad_y -> forward (+X body), -rad_x -> right (+Y body)
         dx_body = rad_y * ground_dist_m
         dy_body = -rad_x * ground_dist_m
 
-        # Rotate body displacement into local NED frame using current yaw
         cos_y = math.cos(yaw_rad)
         sin_y = math.sin(yaw_rad)
         self._pos_x_m += dx_body * cos_y - dy_body * sin_y
@@ -143,15 +164,17 @@ class MAVLinkSensorFeed:
         dt_s = max(1e-3, min(0.5, float(flow.get("dt_s", 0.033))))
         integration_time_us = int(round(dt_s * 1_000_000))
 
-        rad_x = float(flow.get("rad_x", 0.0))
-        rad_y = float(flow.get("rad_y", 0.0))
-        quality = max(0, min(255, int(flow.get("quality", 0))))
-
-        if ground_dist_m is not None and ground_dist_m > 0.0:
+        # Only report valid optical flow once airborne (>= 15 cm)
+        if ground_dist_m is not None and ground_dist_m >= self.MIN_FLOW_HEIGHT_M:
+            rad_x, rad_y = self._aligned_flow_rads(flow)
+            quality = max(0, min(255, int(flow.get("quality", 0))))
             distance = float(ground_dist_m)
             time_delta_distance_us = max(0, time_usec - self._last_lidar_us) if self._last_lidar_us > 0 else 0
         else:
-            distance = -1.0
+            rad_x = 0.0
+            rad_y = 0.0
+            quality = 0
+            distance = float(ground_dist_m) if ground_dist_m is not None else -1.0
             time_delta_distance_us = 0
 
         with self._tx_lock:
@@ -187,6 +210,24 @@ class MAVLinkSensorFeed:
             )
         self.vision_packets_sent += 1
 
+    def print_axis_check(self):
+        """Helper to verify body-frame flow direction in hand at >15cm without arming."""
+        lidar_m = self._read_valid_lidar_m()
+        if self.vision_state is None or not hasattr(self.vision_state, "get_optical_flow"):
+            print("[SensorFeed CHECK] vision_state not bound", flush=True)
+            return
+        flow = self.vision_state.get_optical_flow()
+        rad_x, rad_y = self._aligned_flow_rads(flow)
+        dist = lidar_m if lidar_m is not None else 0.0
+        dx = rad_y * dist
+        dy = -rad_x * dist
+        print(
+            f"[SensorFeed CHECK] lidar={dist:.2f}m qual={flow.get('quality', 0)} "
+            f"aligned_rad=({rad_x:+.4f}, {rad_y:+.4f}) -> body_step=({dx:+.4f}m Fwd, {dy:+.4f}m Right) "
+            f"ned_pos=({self._pos_x_m:+.2f}, {self._pos_y_m:+.2f})",
+            flush=True,
+        )
+
     def _feed_loop(self):
         period = 1.0 / self.rate_hz
         last_tick = time.monotonic()
@@ -200,7 +241,6 @@ class MAVLinkSensorFeed:
                 try:
                     armed = self._is_vehicle_armed(master)
                     if armed and not self._was_armed:
-                        # Reset local origin right at arming moment
                         self._pos_x_m = 0.0
                         self._pos_y_m = 0.0
                     self._was_armed = armed
@@ -219,7 +259,7 @@ class MAVLinkSensorFeed:
                             self._integrate_odometry(flow, lidar_m, yaw_rad)
                             self._send_optical_flow_rad(master, flow, lidar_m)
 
-                    # Send ExternalNav at 10Hz continuously (half of 20Hz loop rate)
+                    # Keep ExternalNav alive at 10Hz for EK3_SRC1_POSXY & EK3_SRC1_YAW = ExternalNav
                     if self._loop_count % 2 == 0:
                         self._send_vision_position_estimate(master, yaw_rad)
 

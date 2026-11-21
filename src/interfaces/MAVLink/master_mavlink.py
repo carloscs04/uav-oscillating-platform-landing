@@ -41,10 +41,21 @@ class MAVLinkManager:
         self.flight_cmd = FlightCommands()
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
         self.sensor_feed = MAVLinkSensorFeed(rate_hz=20.0)
+        self.sensor_feed.bind_states(vehicle_state=self.state)
 
     def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
-        """Binds LiDAR and Optical Flow state buffers to the 30Hz EKF3 sensor feed."""
-        self.sensor_feed.bind_states(distance_state=distance_state, vision_state=vision_state)
+        """Binds LiDAR, Optical Flow, and VehicleState buffers to the EKF3 sensor feed."""
+        self.sensor_feed.bind_states(
+            distance_state=distance_state,
+            vision_state=vision_state,
+            vehicle_state=self.state,
+        )
+
+    def check_axes(self, samples: int = 25, interval_s: float = 0.25):
+        """Runs on-demand optical flow axis check when triggered by user command."""
+        for _ in range(samples):
+            self.sensor_feed.print_axis_check()
+            time.sleep(interval_s)
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r") as f:
@@ -259,7 +270,7 @@ def _run_interactive_cli(manager: MAVLinkManager):
     print("      MAVLink Modular Interactive CLI Inspector        ")
     print("=======================================================")
     print(" Commands: arm, disarm, mode <MODE>, origin, force_arm, force_disarm")
-    print("           watch, add <PKT>, remove <PKT>, rate <SEC>, quit")
+    print("           watch, add <PKT>, remove <PKT>, rate <SEC>, axis, quit")
     print("=======================================================\n")
 
     while running:
@@ -314,6 +325,8 @@ def _run_interactive_cli(manager: MAVLinkManager):
             elif cmd == "rate" and len(parts) > 1:
                 display_interval = max(0.1, float(parts[1]))
                 print(f"[CLI] Print interval updated to {display_interval}s.")
+            elif cmd == "axis":
+                manager.check_axes()
             else:
                 print(f"[CLI Error] Unknown command or missing parameters: '{cmd_input}'")
 

@@ -6,7 +6,7 @@ import math
 
 
 class VehicleState:
-    """Thread-safe telemetry buffer storing live packet updates and watch lists."""
+    """Thread-safe telemetry buffer storing live packet updates, watch lists, and Pixhawk parameters."""
 
     KNOWN_PACKETS = [
         "HEARTBEAT",
@@ -51,6 +51,7 @@ class VehicleState:
         self._lock = threading.Lock()
         self._watched_packets: Set[str] = set(self.DEFAULT_WATCHED_PACKETS)
         self._latest_telemetry_cache: Dict[str, Dict[str, Any]] = {}
+        self._pixhawk_params: Dict[str, float] = {}
 
     def update_packet(self, pkt_type: str, data: Dict[str, Any]):
         with self._lock:
@@ -59,6 +60,15 @@ class VehicleState:
     def get_packet(self, pkt_type: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             return self._latest_telemetry_cache.get(pkt_type)
+
+    def update_param(self, param_id: str, value: float):
+        """Stores a fetched Pixhawk configuration parameter."""
+        with self._lock:
+            self._pixhawk_params[param_id] = value
+
+    def get_params(self) -> Dict[str, float]:
+        with self._lock:
+            return dict(self._pixhawk_params)
 
     def is_armed(self) -> bool:
         """Returns True if the latest HEARTBEAT indicates the drone is armed."""
@@ -106,7 +116,7 @@ class VehicleState:
         return {"vx": 0.0, "vy": 0.0, "vz": 0.0}
 
     def export_telemetry_data(self) -> Dict[str, Any]:
-        """Exports live telemetry packets without altering existing UI keys."""
+        """Exports live telemetry packets and cached Pixhawk parameters without altering existing UI keys."""
         att = self.get_packet("ATTITUDE") or {}
         sys_status = self.get_packet("SYS_STATUS") or {}
         hb = self.get_packet("HEARTBEAT") or {}
@@ -217,7 +227,8 @@ class VehicleState:
             "statustext": {
                 "severity": statustext.get("severity", -1),
                 "text": statustext.get("text", ""),
-            }
+            },
+            "pixhawk_params": self.get_params(),
         }
 
     def export_node_health(self, rate_hz: float, is_connected: bool) -> Dict[str, Any]:
