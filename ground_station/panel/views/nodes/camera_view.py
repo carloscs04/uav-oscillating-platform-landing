@@ -75,8 +75,28 @@ class CameraView(tk.LabelFrame):
 
         status = vis_rx.get_packet("status", {}) if vis_rx else {}
         tracking = str(status.get("tracking_state", "")).upper()
+        pt = (vis_rx.get_packet("pixel_target", {}) or {}) if vis_rx else {}
+        fresh = vis_rx is not None and time.time() - getattr(vis_rx, "last_seen", 0.0) <= 1.0
 
-        if pose.get("detected", False):
+        if fresh and pt.get("detected"):
+            # Where the controller wants to go (known marker by priority, else nearest unknown)
+            label = pt.get("source", "?")
+            approval = pt.get("approval")
+            if approval == "known":
+                self.lbl_target.config(text=f"TARGET: {label} (KNOWN)", fg=ACCENT_GREEN)
+            elif approval == "yes":
+                self.lbl_target.config(text=f"TARGET: {label} (UNKNOWN, followunknown YES)", fg=ACCENT_YELLOW)
+            elif approval == "no":
+                self.lbl_target.config(text=f"WANTS: {label} (UNKNOWN, BLOCKED)", fg="#FF6A00")
+            else:
+                self.lbl_target.config(text=f"WANTS: {label} (UNKNOWN) -> followunknown yes/no?",
+                                       fg=ACCENT_YELLOW)
+            if pt.get("x_m") is not None:
+                self.lbl_coords.config(text=f"x: {pt['x_m'] * 100:+.1f} cm | y: {pt['y_m'] * 100:+.1f} cm | "
+                                            f"z: {pt['h_m']:.2f} m (lidar)")
+            else:
+                self.lbl_coords.config(text=f"dx: {pt.get('du_px', 0):+.0f} px | dy: {pt.get('dv_px', 0):+.0f} px | no lidar")
+        elif pose.get("detected", False):
             x = float(pose.get("x", 0.0))
             y = float(pose.get("y", 0.0))
             z = float(pose.get("z", 0.0))
@@ -88,12 +108,7 @@ class CameraView(tk.LabelFrame):
                 self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
             self.lbl_coords.config(text=f"X: {x:+.2f} | Y: {y:+.2f} | Z: {z:+.2f} | Dist: {dist:.2f} m")
         else:
-            others = (vis_rx.get_packet("aruco_overlay", {}) or {}).get("others", []) if vis_rx else []
-            if others:
-                self.lbl_target.config(text=f"TARGET: NONE | OTHER: {others[0].get('label', '?')}",
-                                       fg=ACCENT_YELLOW)
-            else:
-                self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
+            self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
             self.lbl_coords.config(text="X: -- | Y: -- | Z: -- | Dist: -- m")
 
         # 2. Render Video Frame (Base64 JPEG from CameraReceiver on port 5003)
@@ -148,50 +163,42 @@ class CameraView(tk.LabelFrame):
         self.canvas.create_line(cx, cy - 14, cx, cy + 14, fill=FG_CYAN, width=2, tags=tag)
         self.canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=FG_CYAN, outline="", tags=tag)
 
-        primary = ov.get("primary", -1)
-        for m in ov.get("markers", []):
-            pts = [coord for u, v in m.get("c", []) for coord in (u * cw, v * ch)]
-            if len(pts) != 8:
-                continue
-            color = ACCENT_GREEN if m.get("id") == primary else ACCENT_YELLOW
-            self.canvas.create_polygon(pts, outline=color, fill="", width=2, tags=tag)
-            # first corner = printed top-left: shows the marker's orientation
-            self.canvas.create_oval(pts[0] - 3, pts[1] - 3, pts[0] + 3, pts[1] + 3,
-                                    fill=color, outline="", tags=tag)
-            self.canvas.create_text(pts[0], pts[1] - 10, text=f"ID {m.get('id')}", fill=color,
-                                    font=("Consolas", 8, "bold"), tags=tag)
-            self._draw_axes(m.get("ax"), cw, ch, tag)
-
-        # Discovery scan (`arucoscan on`): markers outside the configured pad (no pose: size
-        # unknown). Their centre is marked and, with the lidar height, converted to cm.
-        orange = "#FF9F1C"
-        for o in ov.get("others", []):
-            c = o.get("c", [])
+        # Every marker in view. green = registered (known_markers.yaml), yellow = unregistered
+        # but it is the one the controller wants (no known one visible), orange = unregistered.
+        orange, yellow = "#FF6A00", "#FFEB3B"   # clearly apart (the theme's amber is too close)
+        target = ov.get("target")
+        pt = vis_rx.get_packet("pixel_target", {}) or {}
+        for m in ov.get("items", []):
+            c = m.get("c", [])
             pts = [coord for u, v in c for coord in (u * cw, v * ch)]
             if len(pts) != 8:
                 continue
-            self.canvas.create_polygon(pts, outline=orange, fill="", width=2, dash=(6, 3), tags=tag)
-            self.canvas.create_text(pts[0], pts[1] - 10, anchor="sw", text=o.get("label", "?"),
-                                    fill=orange, font=("Consolas", 9, "bold"), tags=tag)
+            label, known, is_target = m.get("label", "?"), m.get("k", False), m.get("label") == target
+            color = ACCENT_GREEN if known else (yellow if is_target else orange)
+            style = {} if known else {"dash": (6, 3)}
+            self.canvas.create_polygon(pts, outline=color, fill="", width=3 if is_target else 2,
+                                       tags=tag, **style)
+            # first corner = printed top-left: shows the marker's orientation
+            self.canvas.create_oval(pts[0] - 3, pts[1] - 3, pts[0] + 3, pts[1] + 3,
+                                    fill=color, outline="", tags=tag)
+            text = label + ("  <- TARGET" if is_target else "")
+            self.canvas.create_text(pts[0], pts[1] - 8, anchor="sw", text=text, fill=color,
+                                    font=("Consolas", 9, "bold"), tags=tag)
             mu, mv = sum(p[0] for p in c) / 4.0, sum(p[1] for p in c) / 4.0
             ox, oy = mu * cw, mv * ch
-            self.canvas.create_line(ox - 12, oy, ox + 12, oy, fill=orange, width=2, tags=tag)
-            self.canvas.create_line(ox, oy - 12, ox, oy + 12, fill=orange, width=2, tags=tag)
-            self.canvas.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill=orange, outline="", tags=tag)
-            self.canvas.create_line(cx, cy, ox, oy, fill=orange, dash=(4, 3), tags=tag)
-            self._draw_axes(o.get("ax"), cw, ch, tag)
+            self.canvas.create_line(ox - 10, oy, ox + 10, oy, fill=color, width=2, tags=tag)
+            self.canvas.create_line(ox, oy - 10, ox, oy + 10, fill=color, width=2, tags=tag)
+            self._draw_axes(m.get("ax"), cw, ch, tag)
 
-        center = ov.get("center")
-        if center:
-            tx, ty = center[0] * cw, center[1] * ch
-            self.canvas.create_line(cx, cy, tx, ty, fill=ACCENT_GREEN, dash=(4, 3), tags=tag)
-            self.canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, outline=ACCENT_GREEN, width=2, tags=tag)
-        # Control measurement (computed on the Pi): marker centre vs the fixed cross in pixels,
+        # Control measurement (computed on the Pi): target centre vs the fixed cross in pixels,
         # x/y in cm = angle x lidar height. Same numbers the landing controller will use.
-        pt = vis_rx.get_packet("pixel_target", {}) or {}
         if pt.get("detected"):
+            approval = pt.get("approval")
             tx, ty = pt.get("un", 0.5) * cw, pt.get("vn", 0.5) * ch
-            self.canvas.create_line(cx, cy, tx, ty, fill="white", width=2, tags=tag)
+            go = approval in ("known", "yes")
+            style = {} if go else {"dash": (5, 4)}
+            self.canvas.create_line(cx, cy, tx, ty, fill="white" if go else yellow, width=2,
+                                    tags=tag, **style)
             if pt.get("x_m") is not None:
                 ex, ey, err = pt["x_m"] * 100, pt["y_m"] * 100, pt["err_m"] * 100
                 color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
@@ -201,12 +208,20 @@ class CameraView(tk.LabelFrame):
                 color = ACCENT_YELLOW
                 txt = (f"{pt.get('source', '?')}  dx={pt.get('du_px', 0):+6.1f} px  "
                        f"dy={pt.get('dv_px', 0):+6.1f} px  (no lidar: no cm)")
-            self.canvas.create_text(12, 12, anchor="nw", fill=color, font=("Consolas", 10, "bold"),
-                                    text=txt, tags=tag)
-            self.canvas.create_text(12, 30, anchor="nw", fill=COLOR_PLOT_TEXT, font=("Consolas", 9),
-                                    text=f"pixels dx={pt.get('du_px', 0):+6.1f} dy={pt.get('dv_px', 0):+6.1f}  "
-                                         f"angle {pt.get('angle_x_deg', 0):+5.1f}/{pt.get('angle_y_deg', 0):+5.1f} deg",
-                                    tags=tag)
+            state = {"known": "GOING TO (known)", "yes": "GOING TO (unknown, allowed)",
+                     "no": "WANTS (unknown) - BLOCKED: followunknown no",
+                     "ask": "WANTS (unknown) - waiting: followunknown yes/no"}.get(approval, "")
+            lines = [(txt, color, ("Consolas", 10, "bold")),
+                     (f"{state}   pixels dx={pt.get('du_px', 0):+6.1f} dy={pt.get('dv_px', 0):+6.1f}  "
+                      f"angle {pt.get('angle_x_deg', 0):+5.1f}/{pt.get('angle_y_deg', 0):+5.1f} deg",
+                      "white", ("Consolas", 9))]
+            for i, (text, fg, font) in enumerate(lines):
+                y0 = 8 + 18 * i
+                item = self.canvas.create_text(12, y0, anchor="nw", fill=fg, font=font, text=text, tags=tag)
+                x1, y1, x2, y2 = self.canvas.bbox(item)
+                bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418",
+                                                  outline="", tags=tag)
+                self.canvas.tag_lower(bg, item)
         self.canvas.tag_raise(tag)
 
     def _draw_axes(self, ax, cw, ch, tag):

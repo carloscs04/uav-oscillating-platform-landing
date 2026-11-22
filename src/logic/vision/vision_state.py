@@ -20,10 +20,14 @@ class VisionState:
         self.last_detection_ts: float = 0.0
         # Marker outlines of the latest processed frame, for drawing over the video on
         # the ground station (normalised 0..1 image coords, a few hundred bytes).
-        self.overlay: Dict[str, Any] = {"markers": [], "primary": -1, "center": None, "seq": 0}
+        self.overlay: Dict[str, Any] = {"items": [], "target": None, "seq": 0}
         # Discovery mode (CLI `arucoscan on`): the camera node also looks for markers of ANY
-        # family/ID at a few Hz and lists them in overlay["others"] (no pose: size unknown).
+        # family/ID at a few Hz (AprilTags etc.), not only the pad family.
         self.scan_any: bool = False
+        # Follow a target that is NOT in known_markers.yaml? None = not decided yet (the CLI
+        # asks), True / False = answered with `followunknown yes|no`. Never read from a file:
+        # starts undecided at every service start on purpose.
+        self.follow_unknown: Optional[bool] = None
         # Control measurement (src/logic/vision/pixel_target.py): centre of ANY marker in pixels
         # vs the optical axis -> angle; x/y in metres = angle x lidar height.
         self.pixel_target: Dict[str, Any] = {"detected": False}
@@ -82,37 +86,29 @@ class VisionState:
             if detected:
                 self.last_detection_ts = time.time()
 
-    def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1, principal_px=None,
-                       others=None, focal_px=None):
-        """markers: [(marker_id, corners (4, 2) px[, axes (4, 2) px]), ...] pad markers seen in
-        THIS frame; others: same with a text label instead of the id (any other marker).
-        axes = projected marker origin + ends of its X (red), Y (green), Z (blue) axes."""
+    def update_overlay(self, items, img_w: int, img_h: int, target_label=None, principal_px=None,
+                       focal_px=None):
+        """items: [(label, corners (4, 2) px, axes (4, 2) px or None, known: bool), ...] every
+        marker seen in THIS frame (label = "<FAMILY> #<ID>"); target_label = the one chosen
+        by target_select. axes = projected marker origin + ends of its X (red), Y (green),
+        Z (blue) axes. Coordinates are sent normalised 0..1."""
         w, h = float(max(1, img_w)), float(max(1, img_h))
 
         def norm(points):
             return [[round(float(u) / w, 4), round(float(v) / h, 4)] for u, v in points]
 
-        def entry(key, value, corners, axes=None):
-            e = {key: value, "c": norm(corners)}
+        out = []
+        for label, corners, axes, known in items:
+            e = {"label": str(label), "c": norm(corners), "k": bool(known)}
             if axes is not None:
                 e["ax"] = norm(axes)
-            return e
-
-        out, center = [], None
-        for item in markers:
-            e = entry("id", int(item[0]), *item[1:])
             out.append(e)
-            if e["id"] == int(primary_id):
-                c = e["c"]
-                center = [round(sum(p[0] for p in c) / 4.0, 4), round(sum(p[1] for p in c) / 4.0, 4)]
-        other_list = [entry("label", str(item[0]), *item[1:]) for item in (others or [])]
         # Principal point = where the optical axis hits the image = straight below the lens.
-        # x = y = 0 in aruco_pose means the marker sits exactly there (not the image centre).
+        # x = y = 0 in the pixel target means the marker sits exactly there.
         pp = norm([principal_px])[0] if principal_px is not None else self.overlay.get("pp")
         f = norm([focal_px])[0] if focal_px is not None else self.overlay.get("f")
         with self._lock:
-            self.overlay = {"markers": out, "primary": int(primary_id) if center else -1,
-                            "center": center, "pp": pp, "f": f, "others": other_list,
+            self.overlay = {"items": out, "target": target_label, "pp": pp, "f": f,
                             "seq": self.overlay.get("seq", 0) + 1}
 
     def update_pixel_target(self, target: Optional[Dict[str, Any]]):

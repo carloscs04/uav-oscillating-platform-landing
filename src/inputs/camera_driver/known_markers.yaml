@@ -1,0 +1,21 @@
+# Registered (known) markers. Edit this file, then `markers reload` in the CLI (or restart).
+#
+# Format: "<FAMILY> #<ID>", the same text the panel shows next to each marker.
+# Families: 4X4_50, APRILTAG_36h11, APRILTAG_25h9, APRILTAG_16h5, 5X5_1000, 6X6_1000,
+#           7X7_1000, ARUCO_ORIGINAL
+#
+# ORDER = PRIORITY: when several known markers are visible, the target is the one
+# highest in this list. Size is not needed: x, y come from pixels, z from the lidar.
+#
+# Panel colours:
+#   green  = known (registered here); the target one gets the white line
+#   yellow = not registered, but it is the one the controller would go to
+#            (only when no known marker is visible; nearest to the centre cross)
+#   orange = not registered, not chosen
+#
+# A target that is NOT registered is only followed after you allow it in the
+# terminal: `followunknown yes|no` (asked every time the service starts).
+known:
+  - "4X4_50 #10"
+  - "4X4_50 #20"
+  - "APRILTAG_36h11 #3"

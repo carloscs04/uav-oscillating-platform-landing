@@ -9,8 +9,12 @@ from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 class VisionCLI(BaseNodeCLI):
     """All VisionManager CLI commands and aliases."""
 
-    def __init__(self, manager, state, guard):
+    def __init__(self, manager, state, guard, camera_driver=None):
+        self.camera_driver = camera_driver  # CameraNode: owns the known-marker registry
         super().__init__("vision", manager, state, guard)
+        # Asks in the terminal when the target is a marker that is not registered
+        self._asked_label = None
+        threading.Thread(target=self._ask_loop, name="VisionAsk", daemon=True).start()
 
     def _register_commands(self):
         self.register_cmd("marker", self.cmd_marker, "Set target ArUco marker ID <id>", aliases=["set_target_marker", "aruco_id"])
@@ -19,6 +23,10 @@ class VisionCLI(BaseNodeCLI):
                           "Live ArUco pose, 2 lines/s [seconds] (hand tests)", aliases=["vwatch"])
         self.register_cmd("arucoscan", self.cmd_arucoscan,
                           "Also look for markers of ANY family/ID (debug) <on|off>", aliases=["vscan"])
+        self.register_cmd("followunknown", self.cmd_followunknown,
+                          "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
+        self.register_cmd("markers", self.cmd_markers,
+                          "List registered markers (priority order) [reload]", aliases=["known"])
         self.register_cmd("locked", self.cmd_locked, "Check whether target ArUco marker is locked", aliases=["is_target_locked"])
 
     def cmd_status(self, _args: List[str]) -> str:
@@ -57,11 +65,65 @@ class VisionCLI(BaseNodeCLI):
         on = args[0].lower() == "on"
         self.manager.state.scan_any = on
         if on:
-            self.log("arucoscan ON: AprilTags and other marker families are found ~5 Hz in a "
-                     "background thread (ArUco 4x4 of any ID are always found at camera rate).", "OK")
+            self.log("arucoscan ON: AprilTags and other marker families are found in a background "
+                     "thread (all families 2 Hz, known ones 10 Hz; ArUco 4x4 at camera rate).", "OK")
         else:
             self.log("arucoscan OFF.", "OK")
         return "ARUCOSCAN_" + ("ON" if on else "OFF")
+
+    def cmd_followunknown(self, args: List[str]) -> str:
+        state = self.manager.state
+        word = args[0].lower() if args else ""
+        value = {"yes": True, "y": True, "si": True, "true": True, "on": True,
+                 "no": False, "n": False, "false": False, "off": False, "ask": None}
+        if word not in value:
+            cur = getattr(state, "follow_unknown", None)
+            self.log(f"followunknown = {'ask (not decided)' if cur is None else ('YES' if cur else 'NO')}. "
+                     "Usage: followunknown <yes|no|ask>", "STATUS")
+            return "FOLLOWUNKNOWN_STATUS"
+        state.follow_unknown = value[word]
+        self._asked_label = None
+        if value[word] is True:
+            self.log("followunknown YES: if no registered marker is visible, the target is the "
+                     "unknown marker nearest the centre (yellow).", "WARN")
+        elif value[word] is False:
+            self.log("followunknown NO: only registered markers (green) are followed.", "OK")
+        else:
+            self.log("followunknown reset: you will be asked again.", "OK")
+        return "FOLLOWUNKNOWN_" + word.upper()
+
+    def cmd_markers(self, args: List[str]) -> str:
+        drv = self.camera_driver
+        if drv is None:
+            self.log("No camera driver on this machine.", "ERROR")
+            return "NO_CAMERA"
+        if args and args[0].lower() == "reload":
+            drv.reload_registry()
+            self.log("known_markers.yaml reloaded.", "OK")
+        reg = list(drv.registry)
+        if not reg:
+            self.log("No registered markers (src/inputs/camera_driver/known_markers.yaml).", "STATUS")
+        for i, label in enumerate(reg, 1):
+            self.log(f"  {i}. {label}", "STATUS")
+        return "MARKERS_OK"
+
+    def _ask_loop(self):
+        """When the chosen target is an unregistered marker and nobody decided yet, ask once per
+        marker. Nothing follows it until the answer is `followunknown yes`."""
+        while True:
+            time.sleep(0.5)
+            try:
+                state = self.manager.state
+                pt = state.get_pixel_target()
+                if not pt.get("detected") or pt.get("known") or getattr(state, "follow_unknown", None) is not None:
+                    continue
+                label = pt.get("source")
+                if label and label != self._asked_label:
+                    self._asked_label = label
+                    self.log(f"Unregistered marker {label} is the only target in view (yellow). "
+                             f"Go to it?  ->  followunknown yes  /  followunknown no", "WARN")
+            except Exception:  # noqa: BLE001
+                pass
 
     def cmd_arucowatch(self, args: List[str]) -> str:
         seconds = max(1.0, min(300.0, float(args[0]) if args else 30.0))
@@ -86,8 +148,10 @@ class VisionCLI(BaseNodeCLI):
                               f"|{pt['err_m'] * 100:5.1f}| z={pt['h_m'] * 100:5.1f} cm(lidar)")
                 else:
                     metric = "no lidar: no cm"
-                self.log(f"{pt.get('source', '?'):<20} px dx={pt['du_px']:+6.1f} dy={pt['dv_px']:+6.1f}  "
-                         f"{metric}  [{st['tracking_state']}]", "STATUS")
+                kind = {"known": "KNOWN", "yes": "UNKNOWN-go", "no": "UNKNOWN-blocked",
+                        "ask": "UNKNOWN-ask"}.get(pt.get("approval"), "?")
+                self.log(f"{pt.get('source', '?'):<20} {kind:<15} px dx={pt['du_px']:+6.1f} dy={pt['dv_px']:+6.1f}  "
+                         f"{metric}", "STATUS")
             else:
                 self.log(f"no marker  [{st['tracking_state']}]", "STATUS")
             time.sleep(0.5)

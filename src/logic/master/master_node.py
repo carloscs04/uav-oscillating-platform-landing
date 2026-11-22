@@ -109,7 +109,7 @@ class MasterNode:
         self.node_clis: Dict[str, BaseNodeCLI] = {
             "mavlink": MAVLinkCLI(self.mavlink_node, self.state, self.guard, sim_ref=self.simulator),
             "camera": CameraCLI(self.camera_node, self.state, self.guard),
-            "vision": VisionCLI(self.vision_node, self.state, self.guard),
+            "vision": VisionCLI(self.vision_node, self.state, self.guard, camera_driver=self._camera_driver),
             "distance": DistanceCLI(self.distance_node, self.state, self.guard),
             "control": ControlCLI(self.control_node, self.state, self.guard),
         }

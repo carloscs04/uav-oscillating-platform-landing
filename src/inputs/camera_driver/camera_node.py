@@ -16,6 +16,7 @@ from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.optical_flow import OpticalFlowEstimator
 from src.logic.vision.pixel_target import pixel_target
+from src.logic.vision.target_select import load_registry, select_target
 from src.logic.vision.tracker import TargetTracker
 
 UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
@@ -24,8 +25,9 @@ UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
 # so the scan runs only on request and at SCAN_HZ, never at camera rate.
 SCAN_DICTS = ("DICT_APRILTAG_36h11", "DICT_5X5_1000", "DICT_6X6_1000", "DICT_7X7_1000",
               "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_25h9", "DICT_APRILTAG_16h5")
-SCAN_HZ = 2.0          # full scan (all families) while nothing is found
-SCAN_LOCKED_HZ = 10.0  # once a family is found, only that family is re-checked, faster
+SCAN_HZ = 2.0          # full scan (all families): finds unknown markers of any family
+SCAN_FAST_HZ = 10.0    # in between, only the families of known markers + the current target
+SCAN_HOLD_S = 1.0      # a marker missed by one scan stays this long (no blinking outline)
 # Printed tags are often slightly bent / seen through lens distortion: the default 0.03
 # rejected a real AprilTag whose edges were not perfectly straight.
 SCAN_POLY_ACCURACY = 0.05
@@ -71,15 +73,29 @@ class CameraNode:
         self._thread: Optional[threading.Thread] = None
 
         self._scan_detectors = None
-        self._scan_found = []
+        self._scan_found = []      # [(label, corners, last_seen monotonic), ...]
+        self._scan_seen = {}       # label -> (corners, last_seen), only touched by the scan thread
         self._next_scan = 0.0
+        self._next_full_scan = 0.0
         self.scan_ms = 0.0
+
+        # Registered markers (known_markers.yaml), order = priority. `markers reload` in the CLI.
+        self.registry = []
+        self.reload_registry()
+        self._target_label = None
 
         self.fps = 0.0
         self.proc_ms = 0.0
         self.frames = 0
         self.error_count = 0
         self.last_error = ""
+
+    def reload_registry(self, path=None):
+        try:
+            self.registry = load_registry(path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[CAMERA_NODE Warning] known_markers.yaml not loaded: {e}")
+        return list(self.registry)
 
     # ------------------------------------------------------------- lifecycle
     def start(self):
@@ -255,28 +271,34 @@ class CameraNode:
         return pts.reshape(4, 2)
 
     def _publish_overlay(self, measurements, shape):
-        """Outlines + RGB axes of the markers in this frame -> VisionState (drawn by the ground
-        station, so the Pi only sends a few numbers per marker instead of an annotated image)."""
-        t = self.tracker.target()
-        primary = int(t["id"]) if t.get("detected") and t.get("in_view") else -1
-        markers, pad_ids = [], set()
-        for m in measurements:
+        """Every marker in this frame (pad family from the main detector, other families from
+        the scan) -> labelled outlines + RGB axes in VisionState, drawn by the ground station
+        (the Pi only sends a few numbers per marker, not an annotated image). Then the target
+        is chosen (known markers by priority, else the nearest unknown) for the pixel target."""
+        now = time.monotonic()
+        family = self.config["aruco"]["dictionary"].replace("DICT_", "")
+        cands, seen = [], set()  # (label, corners, axes, last_seen)
+        for m in measurements:  # configured pad IDs: real pose -> axes with the true size
             if m.corners is None:
                 continue
-            pad_ids.add(m.marker_id)
-            markers.append((m.marker_id, m.corners,
-                            self._marker_axes(m.corners, m.rvec, m.tvec, self.tracker.sizes_m.get(m.marker_id))))
+            seen.add(m.marker_id)
+            cands.append((f"{family} #{m.marker_id}", m.corners,
+                          self._marker_axes(m.corners, m.rvec, m.tvec, self.tracker.sizes_m.get(m.marker_id)), now))
         # Same family, any other ID (already decoded by the detector: no extra detection pass)
-        dict_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
-        others = [(f"{dict_name} #{i}", c, self._marker_axes(c))
-                  for i, c in getattr(self.tracker.detector, "last_all", []) if i not in pad_ids]
+        cands += [(f"{family} #{i}", c, self._marker_axes(c), now)
+                  for i, c in getattr(self.tracker.detector, "last_all", []) if i not in seen]
         if getattr(self.vision_state, "scan_any", False):
-            others += [(label, c, self._marker_axes(c)) for label, c in self._scan_found]
+            cands += [(label, c, self._marker_axes(c), t) for label, c, t in self._scan_found]
+
         K = getattr(self.model, "camera_matrix", None)
-        pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
+        pp = (float(K[0][2]), float(K[1][2])) if K is not None else (shape[1] / 2.0, shape[0] / 2.0)
         f = (float(K[0][0]), float(K[1][1])) if K is not None else None
-        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp, others, f)
-        self._publish_pixel_target(markers, others, primary, shape)
+        idx, known = select_target([(c[0], c[1]) for c in cands], self.registry, pp, self._target_label)
+        self._target_label = cands[idx][0] if idx is not None else None
+        rank = set(self.registry)
+        items = [(label, c, ax, label in rank) for label, c, ax, _t in cands]
+        self.vision_state.update_overlay(items, shape[1], shape[0], self._target_label, pp, f)
+        self._publish_pixel_target(cands[idx] if idx is not None else None, known, shape)
 
     def _lidar_height(self):
         st = self.height_state
@@ -285,22 +307,20 @@ class CameraNode:
         h = float(getattr(st, "distance_m", 0.0) or 0.0)
         return h if h > 0.03 else None
 
-    def _publish_pixel_target(self, markers, others, primary, shape):
-        """Control measurement: centre of the chosen marker (pad primary first, then any other
-        marker in view) vs the optical axis; z from the lidar."""
-        chosen = None
-        for marker_id, corners, _ax in markers:
-            if marker_id == primary:
-                chosen = (f"ID {marker_id}", corners)
-        if chosen is None and markers:
-            chosen = (f"ID {markers[0][0]}", markers[0][1])
-        if chosen is None and others:
-            chosen = (others[0][0], others[0][1])
+    def _publish_pixel_target(self, chosen, known, shape):
+        """Control measurement of the chosen marker: centre vs the optical axis (pixels -> cm
+        with the lidar height), z = lidar. `follow` says whether the controller may go to it:
+        always for a known marker, for an unknown one only after `followunknown yes`."""
         if chosen is None or self.model is None:
             self.vision_state.update_pixel_target(None)
             return
-        t = pixel_target(chosen[1], self.model.camera_matrix, self.model.dist_coeffs, self._lidar_height())
-        t.update({"detected": True, "source": chosen[0], "stamp": time.monotonic(),
+        label, corners, _ax, seen_at = chosen
+        allowed = getattr(self.vision_state, "follow_unknown", None)
+        approval = "known" if known else {None: "ask", True: "yes", False: "no"}[allowed]
+        t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, self._lidar_height())
+        t.update({"detected": True, "source": label, "known": bool(known),
+                  "follow": bool(known or allowed is True), "approval": approval,
+                  "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),
                   "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
         self.vision_state.update_pixel_target(t)
 
@@ -312,13 +332,23 @@ class CameraNode:
         worker = getattr(self, "_scan_thread", None)
         if worker is not None and worker.is_alive():
             return
-        self._next_scan = stamp + 1.0 / (SCAN_LOCKED_HZ if getattr(self, "_scan_family", None) else SCAN_HZ)
-        self._scan_thread = threading.Thread(target=self._scan_frame, args=(gray.copy(),),
+        self._next_scan = stamp + 1.0 / SCAN_FAST_HZ
+        if stamp >= self._next_full_scan:
+            self._next_full_scan = stamp + 1.0 / SCAN_HZ
+            families = None  # all
+        else:
+            # Known markers' families, plus the current target's, so the followed marker is
+            # refreshed at 10 Hz even when it is an unknown one
+            families = {label.split(" #")[0] for label in self.registry}
+            if self._target_label:
+                families.add(self._target_label.split(" #")[0])
+        self._scan_thread = threading.Thread(target=self._scan_frame, args=(gray.copy(), families),
                                              name="ArucoScan", daemon=True)
         self._scan_thread.start()
 
-    def _scan_frame(self, gray):
-        """Discovery: find markers of any family. Pad markers already tracked are skipped."""
+    def _scan_frame(self, gray, families=None):
+        """Find markers of the given families (None = all). The pad family is skipped: the main
+        detector already finds every ID of it at camera rate."""
         if self._scan_detectors is None:
             self._scan_detectors = []
             for name in SCAN_DICTS:
@@ -331,8 +361,7 @@ class CameraNode:
         t0 = time.perf_counter()
         main_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
         found, taken = [], []
-        family = getattr(self, "_scan_family", None)
-        detectors = [d for d in self._scan_detectors if d[0] == family] or self._scan_detectors
+        detectors = [d for d in self._scan_detectors if families is None or d[0] in families]
         for name, det in detectors:
             corners, ids, _ = det.detectMarkers(gray)
             if ids is None:
@@ -348,15 +377,15 @@ class CameraNode:
                     continue  # pad family: every ID is already outlined by the main pipeline
                 taken.append(centre)
                 found.append((f"{name} #{marker_id}", c))
-        # Remember the family that matched; if it stops matching, go back to the full scan.
-        self._scan_family = next((label.split(" #")[0] for label, _c in found), None)
-        # One missed scan (blur, motion) should not make the outline blink: keep the last
-        # result for up to ~1 s.
+        # One missed scan (blur, motion) should not make the outline blink: a marker stays
+        # SCAN_HOLD_S after it was last seen (its last_seen time goes with it -> age_s).
         now = time.monotonic()
-        if found or now - getattr(self, "_scan_found_at", 0.0) > 1.0:
-            self._scan_found = found
-            if found:
-                self._scan_found_at = now
+        seen = self._scan_seen
+        for label, c in found:
+            seen[label] = (c, now)
+        for label in [k for k, (_c, t) in seen.items() if now - t > SCAN_HOLD_S]:
+            del seen[label]
+        self._scan_found = [(label, c, t) for label, (c, t) in seen.items()]
         self.scan_ms = (time.perf_counter() - t0) * 1000.0
 
     def _run(self):
