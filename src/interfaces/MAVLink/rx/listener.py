@@ -39,6 +39,7 @@ class MAVLinkRXListener:
         "RNGFND1_MIN_CM",
         "RNGFND1_MAX_CM",
         "RNGFND1_GNDCLR",
+        "SURFTRAK_MODE",
         "COMPASS_ENABLE",
         "COMPASS_USE",
         "COMPASS_USE2",

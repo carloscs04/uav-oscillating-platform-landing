@@ -24,6 +24,7 @@ class VehicleState:
         "DISTANCE_SENSOR",
         "EKF_STATUS_REPORT",
         "VIBRATION",
+        "SCALED_PRESSURE",
         "POWER_STATUS",
         "HIGHRES_IMU",
         "NAV_CONTROLLER_OUTPUT",
@@ -46,6 +47,7 @@ class VehicleState:
         "NAV_CONTROLLER_OUTPUT",
         "SERVO_OUTPUT_RAW",
         "VIBRATION",
+        "SCALED_PRESSURE",
         "RC_CHANNELS"
     ]
 
@@ -61,6 +63,11 @@ class VehicleState:
         self._events: collections.deque = collections.deque(maxlen=200)
         # Pi-side sensor feed (OPTICAL_FLOW we send), exported for the ground station CSV
         self._sensor_feed: Any = None
+        # Barometer altitude relative to the ground pressure, which is averaged while
+        # DISARMED and frozen while ARMED (= height above the take-off point). Logged
+        # to compare against the lidar before trusting the baro as the height source.
+        self._baro_ref_hpa: Optional[float] = None
+        self._baro_rel_alt_m: Optional[float] = None
 
     EVENT_PACKETS = ("STATUSTEXT", "COMMAND_ACK")
 
@@ -68,9 +75,42 @@ class VehicleState:
         with self._lock:
             self._latest_telemetry_cache[pkt_type] = data
             self._rx_time[pkt_type] = time.time()
+            if pkt_type == "SCALED_PRESSURE":
+                self._update_baro_locked(data)
             if pkt_type in self.EVENT_PACKETS:
                 self._event_seq += 1
                 self._events.append((self._event_seq, time.time(), pkt_type, data))
+
+    BARO_REF_ALPHA = 0.05   # ~2 s smoothing at 10 Hz while disarmed
+
+    def _update_baro_locked(self, data: Dict[str, Any]):
+        p = float(data.get("press_abs", 0.0) or 0.0)
+        if p <= 0.0:
+            return
+        hb = self._latest_telemetry_cache.get("HEARTBEAT") or {}
+        armed = bool(hb.get("base_mode", 0) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        if self._baro_ref_hpa is None:
+            self._baro_ref_hpa = p
+        elif not armed:
+            self._baro_ref_hpa += self.BARO_REF_ALPHA * (p - self._baro_ref_hpa)
+        self._baro_rel_alt_m = 44330.77 * (1.0 - (p / self._baro_ref_hpa) ** 0.190263)
+
+    def reset_baro_reference(self):
+        """Next SCALED_PRESSURE becomes the new zero (used after 'calibrate baro')."""
+        with self._lock:
+            self._baro_ref_hpa = None
+
+    def _export_baro(self) -> Dict[str, Any]:
+        with self._lock:
+            d = self._latest_telemetry_cache.get("SCALED_PRESSURE") or {}
+            ref, alt = self._baro_ref_hpa, self._baro_rel_alt_m
+        return {
+            "press_hpa": round(float(d.get("press_abs", 0.0) or 0.0), 3),
+            "temp_c": round(float(d.get("temperature", 0) or 0) / 100.0, 2),
+            "rel_alt_m": round(alt, 3) if alt is not None else 0.0,
+            "ref_hpa": round(ref, 3) if ref is not None else 0.0,
+            "age_ms": self._age_ms("SCALED_PRESSURE"),
+        }
 
     def get_events_since(self, seq: int) -> List[tuple]:
         """(seq, rx_time, pkt_type, data) for every STATUSTEXT/COMMAND_ACK newer than seq."""
@@ -282,6 +322,7 @@ class VehicleState:
                 "age_ms": self._age_ms("VIBRATION"),
             },
             "pi_flow": self._export_pi_flow(),
+            "baro": self._export_baro(),
             "statustext_log": self._export_statustext_log(),
             "rc_channels": {
                 "roll_ch1": rc.get("chan1_raw", 0),

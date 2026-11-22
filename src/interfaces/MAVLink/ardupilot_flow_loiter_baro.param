@@ -1,0 +1,86 @@
+# BARO-HEIGHT PROFILE - load ONLY after the baro_rel_alt_m column in the ground
+# station CSV has been checked against the lidar in a normal (lidar-height) flight.
+# Same as ardupilot_flow_loiter.param except the two lines marked [BARO PROFILE]:
+# the height comes from the barometer, so flying over the 1 m landing platform does
+# NOT make the drone climb 1 m. The lidar is still used for flow scaling (EKF terrain
+# estimate), the LAND slow-down and by the Pi's own GUIDED_NOGPS landing controller.
+# Before every flight: drone still on the take-off spot, run 'calibrate baro'.
+# To go back: load ardupilot_flow_loiter_qgc.params (lidar height) and reboot.
+#
+# ArduPilot (ArduCopter 4.7) parameters for indoor Loiter with:
+#   - optical flow from the Pi camera, sent as MAVLink OPTICAL_FLOW (msg 100)
+#   - VL53L1X rangefinder, sent as MAVLink DISTANCE_SENSOR (pointing down)
+#   - no GPS, no compass
+#
+# QGroundControl: load ardupilot_flow_loiter_baro_qgc.params instead (same values, QGC
+# format, generated from this file with: python -m src.interfaces.MAVLink.flow_check).
+# Mission Planner: Config > Full Parameter List > Load from file.
+# Then REBOOT the Pixhawk. The onboard 'flowcheck' command compares the live values
+# with this file. Lines are NAME,VALUE ; '#' lines are comments.
+
+# --- EKF3 ---
+AHRS_EKF_TYPE,3
+EK3_ENABLE,1
+# Horizontal position: none (EKF dead-reckons a relative position from flow velocity)
+EK3_SRC1_POSXY,0
+# Horizontal velocity: optical flow
+EK3_SRC1_VELXY,5
+# [BARO PROFILE] Height: barometer = height above the take-off point. A step in the
+# floor (platform) no longer changes the height, and the height stays valid above the
+# lidar's ~2 m reach. Indoors expect +-0.1..0.3 m of slow baro drift.
+EK3_SRC1_POSZ,1
+EK3_SRC1_VELZ,0
+# Yaw: none (gyro only, slow drift; no compass indoors). See flowcheck notes.
+EK3_SRC1_YAW,0
+# Baro->rangefinder switching: off (rangefinder height would bring the platform step back)
+EK3_RNG_USE_HGT,-1
+# [BARO PROFILE] Surface tracking off: otherwise AltHold/Loiter follow the lidar and
+# still climb 1 m when the drone passes over the platform.
+SURFTRAK_MODE,0
+# Use flow for navigation
+EK3_FLOW_USE,1
+# Camera + Pi + link delay in ms, measured with 'flowtest' (2026-11-21: ~50 ms)
+EK3_FLOW_DELAY,50
+
+# --- Optical flow (MAVLink) ---
+FLOW_TYPE,5
+# Axis mapping is done on the Pi (camera_driver/config.yaml), so keep 0 here.
+FLOW_ORIENT_YAW,0
+# Scale corrections (parts per thousand). Start at 0; 'flowtest' suggests values.
+FLOW_FXSCALER,0
+FLOW_FYSCALER,0
+
+# --- Visual odometry: OFF (the Pi no longer sends VISION_POSITION_ESTIMATE;
+# leaving it on gives "PreArm: VisOdom: not healthy" and blocks arming) ---
+VISO_TYPE,0
+
+# --- Rangefinder (MAVLink, pointing down) ---
+RNGFND1_TYPE,10
+RNGFND1_ORIENT,25
+# Metres. VL53L1X is unreliable below 4 cm. Bench test 2026-11-21: over the bare
+# floor it fails above ~1.4 m ("signal fail"); over white card it is 100% valid at
+# 1.9 m. Fly over a light surface, below ~1.7 m.
+# RNGFND1_MAX also sets the Loiter (optical flow) height ceiling in EKF3:
+#   ceiling = max(0.7 * max_range - 1.0, 1.0) m, where max_range is the SMALLER of
+#   RNGFND1_MAX and the max_distance the Pi sends in DISTANCE_SENSOR (4.0 m, VL53L1X
+#   long mode). 4.0 -> 1.8 m ceiling, the most this lidar supports: it only reads the
+#   white tarp up to ~2.0 m, and above that the height source is lost. (2.2 -> 1.0 m.)
+RNGFND1_MIN,0.04
+RNGFND1_MAX,4.0
+# What the lidar reads with the drone standing on the floor (measured: ~0.088 m)
+RNGFND1_GNDCLR,0.09
+
+# --- No compass ---
+COMPASS_ENABLE,0
+COMPASS_USE,0
+COMPASS_USE2,0
+COMPASS_USE3,0
+
+# --- Safety (debug_force_arm sets these to 0: restore before any real flight) ---
+# ArduPilot 4.7+ (this vehicle runs 4.7.3): ARMING_SKIPCHK replaces ARMING_CHECK.
+# Set bits = checks SKIPPED, so 0 = run every pre-arm check.
+# (On ArduPilot 4.6 or older use ARMING_CHECK,1 instead.)
+ARMING_SKIPCHK,0
+# RC / throttle failsafe: 3 = always LAND (RTL needs a position; indoors, no GPS)
+FS_THR_ENABLE,3
+DISARM_DELAY,10

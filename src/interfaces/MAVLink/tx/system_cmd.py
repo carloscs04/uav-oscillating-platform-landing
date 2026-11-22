@@ -85,6 +85,7 @@ class SystemCommands:
         62: 10,   # NAV_CONTROLLER_OUTPUT
         36: 10,   # SERVO_OUTPUT_RAW
         1: 2,     # SYS_STATUS (sensor health bits, used by 'prearm')
+        29: 10,   # SCALED_PRESSURE (baro altitude column in the ground station CSV)
     }
 
     def request_message_intervals(self):
@@ -126,6 +127,7 @@ class SystemCommands:
     # MAV_CMD_PREFLIGHT_CALIBRATION param index (1-based) and value for each calibration
     CALIBRATIONS = {
         "gyro": (1, 1),    # gyro offsets (keep the vehicle perfectly still)
+        "baro": (3, 1),    # ground pressure = 0 m (needed before using the baro as height)
         "level": (5, 2),   # board level ("level horizon", trims AHRS_TRIM_X/Y)
     }
 

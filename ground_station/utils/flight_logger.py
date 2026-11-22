@@ -125,6 +125,11 @@ class FlightExperimentLogger:
         "pi_flow_samples",
         "pi_flow_age_ms",
         "pi_flow_tx_hz",
+        # Barometer (Pixhawk SCALED_PRESSURE): height above the take-off point
+        "baro_rel_alt_m",
+        "baro_press_hpa",
+        "baro_temp_c",
+        "baro_age_ms",
         # Power & System Health
         "voltage_v",
         "current_a",
@@ -274,6 +279,7 @@ class FlightExperimentLogger:
         vib = packets.get("vibration") or {}
         sys_st = packets.get("sys_status") or {}
         pif = packets.get("pi_flow") or {}
+        baro = packets.get("baro") or {}
 
         row = [
             self._current_codename,
@@ -341,6 +347,10 @@ class FlightExperimentLogger:
             pif.get("samples", 0),
             pif.get("age_ms", -1),
             pif.get("tx_hz", 0.0),
+            baro.get("rel_alt_m", 0.0),
+            baro.get("press_hpa", 0.0),
+            baro.get("temp_c", 0.0),
+            baro.get("age_ms", -1),
             sys_st.get("voltage_v", 0.0),
             sys_st.get("current_a", 0.0),
             sys_st.get("battery_pct", -1),
