@@ -211,12 +211,17 @@ class CameraView(tk.LabelFrame):
             state = {"known": "GOING TO (known)", "yes": "GOING TO (unknown, allowed)",
                      "no": "WANTS (unknown) - BLOCKED: followunknown no",
                      "ask": "WANTS (unknown) - waiting: followunknown yes/no"}.get(approval, "")
-            lines = [(txt, color, ("Consolas", 10, "bold")),
+            if pt.get("fwd_m") is not None:
+                txt2 = (f"drone frame (tilt-comp): fwd={pt['fwd_m'] * 100:+5.1f} cm  right={pt['right_m'] * 100:+5.1f} cm"
+                        f"   roll {pt.get('roll_deg', 0):+4.1f}  pitch {pt.get('pitch_deg', 0):+4.1f} deg")
+            else:
+                txt2 = "drone frame (tilt-comp): no attitude from the Pixhawk"
+            lines = [(txt, color, ("Consolas", 10, "bold")), (txt2, "white", ("Consolas", 9)),
                      (f"{state}   pixels dx={pt.get('du_px', 0):+6.1f} dy={pt.get('dv_px', 0):+6.1f}  "
                       f"angle {pt.get('angle_x_deg', 0):+5.1f}/{pt.get('angle_y_deg', 0):+5.1f} deg",
                       "white", ("Consolas", 9))]
             for i, (text, fg, font) in enumerate(lines):
-                y0 = 8 + 18 * i
+                y0 = 8 + 17 * i
                 item = self.canvas.create_text(12, y0, anchor="nw", fill=fg, font=font, text=text, tags=tag)
                 x1, y1, x2, y2 = self.canvas.bbox(item)
                 bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418",

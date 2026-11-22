@@ -15,7 +15,7 @@ from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_cali
 from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.optical_flow import OpticalFlowEstimator
-from src.logic.vision.pixel_target import pixel_target
+from src.logic.vision.pixel_target import pixel_target, tilt_compensate
 from src.logic.vision.target_select import load_registry, select_target
 from src.logic.vision.tracker import TargetTracker
 
@@ -46,10 +46,12 @@ class CameraNode:
         config_path: Optional[str] = None,
         camera: Optional[str] = None,
         height_state=None,
+        vehicle_state=None,
     ):
         self.camera_state = camera_state
         self.vision_state = vision_state
         self.height_state = height_state  # DistanceState (lidar): z for the pixel target
+        self.vehicle_state = vehicle_state  # MAVLink VehicleState: ATTITUDE for tilt compensation
         self.config = load_config(config_path)
         self.camera_name = camera  # None = active_camera from config.yaml
 
@@ -317,12 +319,38 @@ class CameraNode:
         label, corners, _ax, seen_at = chosen
         allowed = getattr(self.vision_state, "follow_unknown", None)
         approval = "known" if known else {None: "ask", True: "yes", False: "no"}[allowed]
-        t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, self._lidar_height())
+        lidar = self._lidar_height()
+        t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, lidar)
+        t.update(self._tilt_fields(t, lidar))
         t.update({"detected": True, "source": label, "known": bool(known),
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),
                   "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
         self.vision_state.update_pixel_target(t)
+
+    def _tilt_fields(self, t, lidar):
+        """Marker offset from the drone centre in the drone's forward/right directions:
+        raw (camera only) and tilt-compensated with the Pixhawk ATTITUDE (if recent)."""
+        out = {"fwd_raw_m": None, "right_raw_m": None, "fwd_m": None, "right_m": None,
+               "h_vert_m": None, "roll_deg": None, "pitch_deg": None, "att_age_s": None}
+        if lidar is not None:
+            out["fwd_raw_m"], out["right_raw_m"], _ = (round(v, 4) for v in
+                                                       tilt_compensate(t["nx"], t["ny"], 0.0, 0.0, lidar))
+        vs = self.vehicle_state
+        if vs is None or not hasattr(vs, "get_packet_with_time"):
+            return out
+        att, att_t = vs.get_packet_with_time("ATTITUDE")
+        if not att or att_t is None:
+            return out
+        age = time.time() - att_t
+        roll, pitch = float(att.get("roll", 0.0)), float(att.get("pitch", 0.0))
+        out.update({"roll_deg": round(float(np.degrees(roll)), 2), "pitch_deg": round(float(np.degrees(pitch)), 2),
+                    "att_age_s": round(age, 3)})
+        if lidar is not None and age < 0.3:
+            f, r, h = tilt_compensate(t["nx"], t["ny"], roll, pitch, lidar)
+            if f is not None:
+                out.update({"fwd_m": round(f, 4), "right_m": round(r, 4), "h_vert_m": round(h, 4)})
+        return out
 
     def _scan_any(self, gray, stamp):
         """Start a discovery scan on a copy of this frame in its own thread (~25-40 ms for all

@@ -1,9 +1,17 @@
 # File: src/logic/master/cmd_nodes/vision_cmd.py
 
+import csv
 import threading
 import time
+from pathlib import Path
 from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
+
+
+LOG_DIR = Path(__file__).resolve().parents[4] / "logs" / "vision"
+LOG_FIELDS = ("t", "source", "approval", "du_px", "dv_px", "nx", "ny", "h_m", "x_m", "y_m",
+              "fwd_raw_m", "right_raw_m", "fwd_m", "right_m", "h_vert_m", "roll_deg", "pitch_deg",
+              "att_age_s", "age_s")
 
 
 class VisionCLI(BaseNodeCLI):
@@ -24,6 +32,9 @@ class VisionCLI(BaseNodeCLI):
                           "Live ArUco pose, 2 lines/s [seconds] (hand tests)", aliases=["vwatch"])
         self.register_cmd("arucoscan", self.cmd_arucoscan,
                           "Also look for markers of ANY family/ID (debug) <on|off>", aliases=["vscan"])
+        self.register_cmd("visionlog", self.cmd_visionlog,
+                          "Record the pixel target + lidar + attitude to CSV, 20 Hz [seconds] | stop",
+                          aliases=["vlog"])
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
         self.register_cmd("markers", self.cmd_markers,
@@ -71,6 +82,38 @@ class VisionCLI(BaseNodeCLI):
         else:
             self.log("arucoscan OFF.", "OK")
         return "ARUCOSCAN_" + ("ON" if on else "OFF")
+
+    def cmd_visionlog(self, args: List[str]) -> str:
+        if args and args[0].lower() == "stop":
+            self._log_until = 0.0
+            return "VISIONLOG_STOP"
+        seconds = max(1.0, min(600.0, float(args[0]) if args else 60.0))
+        if getattr(self, "_log_thread", None) and self._log_thread.is_alive():
+            self.log("visionlog already recording (visionlog stop).", "WARN")
+            return "VISIONLOG_BUSY"
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        path = LOG_DIR / time.strftime("visionlog_%Y-%m-%d_%H%M%S.csv")
+        self._log_until = time.time() + seconds
+        self._log_thread = threading.Thread(target=self._log_loop, args=(path,), name="VisionLog", daemon=True)
+        self._log_thread.start()
+        self.log(f"visionlog recording {seconds:.0f} s -> {path}", "OK")
+        return "VISIONLOG_STARTED"
+
+    def _log_loop(self, path):
+        state, rows, t0 = self.manager.state, 0, time.time()
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(LOG_FIELDS)
+            while time.time() < self._log_until:
+                pt = state.get_pixel_target()
+                if pt.get("detected"):
+                    w.writerow([f"{time.time() - t0:.3f}"] + [pt.get(k, "") if pt.get(k) is not None else ""
+                                                              for k in LOG_FIELDS[1:]])
+                else:
+                    w.writerow([f"{time.time() - t0:.3f}", "none"] + [""] * (len(LOG_FIELDS) - 2))
+                rows += 1
+                time.sleep(0.05)
+        self.log(f"visionlog finished: {rows} rows in {path}", "OK")
 
     def cmd_followunknown(self, args: List[str]) -> str:
         state = self.manager.state
@@ -150,6 +193,11 @@ class VisionCLI(BaseNodeCLI):
                 if pt.get("x_m") is not None:
                     metric = (f"x={pt['x_m'] * 100:+6.1f} y={pt['y_m'] * 100:+6.1f} cm "
                               f"|{pt['err_m'] * 100:5.1f}| z={pt['h_m'] * 100:5.1f} cm(lidar)")
+                    if pt.get("fwd_m") is not None:
+                        metric += (f" || TILT-COMP fwd={pt['fwd_m'] * 100:+6.1f} right={pt['right_m'] * 100:+6.1f} cm"
+                                   f" roll={pt['roll_deg']:+5.1f} pitch={pt['pitch_deg']:+5.1f}")
+                    else:
+                        metric += " || no attitude"
                 else:
                     metric = "no lidar: no cm"
                 kind = {"known": "KNOWN", "yes": "UNKNOWN-go", "no": "UNKNOWN-blocked",

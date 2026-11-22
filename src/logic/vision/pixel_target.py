@@ -55,3 +55,30 @@ def pixel_target(corners, camera_matrix, dist_coeffs, height_m=None):
         out.update({"h_m": round(float(height_m), 3), "x_m": round(x, 4), "y_m": round(y, 4),
                     "err_m": round(float(np.hypot(x, y)), 4)})
     return out
+
+
+# Camera -> drone body, measured with the hand tests of 2026-11-22: moving the drone forward
+# made x grow, moving it right made y grow, so the marker is at forward = -x_cam, right = -y_cam.
+# Rows: body (forward, right) from camera (x, y). The camera's optical axis = body down.
+CAM_TO_BODY = ((-1.0, 0.0), (0.0, -1.0))
+
+
+def tilt_compensate(nx, ny, roll_rad, pitch_rad, lidar_range_m, cam_to_body=CAM_TO_BODY):
+    """Marker offset from the drone centre in a LEVEL frame aligned with the drone's heading.
+
+    A tilted drone sees a marker straight below it off-centre (~h*tan(tilt)); this removes it
+    using the Pixhawk attitude (ATTITUDE roll/pitch, ArduPilot convention: roll right-wing-down
+    positive, pitch nose-up positive). The lidar points along the body down axis, so its
+    reading is a slant range: vertical height = range * cos(roll) * cos(pitch) (flat floor).
+
+    Returns (forward_m, right_m, height_m)."""
+    (a, b), (c, d) = cam_to_body
+    v = np.array([a * nx + b * ny, c * nx + d * ny, 1.0])           # body (fwd, right, down)
+    cr, sr, cp, sp = np.cos(roll_rad), np.sin(roll_rad), np.cos(pitch_rad), np.sin(pitch_rad)
+    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    lv = ry @ rx @ v                                                  # level frame, yaw = heading
+    h = float(lidar_range_m) * cr * cp
+    if lv[2] <= 1e-6:
+        return None, None, h
+    return float(lv[0] / lv[2] * h), float(lv[1] / lv[2] * h), h
