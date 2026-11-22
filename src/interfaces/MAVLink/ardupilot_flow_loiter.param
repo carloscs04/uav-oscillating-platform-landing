@@ -47,8 +47,13 @@ RNGFND1_ORIENT,25
 # Metres. VL53L1X is unreliable below 4 cm. Bench test 2026-11-21: over the bare
 # floor it fails above ~1.4 m ("signal fail"); over white card it is 100% valid at
 # 1.9 m. Fly over a light surface, below ~1.7 m.
+# RNGFND1_MAX also sets the Loiter (optical flow) height ceiling in EKF3:
+#   ceiling = max(0.7 * max_range - 1.0, 1.0) m, where max_range is the SMALLER of
+#   RNGFND1_MAX and the max_distance the Pi sends in DISTANCE_SENSOR (4.0 m, VL53L1X
+#   long mode). 4.0 -> 1.8 m ceiling, the most this lidar supports: it only reads the
+#   white tarp up to ~2.0 m, and above that the height source is lost. (2.2 -> 1.0 m.)
 RNGFND1_MIN,0.04
-RNGFND1_MAX,2.2
+RNGFND1_MAX,4.0
 # What the lidar reads with the drone standing on the floor (measured: ~0.088 m)
 RNGFND1_GNDCLR,0.09
 
