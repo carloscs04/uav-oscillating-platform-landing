@@ -1,10 +1,13 @@
 # File: ground_station/receivers/nodes/vision_rx.py
 
+import atexit
 import json
 import socket
 import threading
 import time
 from typing import Dict, Any, Optional, Tuple
+
+from ground_station.utils.vision_logger import VisionExperimentLogger
 
 
 class VisionReceiver(threading.Thread):
@@ -32,6 +35,10 @@ class VisionReceiver(threading.Thread):
             "battery_pct": -1,
             "voltage_v": 0.0
         }
+
+        # CSV of the vision packets while the Pi's `visionlog` runs -> experiments/vision/<date>/
+        self.vision_logger = VisionExperimentLogger()
+        atexit.register(self.vision_logger.close)
 
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
@@ -112,6 +119,14 @@ class VisionReceiver(threading.Thread):
 
                     for pkt_type, pkt_data in incoming_packets.items():
                         self.packets[pkt_type] = pkt_data
+                    packets_snapshot = dict(self.packets)
+
+                try:
+                    self.vision_logger.process_packets(packets_snapshot)
+                except Exception as e:
+                    if not getattr(self, "_logger_err_shown", False):
+                        print(f"[GCS VISION_LOGGER_ERR] {type(e).__name__}: {e}")
+                        self._logger_err_shown = True
 
             except socket.timeout:
                 continue
@@ -124,3 +139,4 @@ class VisionReceiver(threading.Thread):
 
     def stop(self):
         self.running = False
+        self.vision_logger.close()

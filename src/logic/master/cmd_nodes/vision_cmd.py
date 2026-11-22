@@ -1,20 +1,12 @@
 # File: src/logic/master/cmd_nodes/vision_cmd.py
 
-import csv
 import threading
 import time
-from pathlib import Path
 from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 
 
 # <repo>/experiments/vision/<date>/ (next to experiments/flights/, same layout)
-LOG_DIR = Path(__file__).resolve().parents[4] / "experiments" / "vision"
-LOG_FIELDS = ("t", "source", "approval", "du_px", "dv_px", "nx", "ny", "h_m", "x_m", "y_m",
-              "fwd_raw_m", "right_raw_m", "fwd_m", "right_m", "h_vert_m", "roll_deg", "pitch_deg",
-              "att_age_s", "age_s")
-
-
 class VisionCLI(BaseNodeCLI):
     """All VisionManager CLI commands and aliases."""
 
@@ -85,6 +77,10 @@ class VisionCLI(BaseNodeCLI):
         return "ARUCOSCAN_" + ("ON" if on else "OFF")
 
     def cmd_visionlog(self, args: List[str]) -> str:
+        """Ask the ground station to record the vision packets (pixel target, lidar, tilt-
+        compensated offset, roll/pitch) to experiments/vision/<date>/ ON THE LAPTOP. Nothing is
+        written on the Pi: it only raises a flag in the vision telemetry."""
+        state = self.manager.state
         if args and args[0].lower() == "stop":
             self._log_until = 0.0
             return "VISIONLOG_STOP"
@@ -92,30 +88,20 @@ class VisionCLI(BaseNodeCLI):
         if getattr(self, "_log_thread", None) and self._log_thread.is_alive():
             self.log("visionlog already recording (visionlog stop).", "WARN")
             return "VISIONLOG_BUSY"
-        day_dir = LOG_DIR / time.strftime("%Y-%m-%d")
-        day_dir.mkdir(parents=True, exist_ok=True)
-        path = day_dir / time.strftime("visionlog_%H-%M-%S.csv")
+        name = time.strftime("visionlog_%H-%M-%S")
         self._log_until = time.time() + seconds
-        self._log_thread = threading.Thread(target=self._log_loop, args=(path,), name="VisionLog", daemon=True)
+        state.vision_log = {"rec": True, "name": name}
+        self._log_thread = threading.Thread(target=self._log_loop, args=(name,), name="VisionLog", daemon=True)
         self._log_thread.start()
-        self.log(f"visionlog recording {seconds:.0f} s -> {path}", "OK")
+        self.log(f"visionlog {seconds:.0f} s: the ground station records experiments/vision/"
+                 f"{time.strftime('%Y-%m-%d')}/{name}.csv (keep the panel open)", "OK")
         return "VISIONLOG_STARTED"
 
-    def _log_loop(self, path):
-        state, rows, t0 = self.manager.state, 0, time.time()
-        with open(path, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(LOG_FIELDS)
-            while time.time() < self._log_until:
-                pt = state.get_pixel_target()
-                if pt.get("detected"):
-                    w.writerow([f"{time.time() - t0:.3f}"] + [pt.get(k, "") if pt.get(k) is not None else ""
-                                                              for k in LOG_FIELDS[1:]])
-                else:
-                    w.writerow([f"{time.time() - t0:.3f}", "none"] + [""] * (len(LOG_FIELDS) - 2))
-                rows += 1
-                time.sleep(0.05)
-        self.log(f"visionlog finished: {rows} rows in {path}", "OK")
+    def _log_loop(self, name):
+        while time.time() < self._log_until:
+            time.sleep(0.1)
+        self.manager.state.vision_log = {"rec": False, "name": name}
+        self.log(f"visionlog finished ({name}.csv on the ground station).", "OK")
 
     def cmd_followunknown(self, args: List[str]) -> str:
         state = self.manager.state

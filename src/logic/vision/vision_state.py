@@ -28,6 +28,9 @@ class VisionState:
         # asks), True / False = answered with `followunknown yes|no`. Never read from a file:
         # starts undecided at every service start on purpose.
         self.follow_unknown: Optional[bool] = None
+        # CLI `visionlog`: the GROUND STATION records the vision packets to CSV while rec is
+        # True (nothing is written on the Pi). name = the CSV file name it uses.
+        self.vision_log: Dict[str, Any] = {"rec": False, "name": ""}
         # Control measurement (src/logic/vision/pixel_target.py): centre of ANY marker in pixels
         # vs the optical axis -> angle; x/y in metres = angle x lidar height.
         self.pixel_target: Dict[str, Any] = {"detected": False}
@@ -201,6 +204,7 @@ class VisionState:
                 },
                 "aruco_overlay": dict(self.overlay),
                 "pixel_target": dict(self.pixel_target),
+                "vision_log": dict(self.vision_log),
                 "status": {
                     "target_locked": self.aruco_detected,
                     "tracking_state": self.tracking_state,
