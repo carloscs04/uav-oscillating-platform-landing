@@ -135,10 +135,13 @@ class CameraView(tk.LabelFrame):
         ch = self.canvas.winfo_height() or 240
         tag = "aruco_overlay"
 
-        # Image centre = straight below the camera (where the controller wants the target)
-        cx, cy = cw / 2, ch / 2
-        self.canvas.create_line(cx - 10, cy, cx + 10, cy, fill=FG_CYAN, tags=tag)
-        self.canvas.create_line(cx, cy - 10, cx, cy + 10, fill=FG_CYAN, tags=tag)
+        # Fixed reference: the optical axis (principal point from the calibration) = straight
+        # below the lens. The camera is mounted at the drone centre, so this is the drone centre.
+        pp = ov.get("pp") or [0.5, 0.5]
+        cx, cy = pp[0] * cw, pp[1] * ch
+        self.canvas.create_line(cx - 14, cy, cx + 14, cy, fill=FG_CYAN, width=2, tags=tag)
+        self.canvas.create_line(cx, cy - 14, cx, cy + 14, fill=FG_CYAN, width=2, tags=tag)
+        self.canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=FG_CYAN, outline="", tags=tag)
 
         primary = ov.get("primary", -1)
         for m in ov.get("markers", []):
@@ -158,6 +161,14 @@ class CameraView(tk.LabelFrame):
             tx, ty = center[0] * cw, center[1] * ch
             self.canvas.create_line(cx, cy, tx, ty, fill=ACCENT_GREEN, dash=(4, 3), tags=tag)
             self.canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, outline=ACCENT_GREEN, width=2, tags=tag)
+            # Offset marker <-> fixed point, metres from the pose (x right, y down in the image)
+            pose = vis_rx.get_packet("aruco_pose", {}) or {}
+            ex, ey = float(pose.get("x", 0.0)) * 100, float(pose.get("y", 0.0)) * 100
+            err = (ex ** 2 + ey ** 2) ** 0.5
+            color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
+            self.canvas.create_text(12, 12, anchor="nw", fill=color, font=("Consolas", 10, "bold"),
+                                    text=f"OFFSET  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm",
+                                    tags=tag)
         self.canvas.tag_raise(tag)
 
     def _render_battery_overlay(self):

@@ -213,7 +213,9 @@ class CameraNode:
         t = self.tracker.target()
         primary = int(t["id"]) if t.get("detected") and t.get("in_view") else -1
         markers = [(m.marker_id, m.corners) for m in measurements if m.corners is not None]
-        self.vision_state.update_overlay(markers, shape[1], shape[0], primary)
+        K = getattr(self.model, "camera_matrix", None)
+        pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
+        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp)
 
     def _run(self):
         failures, last_stamp, retry_delay, next_preview = 0, None, 1.0, 0.0

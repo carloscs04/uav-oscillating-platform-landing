@@ -67,7 +67,8 @@ class VisionCLI(BaseNodeCLI):
             seen = ",".join(str(m["id"]) for m in ov.get("markers", [])) or "-"
             if p["detected"]:
                 self.log(f"{st['tracking_state']:<9} id={p['id']:<3} x={p['x'] * 100:+6.1f} "
-                         f"y={p['y'] * 100:+6.1f} z={p['z'] * 100:6.1f} cm  yaw={p['yaw']:+6.1f}  "
+                         f"y={p['y'] * 100:+6.1f} z={p['z'] * 100:6.1f} cm  "
+                         f"off={((p['x'] ** 2 + p['y'] ** 2) ** 0.5) * 100:5.1f} cm  yaw={p['yaw']:+6.1f}  "
                          f"seen=[{seen}]", "STATUS")
             else:
                 self.log(f"{st['tracking_state']:<9} no marker  seen=[{seen}]", "STATUS")
