@@ -334,6 +334,8 @@ def watch(vehicle_state: Any, feed: Any, seconds: float, log: Callable[[str, str
           stop: Optional[threading.Event] = None):
     """One line per second for the walk test."""
     t_end = time.time() + seconds
+    p0: Optional[float] = None   # baro pressure and lidar height at start
+    h0 = 0.0
     while time.time() < t_end and not (stop and stop.is_set()):
         lf = getattr(feed, "last_flow", {}) or {}
         of = vehicle_state.get_packet("OPTICAL_FLOW") or {}
@@ -341,10 +343,22 @@ def watch(vehicle_state: Any, feed: Any, seconds: float, log: Callable[[str, str
         ekf = vehicle_state.get_packet("EKF_STATUS_REPORT") or {}
         h = lf.get("height_m")
         rel = bool(int(ekf.get("flags", 0)) & (8 | 256))
+        # Baro vs lidar, both as height gained since flowwatch started (baro zeroed on
+        # the pressure at start, so it is valid in the in-hand lift test while disarmed)
+        sp = vehicle_state.get_packet("SCALED_PRESSURE") or {}
+        p_now = float(sp.get("press_abs", 0.0) or 0.0)
+        if p0 is None and p_now > 0 and h is not None:
+            p0, h0 = p_now, h
+        baro_txt = ""
+        if p0 and p_now > 0:
+            b = 44330.77 * (1.0 - (p_now / p0) ** 0.190263)
+            baro_txt = f" baro={b:+.2f}m"
+            if h is not None:
+                baro_txt += f" lidar={h - h0:+.2f}m diff={b - (h - h0):+.2f}"
         log(f"h={h if h is not None else -1:.2f}m piQ={lf.get('raw_quality', 0):3d} "
             f"fcQ={of.get('quality', 0):3d} "
             f"EKF pos=({lp.get('x', 0):+.2f}, {lp.get('y', 0):+.2f}) v=({lp.get('vx', 0):+.2f}, {lp.get('vy', 0):+.2f}) "
-            f"rel={'OK' if rel else 'NO'} | bench=({feed._pos_x_m:+.2f}, {feed._pos_y_m:+.2f})", "STATUS")
+            f"rel={'OK' if rel else 'NO'} | bench=({feed._pos_x_m:+.2f}, {feed._pos_y_m:+.2f}){baro_txt}", "STATUS")
         time.sleep(1.0)
 
 
