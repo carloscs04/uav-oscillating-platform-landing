@@ -57,6 +57,31 @@ aruco:
   sizes_mm: {}                 # per-ID override, e.g. {32: 40.0} for a small nested marker
   max_reproj_err_px: 2.0       # poses fitting worse than this are flagged as unreliable
 
+# Landing mat: several markers at known positions, treated as ONE rigid pad.
+# Printed with: python3 tests/vision/make_pad.py  (A4 speckle tiles + marker sheets).
+# Pad frame, seen from above, millimetres:
+#   origin = where the DRONE CENTRE touches down (mat centre)
+#   x = right, y = FRONT (the heading the drone lands with), z = up
+# Every marker is glued with its printed top edge towards FRONT.
+# Not used by the onboard tracker yet (aruco.ids above still only reports ID 10).
+# After printing and gluing: MEASURE each black square and each centre position
+# and replace the designed values below with the measured ones.
+landing_pad:
+  dictionary: DICT_4X4_50
+  mat_mm: [762, 762]             # 30 x 30 in
+  # Camera lens position relative to the drone centre (x right, y front). MEASURE IT.
+  # The touchdown marker (ID 20) must sit here, so the camera is above it when landed;
+  # if you change this, move ID 20 to the same point and ID 10 100 mm to its left.
+  camera_offset_mm: [0, 0]
+  markers:
+    # id, black square side, white margin (cut line) around it, centre position
+    - {id: 20, size_mm: 25,  margin_mm: 10, center_mm: [0, 0]}        # touchdown, 0.09-0.6 m
+    - {id: 10, size_mm: 100, margin_mm: 17, center_mm: [-100, 0]}     # main approach, 0.33-2.5 m
+    - {id: 31, size_mm: 50,  margin_mm: 10, center_mm: [-280, 280]}   # corners: steadier pose,
+    - {id: 32, size_mm: 50,  margin_mm: 10, center_mm: [280, 280]}    # backup when ID 10 has glare
+    - {id: 33, size_mm: 50,  margin_mm: 10, center_mm: [-280, -280]}  # or the drone is off-centre
+    - {id: 34, size_mm: 50,  margin_mm: 10, center_mm: [280, -280]}
+
 # Onboard vision node (src/inputs/camera_driver/master_camera.py).
 # Onboard camera node (src/inputs/camera_driver/camera_node.py). It fills
 # CameraState (video preview, port 5003) and VisionState (aruco_pose, port 5006).
