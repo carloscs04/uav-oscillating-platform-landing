@@ -119,10 +119,11 @@ class VisionReceiver(threading.Thread):
 
                     for pkt_type, pkt_data in incoming_packets.items():
                         self.packets[pkt_type] = pkt_data
+                    fresh_keys = set(incoming_packets)
                     packets_snapshot = dict(self.packets)
 
                 try:
-                    self.vision_logger.process_packets(packets_snapshot)
+                    self.vision_logger.process_packets(packets_snapshot, fresh=fresh_keys)
                 except Exception as e:
                     if not getattr(self, "_logger_err_shown", False):
                         print(f"[GCS VISION_LOGGER_ERR] {type(e).__name__}: {e}")

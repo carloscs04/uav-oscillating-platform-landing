@@ -11,6 +11,9 @@ class VisionTransmitter(threading.Thread):
     """Dedicated UDP transmitter for ArUco marker detection and pose telemetry."""
 
     VALID_NODE_NAMES = {"Vision-ArUco Node", "Aruco-Perception Node", "Vision Node"}
+    # Always sent, whatever packet the terminal filter shows: the video overlay, the landing
+    # law and the ground-station CSV logger depend on them (a filter froze them on 2026-11-22).
+    ALWAYS_SEND = {"pixel_target", "aruco_overlay", "landing_shadow", "vision_log", "status"}
 
     def __init__(self, target_ip: str = "127.0.0.1", port: int = 5006, vision_node: Optional[Any] = None, **kwargs):
         super().__init__(daemon=True)
@@ -105,7 +108,8 @@ class VisionTransmitter(threading.Thread):
                         telemetry_data = state.export_telemetry_data()
                         if isinstance(telemetry_data, dict):
                             for pkt_name, pkt_data in telemetry_data.items():
-                                if self.active_filter == "ALL" or self.active_filter == pkt_name:
+                                if (self.active_filter == "ALL" or self.active_filter == pkt_name
+                                        or pkt_name in self.ALWAYS_SEND):
                                     payload[pkt_name] = pkt_data
 
                     if payload:

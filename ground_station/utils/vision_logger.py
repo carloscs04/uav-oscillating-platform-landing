@@ -34,7 +34,10 @@ class VisionExperimentLogger:
         self._t0 = 0.0
         self._rows = 0
 
-    def process_packets(self, packets: Dict[str, Any]):
+    def process_packets(self, packets: Dict[str, Any], fresh=None):
+        """packets = latest value of every packet; fresh = names that came in THIS datagram.
+        A row is written only when pixel_target is fresh, so a cached (stale) value is never
+        repeated in the CSV."""
         flag = packets.get("vision_log") or {}
         rec, name = bool(flag.get("rec")), str(flag.get("name") or "")
         with self._lock:
@@ -43,7 +46,7 @@ class VisionExperimentLogger:
                 self._open_locked(name or datetime.now().strftime("visionlog_%H-%M-%S"))
             elif not rec and self._file is not None:
                 self._close_locked()
-            if self._file is not None:
+            if self._file is not None and (fresh is None or "pixel_target" in fresh):
                 self._write_locked(packets)
 
     def _open_locked(self, name: str):
