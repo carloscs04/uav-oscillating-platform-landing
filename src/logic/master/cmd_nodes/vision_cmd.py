@@ -17,6 +17,8 @@ class VisionCLI(BaseNodeCLI):
         self.register_cmd("pose", self.cmd_pose, "Read 3D relative pose (x, y, z, yaw) of target ArUco", aliases=["get_target_pose"])
         self.register_cmd("arucowatch", self.cmd_arucowatch,
                           "Live ArUco pose, 2 lines/s [seconds] (hand tests)", aliases=["vwatch"])
+        self.register_cmd("arucoscan", self.cmd_arucoscan,
+                          "Also look for markers of ANY family/ID (debug) <on|off>", aliases=["vscan"])
         self.register_cmd("locked", self.cmd_locked, "Check whether target ArUco marker is locked", aliases=["is_target_locked"])
 
     def cmd_status(self, _args: List[str]) -> str:
@@ -47,6 +49,21 @@ class VisionCLI(BaseNodeCLI):
         self.log(f"is_target_locked -> {locked}", "STATUS")
         return str(locked)
 
+    def cmd_arucoscan(self, args: List[str]) -> str:
+        if not args or args[0].lower() not in ("on", "off"):
+            on = bool(getattr(self.manager.state, "scan_any", False))
+            self.log(f"arucoscan is {'ON' if on else 'OFF'}. Usage: arucoscan <on|off>", "STATUS")
+            return "ARUCOSCAN_STATUS"
+        on = args[0].lower() == "on"
+        self.manager.state.scan_any = on
+        if on:
+            self.log("arucoscan ON: markers of any family are outlined in ORANGE (name #id) on the "
+                     "video, ~3 Hz. Only the configured pad markers get a pose. Turn it off before "
+                     "flying (extra CPU).", "WARN")
+        else:
+            self.log("arucoscan OFF.", "OK")
+        return "ARUCOSCAN_" + ("ON" if on else "OFF")
+
     def cmd_arucowatch(self, args: List[str]) -> str:
         seconds = max(1.0, min(300.0, float(args[0]) if args else 30.0))
         self._watch_until = time.time() + seconds
@@ -65,6 +82,9 @@ class VisionCLI(BaseNodeCLI):
             tel = state.export_telemetry_data()
             p, st, ov = tel["aruco_pose"], tel["status"], tel.get("aruco_overlay", {})
             seen = ",".join(str(m["id"]) for m in ov.get("markers", [])) or "-"
+            others = ", ".join(o["label"] for o in ov.get("others", []))
+            if others:
+                seen += f"] other=[{others}"
             if p["detected"]:
                 self.log(f"{st['tracking_state']:<9} id={p['id']:<3} x={p['x'] * 100:+6.1f} "
                          f"y={p['y'] * 100:+6.1f} z={p['z'] * 100:6.1f} cm  "

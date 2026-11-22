@@ -21,6 +21,9 @@ class VisionState:
         # Marker outlines of the latest processed frame, for drawing over the video on
         # the ground station (normalised 0..1 image coords, a few hundred bytes).
         self.overlay: Dict[str, Any] = {"markers": [], "primary": -1, "center": None, "seq": 0}
+        # Discovery mode (CLI `arucoscan on`): the camera node also looks for markers of ANY
+        # family/ID at a few Hz and lists them in overlay["others"] (no pose: size unknown).
+        self.scan_any: bool = False
 
         # Optical flow state buffer (read by MAVLinkSensorFeed at 30Hz)
         self.flow_rad_x: float = 0.0
@@ -76,7 +79,8 @@ class VisionState:
             if detected:
                 self.last_detection_ts = time.time()
 
-    def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1, principal_px=None):
+    def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1, principal_px=None,
+                       others=None):
         """markers: [(marker_id, corners (4, 2) pixels), ...] seen in THIS frame."""
         w, h = float(max(1, img_w)), float(max(1, img_h))
         out, center = [], None
@@ -90,8 +94,12 @@ class VisionState:
         pp = ([round(float(principal_px[0]) / w, 4), round(float(principal_px[1]) / h, 4)]
               if principal_px is not None else self.overlay.get("pp"))
         with self._lock:
+            other_list = [{"label": str(label), "c": [[round(float(u) / w, 4), round(float(v) / h, 4)]
+                                                      for u, v in corners]}
+                          for label, corners in (others or [])]
             self.overlay = {"markers": out, "primary": int(primary_id) if center else -1,
-                            "center": center, "pp": pp, "seq": self.overlay.get("seq", 0) + 1}
+                            "center": center, "pp": pp, "others": other_list,
+                            "seq": self.overlay.get("seq", 0) + 1}
 
     def update_optical_flow(
         self,

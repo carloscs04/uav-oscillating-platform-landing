@@ -88,7 +88,12 @@ class CameraView(tk.LabelFrame):
                 self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
             self.lbl_coords.config(text=f"X: {x:+.2f} | Y: {y:+.2f} | Z: {z:+.2f} | Dist: {dist:.2f} m")
         else:
-            self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
+            others = (vis_rx.get_packet("aruco_overlay", {}) or {}).get("others", []) if vis_rx else []
+            if others:
+                self.lbl_target.config(text=f"TARGET: NONE | OTHER: {others[0].get('label', '?')}",
+                                       fg=ACCENT_YELLOW)
+            else:
+                self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
             self.lbl_coords.config(text="X: -- | Y: -- | Z: -- | Dist: -- m")
 
         # 2. Render Video Frame (Base64 JPEG from CameraReceiver on port 5003)
@@ -155,6 +160,15 @@ class CameraView(tk.LabelFrame):
                                     fill=color, outline="", tags=tag)
             self.canvas.create_text(pts[0], pts[1] - 10, text=f"ID {m.get('id')}", fill=color,
                                     font=("Consolas", 8, "bold"), tags=tag)
+
+        # Discovery scan (`arucoscan on`): markers outside the configured pad, no pose
+        for o in ov.get("others", []):
+            pts = [coord for u, v in o.get("c", []) for coord in (u * cw, v * ch)]
+            if len(pts) != 8:
+                continue
+            self.canvas.create_polygon(pts, outline="#FF9F1C", fill="", width=2, dash=(6, 3), tags=tag)
+            self.canvas.create_text(pts[0], pts[1] - 10, anchor="sw", text=o.get("label", "?"),
+                                    fill="#FF9F1C", font=("Consolas", 9, "bold"), tags=tag)
 
         center = ov.get("center")
         if center:

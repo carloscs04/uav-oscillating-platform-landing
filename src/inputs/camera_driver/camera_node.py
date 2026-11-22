@@ -18,6 +18,12 @@ from src.logic.vision.tracker import TargetTracker
 
 UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
 
+# Families tried by the discovery scan (`arucoscan on`). Each one costs a full detection pass,
+# so the scan runs only on request and at SCAN_HZ, never at camera rate.
+SCAN_DICTS = ("DICT_4X4_1000", "DICT_5X5_1000", "DICT_6X6_1000", "DICT_7X7_1000",
+              "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_36h11", "DICT_APRILTAG_25h9", "DICT_APRILTAG_16h5")
+SCAN_HZ = 3.0
+
 
 class CameraNode:
     """Runs the camera in a background thread and publishes into the State objects."""
@@ -49,6 +55,11 @@ class CameraNode:
         self._vision_lock = threading.Lock()
         self.is_running = False
         self._thread: Optional[threading.Thread] = None
+
+        self._scan_detectors = None
+        self._scan_found = []
+        self._next_scan = 0.0
+        self.scan_ms = 0.0
 
         self.fps = 0.0
         self.proc_ms = 0.0
@@ -91,6 +102,7 @@ class CameraNode:
             "vision_enabled": self.vision_enabled,
             "fps": round(self.fps, 1),
             "proc_ms": round(self.proc_ms, 1),
+            "scan_ms": round(self.scan_ms, 1),
             "frames": self.frames,
             "error_count": self.error_count,
             "last_error": self.last_error,
@@ -213,9 +225,54 @@ class CameraNode:
         t = self.tracker.target()
         primary = int(t["id"]) if t.get("detected") and t.get("in_view") else -1
         markers = [(m.marker_id, m.corners) for m in measurements if m.corners is not None]
+        others = self._scan_found if getattr(self.vision_state, "scan_any", False) else []
         K = getattr(self.model, "camera_matrix", None)
         pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
-        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp)
+        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp, others)
+
+    def _scan_any(self, gray, stamp):
+        """Start a discovery scan on a copy of this frame in its own thread (~25-40 ms for all
+        families), so the camera loop and the optical flow never wait for it."""
+        if stamp < self._next_scan:
+            return
+        worker = getattr(self, "_scan_thread", None)
+        if worker is not None and worker.is_alive():
+            return
+        self._next_scan = stamp + 1.0 / SCAN_HZ
+        self._scan_thread = threading.Thread(target=self._scan_frame, args=(gray.copy(),),
+                                             name="ArucoScan", daemon=True)
+        self._scan_thread.start()
+
+    def _scan_frame(self, gray):
+        """Discovery: find markers of any family. Pad markers already tracked are skipped."""
+        if self._scan_detectors is None:
+            self._scan_detectors = []
+            for name in SCAN_DICTS:
+                if hasattr(cv2.aruco, name):
+                    d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name))
+                    self._scan_detectors.append(
+                        (name.replace("DICT_", ""), cv2.aruco.ArucoDetector(d, cv2.aruco.DetectorParameters())))
+        t0 = time.perf_counter()
+        main_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
+        main_ids = set(self.tracker.detector.ids or []) if self.tracker else set()
+        found, taken = [], []
+        for name, det in self._scan_detectors:
+            corners, ids, _ = det.detectMarkers(gray)
+            if ids is None:
+                continue
+            for marker_id, c in zip(ids.ravel().tolist(), corners):
+                c = c.reshape(4, 2)
+                centre = c.mean(axis=0)
+                # Same square found by a bigger family (4X4_1000 vs 4X4_50...): keep the first.
+                if any(((centre - t) ** 2).sum() < 25.0 for t in taken):
+                    continue
+                if name.startswith(main_name.split("_")[0]) and marker_id in main_ids:
+                    taken.append(centre)
+                    continue  # already tracked and drawn by the main pipeline
+                taken.append(centre)
+                found.append((f"{name} #{marker_id}", c))
+        self._scan_found = found
+        self.scan_ms = (time.perf_counter() - t0) * 1000.0
 
     def _run(self):
         failures, last_stamp, retry_delay, next_preview = 0, None, 1.0, 0.0
@@ -284,6 +341,8 @@ class CameraNode:
                     t0 = time.perf_counter()
                     try:
                         good = self.tracker.update(gray, stamp)
+                        if getattr(self.vision_state, "scan_any", False):
+                            self._scan_any(gray, stamp)
                         self._publish_target(stamp)
                         self._publish_overlay(good, gray.shape)
                         setattr(self.vision_state, "connected", True)
