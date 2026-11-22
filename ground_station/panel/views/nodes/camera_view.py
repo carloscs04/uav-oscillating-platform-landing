@@ -12,7 +12,6 @@ from ground_station.receivers.nodes.camera_rx import CameraReceiver
 from ground_station.receivers.nodes.vision_rx import VisionReceiver
 from ground_station.receivers.nodes.control_rx import ControlReceiver
 from ground_station.receivers.nodes.mavlink_rx import MavlinkReceiver
-from ground_station.receivers.nodes.distance_sensor_rx import DistanceSensorReceiver
 from ground_station.comms.pi_bridge import PiLink, LinkState
 
 try:
@@ -166,7 +165,6 @@ class CameraView(tk.LabelFrame):
         # Discovery scan (`arucoscan on`): markers outside the configured pad (no pose: size
         # unknown). Their centre is marked and, with the lidar height, converted to cm.
         orange = "#FF9F1C"
-        first_offset = None
         for o in ov.get("others", []):
             c = o.get("c", [])
             pts = [coord for u, v in c for coord in (u * cw, v * ch)]
@@ -182,34 +180,32 @@ class CameraView(tk.LabelFrame):
             self.canvas.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill=orange, outline="", tags=tag)
             self.canvas.create_line(cx, cy, ox, oy, fill=orange, dash=(4, 3), tags=tag)
             self._draw_axes(o.get("ax"), cw, ch, tag)
-            if first_offset is None:
-                first_offset = (o.get("label", "?"), mu - pp[0], mv - pp[1])
-
-        if first_offset and not ov.get("center"):
-            label, du, dv = first_offset
-            f = ov.get("f")
-            h = self._lidar_height_m()
-            if f and h:
-                ex, ey = du / f[0] * h * 100, dv / f[1] * h * 100   # pinhole: offset = angle x height
-                err = (ex ** 2 + ey ** 2) ** 0.5
-                txt = f"OFFSET {label}  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm  (lidar h={h:.2f} m)"
-            else:
-                txt = f"OFFSET {label}  x={du * 100:+5.1f}%  y={dv * 100:+5.1f}% of image (no lidar)"
-            self.canvas.create_text(12, 12, anchor="nw", fill=orange, font=("Consolas", 10, "bold"),
-                                    text=txt, tags=tag)
 
         center = ov.get("center")
         if center:
             tx, ty = center[0] * cw, center[1] * ch
             self.canvas.create_line(cx, cy, tx, ty, fill=ACCENT_GREEN, dash=(4, 3), tags=tag)
             self.canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, outline=ACCENT_GREEN, width=2, tags=tag)
-            # Offset marker <-> fixed point, metres from the pose (x right, y down in the image)
-            pose = vis_rx.get_packet("aruco_pose", {}) or {}
-            ex, ey = float(pose.get("x", 0.0)) * 100, float(pose.get("y", 0.0)) * 100
-            err = (ex ** 2 + ey ** 2) ** 0.5
-            color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
+        # Control measurement (computed on the Pi): marker centre vs the fixed cross in pixels,
+        # x/y in cm = angle x lidar height. Same numbers the landing controller will use.
+        pt = vis_rx.get_packet("pixel_target", {}) or {}
+        if pt.get("detected"):
+            tx, ty = pt.get("un", 0.5) * cw, pt.get("vn", 0.5) * ch
+            self.canvas.create_line(cx, cy, tx, ty, fill="white", width=2, tags=tag)
+            if pt.get("x_m") is not None:
+                ex, ey, err = pt["x_m"] * 100, pt["y_m"] * 100, pt["err_m"] * 100
+                color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
+                txt = (f"{pt.get('source', '?')}  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm  "
+                       f"z={pt['h_m']:.2f} m (lidar)")
+            else:
+                color = ACCENT_YELLOW
+                txt = (f"{pt.get('source', '?')}  dx={pt.get('du_px', 0):+6.1f} px  "
+                       f"dy={pt.get('dv_px', 0):+6.1f} px  (no lidar: no cm)")
             self.canvas.create_text(12, 12, anchor="nw", fill=color, font=("Consolas", 10, "bold"),
-                                    text=f"OFFSET  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm",
+                                    text=txt, tags=tag)
+            self.canvas.create_text(12, 30, anchor="nw", fill=COLOR_PLOT_TEXT, font=("Consolas", 9),
+                                    text=f"pixels dx={pt.get('du_px', 0):+6.1f} dy={pt.get('dv_px', 0):+6.1f}  "
+                                         f"angle {pt.get('angle_x_deg', 0):+5.1f}/{pt.get('angle_y_deg', 0):+5.1f} deg",
                                     tags=tag)
         self.canvas.tag_raise(tag)
 
@@ -223,15 +219,6 @@ class CameraView(tk.LabelFrame):
             self.canvas.create_line(o[0], o[1], u * cw, v * ch, fill=color, width=3,
                                     arrow="last", arrowshape=(8, 10, 4), tags=tag)
         self.canvas.create_oval(o[0] - 3, o[1] - 3, o[0] + 3, o[1] + 3, fill="white", outline="", tags=tag)
-
-    @staticmethod
-    def _lidar_height_m():
-        rx = getattr(DistanceSensorReceiver, "_active_instance", None)
-        if not rx or time.time() - getattr(rx, "last_seen", 0.0) > 1.0:
-            return None
-        d = rx.get_packet("distance_sensor", {}) or {}
-        h = float(d.get("distance_m", 0.0) or 0.0)
-        return h if d.get("status", "OK") == "OK" and h > 0.03 else None
 
     def _render_battery_overlay(self):
         self.canvas.delete("bat_overlay")

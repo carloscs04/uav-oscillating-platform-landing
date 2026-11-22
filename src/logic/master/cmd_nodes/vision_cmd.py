@@ -75,22 +75,21 @@ class VisionCLI(BaseNodeCLI):
         return "ARUCOWATCH_STARTED"
 
     def _watch_loop(self):
-        """Camera frame (OpenCV): x = right in the image, y = DOWN in the image, z = out of
-        the lens; all in cm. Marker straight below the lens -> x = y = 0."""
+        """Pixel target: x = right in the image, y = DOWN in the image (cm = angle x lidar
+        height), z = lidar. Marker centre on the fixed cross -> x = y = 0."""
         state = self.manager.state
         while time.time() < self._watch_until:
             tel = state.export_telemetry_data()
-            p, st, ov = tel["aruco_pose"], tel["status"], tel.get("aruco_overlay", {})
-            seen = ",".join(str(m["id"]) for m in ov.get("markers", [])) or "-"
-            others = ", ".join(o["label"] for o in ov.get("others", []))
-            if others:
-                seen += f"] other=[{others}"
-            if p["detected"]:
-                self.log(f"{st['tracking_state']:<9} id={p['id']:<3} x={p['x'] * 100:+6.1f} "
-                         f"y={p['y'] * 100:+6.1f} z={p['z'] * 100:6.1f} cm  "
-                         f"off={((p['x'] ** 2 + p['y'] ** 2) ** 0.5) * 100:5.1f} cm  yaw={p['yaw']:+6.1f}  "
-                         f"seen=[{seen}]", "STATUS")
+            pt, st = tel.get("pixel_target", {}), tel["status"]
+            if pt.get("detected"):
+                if pt.get("x_m") is not None:
+                    metric = (f"x={pt['x_m'] * 100:+6.1f} y={pt['y_m'] * 100:+6.1f} cm "
+                              f"|{pt['err_m'] * 100:5.1f}| z={pt['h_m'] * 100:5.1f} cm(lidar)")
+                else:
+                    metric = "no lidar: no cm"
+                self.log(f"{pt.get('source', '?'):<20} px dx={pt['du_px']:+6.1f} dy={pt['dv_px']:+6.1f}  "
+                         f"{metric}  [{st['tracking_state']}]", "STATUS")
             else:
-                self.log(f"{st['tracking_state']:<9} no marker  seen=[{seen}]", "STATUS")
+                self.log(f"no marker  [{st['tracking_state']}]", "STATUS")
             time.sleep(0.5)
         self.log("arucowatch finished.", "OK")

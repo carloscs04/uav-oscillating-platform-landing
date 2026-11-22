@@ -96,7 +96,8 @@ class MasterNode:
 
         # Hardware camera + ArUco + Optical Flow capture worker bound to shared states
         self._camera_driver = (
-            CameraNode(self.camera_node.state, self.vision_node.state)
+            CameraNode(self.camera_node.state, self.vision_node.state,
+                       height_state=self.distance_node.state)
             if CameraNode is not None
             else None
         )

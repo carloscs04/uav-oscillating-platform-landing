@@ -15,6 +15,7 @@ from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_cali
 from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.optical_flow import OpticalFlowEstimator
+from src.logic.vision.pixel_target import pixel_target
 from src.logic.vision.tracker import TargetTracker
 
 UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
@@ -35,9 +36,11 @@ class CameraNode:
         vision_state,
         config_path: Optional[str] = None,
         camera: Optional[str] = None,
+        height_state=None,
     ):
         self.camera_state = camera_state
         self.vision_state = vision_state
+        self.height_state = height_state  # DistanceState (lidar): z for the pixel target
         self.config = load_config(config_path)
         self.camera_name = camera  # None = active_camera from config.yaml
 
@@ -121,6 +124,8 @@ class CameraNode:
         self.vision_state.update_aruco_pose(detected=False, tracking_state=tracking_state)
         if hasattr(self.vision_state, "update_overlay"):
             self.vision_state.update_overlay([], 1, 1)
+        if hasattr(self.vision_state, "update_pixel_target"):
+            self.vision_state.update_pixel_target(None)
 
     def _open(self):
         cam = open_camera(self.camera_name, self.config)
@@ -261,6 +266,33 @@ class CameraNode:
         pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
         f = (float(K[0][0]), float(K[1][1])) if K is not None else None
         self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp, others, f)
+        self._publish_pixel_target(markers, others, primary, shape)
+
+    def _lidar_height(self):
+        st = self.height_state
+        if st is None or getattr(st, "sensor_status", "OK") != "OK":
+            return None
+        h = float(getattr(st, "distance_m", 0.0) or 0.0)
+        return h if h > 0.03 else None
+
+    def _publish_pixel_target(self, markers, others, primary, shape):
+        """Control measurement: centre of the chosen marker (pad primary first, then any other
+        marker in view) vs the optical axis; z from the lidar."""
+        chosen = None
+        for marker_id, corners, _ax in markers:
+            if marker_id == primary:
+                chosen = (f"ID {marker_id}", corners)
+        if chosen is None and markers:
+            chosen = (f"ID {markers[0][0]}", markers[0][1])
+        if chosen is None and others:
+            chosen = (others[0][0], others[0][1])
+        if chosen is None or self.model is None:
+            self.vision_state.update_pixel_target(None)
+            return
+        t = pixel_target(chosen[1], self.model.camera_matrix, self.model.dist_coeffs, self._lidar_height())
+        t.update({"detected": True, "source": chosen[0], "stamp": time.monotonic(),
+                  "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
+        self.vision_state.update_pixel_target(t)
 
     def _scan_any(self, gray, stamp):
         """Start a discovery scan on a copy of this frame in its own thread (~25-40 ms for all

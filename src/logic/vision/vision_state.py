@@ -24,6 +24,9 @@ class VisionState:
         # Discovery mode (CLI `arucoscan on`): the camera node also looks for markers of ANY
         # family/ID at a few Hz and lists them in overlay["others"] (no pose: size unknown).
         self.scan_any: bool = False
+        # Control measurement (src/logic/vision/pixel_target.py): centre of ANY marker in pixels
+        # vs the optical axis -> angle; x/y in metres = angle x lidar height.
+        self.pixel_target: Dict[str, Any] = {"detected": False}
 
         # Optical flow state buffer (read by MAVLinkSensorFeed at 30Hz)
         self.flow_rad_x: float = 0.0
@@ -112,6 +115,14 @@ class VisionState:
                             "center": center, "pp": pp, "f": f, "others": other_list,
                             "seq": self.overlay.get("seq", 0) + 1}
 
+    def update_pixel_target(self, target: Optional[Dict[str, Any]]):
+        with self._lock:
+            self.pixel_target = dict(target) if target else {"detected": False}
+
+    def get_pixel_target(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self.pixel_target)
+
     def update_optical_flow(
         self,
         rad_x: float,
@@ -193,6 +204,7 @@ class VisionState:
                     "px_dy": self.flow_px_dy,
                 },
                 "aruco_overlay": dict(self.overlay),
+                "pixel_target": dict(self.pixel_target),
                 "status": {
                     "target_locked": self.aruco_detected,
                     "tracking_state": self.tracking_state,
