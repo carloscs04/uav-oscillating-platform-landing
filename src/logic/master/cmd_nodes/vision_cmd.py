@@ -91,12 +91,15 @@ class VisionCLI(BaseNodeCLI):
             self.log("visionlog already recording (visionlog stop).", "WARN")
             return "VISIONLOG_BUSY"
         name = time.strftime("visionlog_%H-%M-%S")
+        if self.camera_driver is not None:
+            self.camera_driver.landing.reset()      # every recording starts the law from SEARCH
         self._log_until = time.time() + seconds
         state.vision_log = {"rec": True, "name": name}
         self._log_thread = threading.Thread(target=self._log_loop, args=(name,), name="VisionLog", daemon=True)
         self._log_thread.start()
         self.log(f"visionlog {seconds:.0f} s: the ground station records experiments/vision/"
-                 f"{time.strftime('%Y-%m-%d')}/{name}.csv (keep the panel open)", "OK")
+                 f"{time.strftime('%Y-%m-%d')}/{name}.csv (keep the panel open); "
+                 "landing law reset to SEARCH", "OK")
         return "VISIONLOG_STARTED"
 
     def _log_loop(self, name):

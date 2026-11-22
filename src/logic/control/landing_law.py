@@ -16,7 +16,8 @@ Phases:
     FINAL     below final_h: slower descent, same pause rule
     TOUCHDOWN below touchdown_h: v = 0 (touchdown method still to be decided by the pilot)
     HOLD      ALIGN took longer than align_timeout_s: v = 0 until reset / lifted
-TOUCHDOWN and HOLD re-arm when the drone is lifted rearm_dh above where it stopped (hand tests).
+TOUCHDOWN and HOLD re-arm (-> SEARCH) when the drone is lifted rearm_dh above where it stopped,
+or when the target has been out of view for lost_search_s (hand tests: take the drone away).
 Target lost < lost_hold_s: keep the phase, v = 0 (brake). Lost >= lost_search_s: SEARCH.
 """
 
@@ -96,8 +97,7 @@ class LandingLaw:
             if self.phase in ("DESCEND", "FINAL") and lost is not None and lost >= p.lost_search_s:
                 self.climb = True
             if lost is None or lost >= p.lost_search_s:
-                if self.phase not in ("HOLD", "TOUCHDOWN"):
-                    self._set("SEARCH", now)
+                self._set("SEARCH", now)            # also re-arms HOLD / TOUCHDOWN
             if self.phase == "SEARCH" and self.climb and h_m is not None and h_m < p.search_h:
                 out["v_down"] = -p.climb_speed
                 out["note"] = "lost low: climbing"

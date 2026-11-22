@@ -75,6 +75,19 @@ def test_align_timeout_and_rearm():
     assert law.phase == "SEARCH"
 
 
+def test_hold_rearms_when_target_gone():
+    law = LandingLaw(LandingParams(align_timeout_s=1.0))
+    for i in range(30):
+        o = law.step((0.2, 0.0), 1.0, i * 0.05)
+    assert o["phase"] == "HOLD"
+    o = law.step(None, 1.0, 2.0)                         # gone 0.6 s -> still HOLD
+    assert o["phase"] == "HOLD"
+    o = law.step(None, 1.0, 5.0)                         # gone > 3 s -> re-armed
+    assert o["phase"] == "SEARCH"
+    o = law.step((0.0, 0.0), 1.0, 5.1)
+    assert o["phase"] == "ALIGN"
+
+
 def test_params_from_config():
     p = LandingParams.from_dict({"kp": 0.8, "v_max": 0.2, "unknown_key": 5})
     assert p.kp == 0.8 and p.v_max == 0.2
