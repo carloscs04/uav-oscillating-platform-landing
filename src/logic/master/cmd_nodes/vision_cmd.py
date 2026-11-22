@@ -13,7 +13,8 @@ class VisionCLI(BaseNodeCLI):
         self.camera_driver = camera_driver  # CameraNode: owns the known-marker registry
         super().__init__("vision", manager, state, guard)
         # Asks in the terminal when the target is a marker that is not registered
-        self._asked_label = None
+        self._asked = set()        # unknown labels already asked about (once each)
+        self._asked_at = 0.0
         threading.Thread(target=self._ask_loop, name="VisionAsk", daemon=True).start()
 
     def _register_commands(self):
@@ -82,7 +83,7 @@ class VisionCLI(BaseNodeCLI):
                      "Usage: followunknown <yes|no|ask>", "STATUS")
             return "FOLLOWUNKNOWN_STATUS"
         state.follow_unknown = value[word]
-        self._asked_label = None
+        self._asked.clear()
         if value[word] is True:
             self.log("followunknown YES: if no registered marker is visible, the target is the "
                      "unknown marker nearest the centre (yellow).", "WARN")
@@ -109,7 +110,8 @@ class VisionCLI(BaseNodeCLI):
 
     def _ask_loop(self):
         """When the chosen target is an unregistered marker and nobody decided yet, ask once per
-        marker. Nothing follows it until the answer is `followunknown yes`."""
+        marker and at most every 10 s (the target can flip between unknowns). Nothing follows
+        it until the answer is `followunknown yes`."""
         while True:
             time.sleep(0.5)
             try:
@@ -118,10 +120,12 @@ class VisionCLI(BaseNodeCLI):
                 if not pt.get("detected") or pt.get("known") or getattr(state, "follow_unknown", None) is not None:
                     continue
                 label = pt.get("source")
-                if label and label != self._asked_label:
-                    self._asked_label = label
-                    self.log(f"Unregistered marker {label} is the only target in view (yellow). "
-                             f"Go to it?  ->  followunknown yes  /  followunknown no", "WARN")
+                now = time.time()
+                if label and label not in self._asked and now - self._asked_at >= 10.0:
+                    self._asked.add(label)
+                    self._asked_at = now
+                    self.log(f"Unregistered marker {label} is the target (yellow), no registered one "
+                             f"in view. Go to it?  ->  followunknown yes  /  followunknown no", "WARN")
             except Exception:  # noqa: BLE001
                 pass
 
