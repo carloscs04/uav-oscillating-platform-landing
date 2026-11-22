@@ -344,11 +344,15 @@ def watch(vehicle_state: Any, feed: Any, seconds: float, log: Callable[[str, str
         h = lf.get("height_m")
         rel = bool(int(ekf.get("flags", 0)) & (8 | 256))
         # Baro vs lidar, both as height gained since flowwatch started (baro zeroed on
-        # the pressure at start, so it is valid in the in-hand lift test while disarmed)
+        # the pressure at start, so it is valid in the in-hand lift test while disarmed;
+        # start it with the drone still on the floor)
         sp = vehicle_state.get_packet("SCALED_PRESSURE") or {}
         p_now = float(sp.get("press_abs", 0.0) or 0.0)
         if p0 is None and p_now > 0 and h is not None:
-            p0, h0 = p_now, h
+            # Zero on the averaged reference (EMA over ~2 s while disarmed), not one raw
+            # sample: a single reading is +/-0.2 m of noise and biases the whole run.
+            ref = getattr(vehicle_state, "_baro_ref_hpa", None)
+            p0, h0 = (ref if ref else p_now), h
         baro_txt = ""
         if p0 and p_now > 0:
             b = 44330.77 * (1.0 - (p_now / p0) ** 0.190263)
