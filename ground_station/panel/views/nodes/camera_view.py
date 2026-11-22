@@ -12,6 +12,7 @@ from ground_station.receivers.nodes.camera_rx import CameraReceiver
 from ground_station.receivers.nodes.vision_rx import VisionReceiver
 from ground_station.receivers.nodes.control_rx import ControlReceiver
 from ground_station.receivers.nodes.mavlink_rx import MavlinkReceiver
+from ground_station.receivers.nodes.distance_sensor_rx import DistanceSensorReceiver
 from ground_station.comms.pi_bridge import PiLink, LinkState
 
 try:
@@ -161,14 +162,39 @@ class CameraView(tk.LabelFrame):
             self.canvas.create_text(pts[0], pts[1] - 10, text=f"ID {m.get('id')}", fill=color,
                                     font=("Consolas", 8, "bold"), tags=tag)
 
-        # Discovery scan (`arucoscan on`): markers outside the configured pad, no pose
+        # Discovery scan (`arucoscan on`): markers outside the configured pad (no pose: size
+        # unknown). Their centre is marked and, with the lidar height, converted to cm.
+        orange = "#FF9F1C"
+        first_offset = None
         for o in ov.get("others", []):
-            pts = [coord for u, v in o.get("c", []) for coord in (u * cw, v * ch)]
+            c = o.get("c", [])
+            pts = [coord for u, v in c for coord in (u * cw, v * ch)]
             if len(pts) != 8:
                 continue
-            self.canvas.create_polygon(pts, outline="#FF9F1C", fill="", width=2, dash=(6, 3), tags=tag)
+            self.canvas.create_polygon(pts, outline=orange, fill="", width=2, dash=(6, 3), tags=tag)
             self.canvas.create_text(pts[0], pts[1] - 10, anchor="sw", text=o.get("label", "?"),
-                                    fill="#FF9F1C", font=("Consolas", 9, "bold"), tags=tag)
+                                    fill=orange, font=("Consolas", 9, "bold"), tags=tag)
+            mu, mv = sum(p[0] for p in c) / 4.0, sum(p[1] for p in c) / 4.0
+            ox, oy = mu * cw, mv * ch
+            self.canvas.create_line(ox - 12, oy, ox + 12, oy, fill=orange, width=2, tags=tag)
+            self.canvas.create_line(ox, oy - 12, ox, oy + 12, fill=orange, width=2, tags=tag)
+            self.canvas.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill=orange, outline="", tags=tag)
+            self.canvas.create_line(cx, cy, ox, oy, fill=orange, dash=(4, 3), tags=tag)
+            if first_offset is None:
+                first_offset = (o.get("label", "?"), mu - pp[0], mv - pp[1])
+
+        if first_offset and not ov.get("center"):
+            label, du, dv = first_offset
+            f = ov.get("f")
+            h = self._lidar_height_m()
+            if f and h:
+                ex, ey = du / f[0] * h * 100, dv / f[1] * h * 100   # pinhole: offset = angle x height
+                err = (ex ** 2 + ey ** 2) ** 0.5
+                txt = f"OFFSET {label}  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm  (lidar h={h:.2f} m)"
+            else:
+                txt = f"OFFSET {label}  x={du * 100:+5.1f}%  y={dv * 100:+5.1f}% of image (no lidar)"
+            self.canvas.create_text(12, 12, anchor="nw", fill=orange, font=("Consolas", 10, "bold"),
+                                    text=txt, tags=tag)
 
         center = ov.get("center")
         if center:
@@ -184,6 +210,15 @@ class CameraView(tk.LabelFrame):
                                     text=f"OFFSET  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm",
                                     tags=tag)
         self.canvas.tag_raise(tag)
+
+    @staticmethod
+    def _lidar_height_m():
+        rx = getattr(DistanceSensorReceiver, "_active_instance", None)
+        if not rx or time.time() - getattr(rx, "last_seen", 0.0) > 1.0:
+            return None
+        d = rx.get_packet("distance_sensor", {}) or {}
+        h = float(d.get("distance_m", 0.0) or 0.0)
+        return h if d.get("status", "OK") == "OK" and h > 0.03 else None
 
     def _render_battery_overlay(self):
         self.canvas.delete("bat_overlay")

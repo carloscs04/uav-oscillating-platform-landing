@@ -228,7 +228,8 @@ class CameraNode:
         others = self._scan_found if getattr(self.vision_state, "scan_any", False) else []
         K = getattr(self.model, "camera_matrix", None)
         pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
-        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp, others)
+        f = (float(K[0][0]), float(K[1][1])) if K is not None else None
+        self.vision_state.update_overlay(markers, shape[1], shape[0], primary, pp, others, f)
 
     def _scan_any(self, gray, stamp):
         """Start a discovery scan on a copy of this frame in its own thread (~25-40 ms for all
@@ -271,7 +272,13 @@ class CameraNode:
                     continue  # already tracked and drawn by the main pipeline
                 taken.append(centre)
                 found.append((f"{name} #{marker_id}", c))
-        self._scan_found = found
+        # One missed scan (blur, motion) should not make the outline blink: keep the last
+        # result for up to ~1 s.
+        now = time.monotonic()
+        if found or now - getattr(self, "_scan_found_at", 0.0) > 1.0:
+            self._scan_found = found
+            if found:
+                self._scan_found_at = now
         self.scan_ms = (time.perf_counter() - t0) * 1000.0
 
     def _run(self):

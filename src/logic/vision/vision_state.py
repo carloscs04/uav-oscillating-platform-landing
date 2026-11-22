@@ -80,7 +80,7 @@ class VisionState:
                 self.last_detection_ts = time.time()
 
     def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1, principal_px=None,
-                       others=None):
+                       others=None, focal_px=None):
         """markers: [(marker_id, corners (4, 2) pixels), ...] seen in THIS frame."""
         w, h = float(max(1, img_w)), float(max(1, img_h))
         out, center = [], None
@@ -93,12 +93,14 @@ class VisionState:
         # x = y = 0 in aruco_pose means the marker sits exactly there (not the image centre).
         pp = ([round(float(principal_px[0]) / w, 4), round(float(principal_px[1]) / h, 4)]
               if principal_px is not None else self.overlay.get("pp"))
+        f = ([round(float(focal_px[0]) / w, 4), round(float(focal_px[1]) / h, 4)]
+             if focal_px is not None else self.overlay.get("f"))
         with self._lock:
             other_list = [{"label": str(label), "c": [[round(float(u) / w, 4), round(float(v) / h, 4)]
                                                       for u, v in corners]}
                           for label, corners in (others or [])]
             self.overlay = {"markers": out, "primary": int(primary_id) if center else -1,
-                            "center": center, "pp": pp, "others": other_list,
+                            "center": center, "pp": pp, "f": f, "others": other_list,
                             "seq": self.overlay.get("seq", 0) + 1}
 
     def update_optical_flow(
