@@ -106,6 +106,8 @@ class CameraNode:
 
     def _publish_no_target(self, tracking_state):
         self.vision_state.update_aruco_pose(detected=False, tracking_state=tracking_state)
+        if hasattr(self.vision_state, "update_overlay"):
+            self.vision_state.update_overlay([], 1, 1)
 
     def _open(self):
         cam = open_camera(self.camera_name, self.config)
@@ -205,6 +207,14 @@ class CameraNode:
             tracking_state="LOCKED" if t["in_view"] else "HOLDING",
         )
 
+    def _publish_overlay(self, measurements, shape):
+        """Outlines of the markers in this frame -> VisionState (drawn by the ground station,
+        so the Pi only sends ~8 numbers per marker instead of re-encoding an annotated image)."""
+        t = self.tracker.target()
+        primary = int(t["id"]) if t.get("detected") and t.get("in_view") else -1
+        markers = [(m.marker_id, m.corners) for m in measurements if m.corners is not None]
+        self.vision_state.update_overlay(markers, shape[1], shape[0], primary)
+
     def _run(self):
         failures, last_stamp, retry_delay, next_preview = 0, None, 1.0, 0.0
         while self.is_running:
@@ -271,8 +281,9 @@ class CameraNode:
                 if self.vision_enabled:
                     t0 = time.perf_counter()
                     try:
-                        self.tracker.update(gray, stamp)
+                        good = self.tracker.update(gray, stamp)
                         self._publish_target(stamp)
+                        self._publish_overlay(good, gray.shape)
                         setattr(self.vision_state, "connected", True)
                         setattr(self.vision_state, "current_rate_hz", round(self.fps, 1))
                     except Exception as e:  # noqa: BLE001

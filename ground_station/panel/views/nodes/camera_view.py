@@ -2,6 +2,7 @@
 
 import base64
 import io
+import time
 import tkinter as tk
 from ground_station.utils.colors import (
     BG_CARD, BG_DARK, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
@@ -72,13 +73,19 @@ class CameraView(tk.LabelFrame):
         if not pose.get("detected", False) and ctrl_rx:
             pose = ctrl_rx.get_packet("aruco_pose", pose)
 
+        status = vis_rx.get_packet("status", {}) if vis_rx else {}
+        tracking = str(status.get("tracking_state", "")).upper()
+
         if pose.get("detected", False):
             x = float(pose.get("x", 0.0))
             y = float(pose.get("y", 0.0))
             z = float(pose.get("z", 0.0))
             dist = (x**2 + y**2 + z**2) ** 0.5
             target_id = pose.get("id", 0)
-            self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
+            if tracking == "HOLDING":   # lost this frame, last pose kept for hold_s
+                self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} HOLDING (lost)", fg=ACCENT_YELLOW)
+            else:
+                self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
             self.lbl_coords.config(text=f"X: {x:+.2f} | Y: {y:+.2f} | Z: {z:+.2f} | Dist: {dist:.2f} m")
         else:
             self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
@@ -113,8 +120,45 @@ class CameraView(tk.LabelFrame):
                 fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold"), tags="video_layer"
             )
 
-        # 3. Overlay drone battery read from MAVLink
+        # 3. ArUco outlines drawn here from a few numbers sent by the Pi (no extra Pi CPU)
+        self._render_aruco_overlay(vis_rx if raw_b64 else None)
+
+        # 4. Overlay drone battery read from MAVLink
         self._render_battery_overlay()
+
+    def _render_aruco_overlay(self, vis_rx):
+        self.canvas.delete("aruco_overlay")
+        if not vis_rx or time.time() - getattr(vis_rx, "last_seen", 0.0) > 1.0:
+            return
+        ov = vis_rx.get_packet("aruco_overlay", {}) or {}
+        cw = self.canvas.winfo_width() or 320
+        ch = self.canvas.winfo_height() or 240
+        tag = "aruco_overlay"
+
+        # Image centre = straight below the camera (where the controller wants the target)
+        cx, cy = cw / 2, ch / 2
+        self.canvas.create_line(cx - 10, cy, cx + 10, cy, fill=FG_CYAN, tags=tag)
+        self.canvas.create_line(cx, cy - 10, cx, cy + 10, fill=FG_CYAN, tags=tag)
+
+        primary = ov.get("primary", -1)
+        for m in ov.get("markers", []):
+            pts = [coord for u, v in m.get("c", []) for coord in (u * cw, v * ch)]
+            if len(pts) != 8:
+                continue
+            color = ACCENT_GREEN if m.get("id") == primary else ACCENT_YELLOW
+            self.canvas.create_polygon(pts, outline=color, fill="", width=2, tags=tag)
+            # first corner = printed top-left: shows the marker's orientation
+            self.canvas.create_oval(pts[0] - 3, pts[1] - 3, pts[0] + 3, pts[1] + 3,
+                                    fill=color, outline="", tags=tag)
+            self.canvas.create_text(pts[0], pts[1] - 10, text=f"ID {m.get('id')}", fill=color,
+                                    font=("Consolas", 8, "bold"), tags=tag)
+
+        center = ov.get("center")
+        if center:
+            tx, ty = center[0] * cw, center[1] * ch
+            self.canvas.create_line(cx, cy, tx, ty, fill=ACCENT_GREEN, dash=(4, 3), tags=tag)
+            self.canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, outline=ACCENT_GREEN, width=2, tags=tag)
+        self.canvas.tag_raise(tag)
 
     def _render_battery_overlay(self):
         self.canvas.delete("bat_overlay")

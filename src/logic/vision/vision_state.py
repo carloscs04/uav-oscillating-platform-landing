@@ -18,6 +18,9 @@ class VisionState:
         self.distance_m: float = 0.0
         self.tracking_state: str = "SEARCHING"
         self.last_detection_ts: float = 0.0
+        # Marker outlines of the latest processed frame, for drawing over the video on
+        # the ground station (normalised 0..1 image coords, a few hundred bytes).
+        self.overlay: Dict[str, Any] = {"markers": [], "primary": -1, "center": None, "seq": 0}
 
         # Optical flow state buffer (read by MAVLinkSensorFeed at 30Hz)
         self.flow_rad_x: float = 0.0
@@ -72,6 +75,19 @@ class VisionState:
 
             if detected:
                 self.last_detection_ts = time.time()
+
+    def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1):
+        """markers: [(marker_id, corners (4, 2) pixels), ...] seen in THIS frame."""
+        w, h = float(max(1, img_w)), float(max(1, img_h))
+        out, center = [], None
+        for marker_id, corners in markers:
+            c = [[round(float(u) / w, 4), round(float(v) / h, 4)] for u, v in corners]
+            out.append({"id": int(marker_id), "c": c})
+            if int(marker_id) == int(primary_id):
+                center = [round(sum(p[0] for p in c) / 4.0, 4), round(sum(p[1] for p in c) / 4.0, 4)]
+        with self._lock:
+            self.overlay = {"markers": out, "primary": int(primary_id) if center else -1,
+                            "center": center, "seq": self.overlay.get("seq", 0) + 1}
 
     def update_optical_flow(
         self,
@@ -153,6 +169,7 @@ class VisionState:
                     "px_dx": self.flow_px_dx,
                     "px_dy": self.flow_px_dy,
                 },
+                "aruco_overlay": dict(self.overlay),
                 "status": {
                     "target_locked": self.aruco_detected,
                     "tracking_state": self.tracking_state,
