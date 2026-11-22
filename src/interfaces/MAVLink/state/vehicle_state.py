@@ -68,6 +68,11 @@ class VehicleState:
         # to compare against the lidar before trusting the baro as the height source.
         self._baro_ref_hpa: Optional[float] = None
         self._baro_rel_alt_m: Optional[float] = None
+        # EKF source set in use: 1 = lidar height, 2 = baro height, 0 = unknown.
+        # ArduPilot does not report it, so it is tracked from our own ACKed commands and
+        # reset to 1 when the Pixhawk reboots (every boot starts with source set 1).
+        self._height_source_set: int = 0
+        self._last_boot_ms: Optional[int] = None
 
     EVENT_PACKETS = ("STATUSTEXT", "COMMAND_ACK")
 
@@ -77,6 +82,11 @@ class VehicleState:
             self._rx_time[pkt_type] = time.time()
             if pkt_type == "SCALED_PRESSURE":
                 self._update_baro_locked(data)
+            elif pkt_type == "ATTITUDE":
+                boot_ms = int(data.get("time_boot_ms", 0) or 0)
+                if self._last_boot_ms is not None and boot_ms + 5000 < self._last_boot_ms:
+                    self._height_source_set = 1   # Pixhawk rebooted -> source set 1 (lidar)
+                self._last_boot_ms = boot_ms
             if pkt_type in self.EVENT_PACKETS:
                 self._event_seq += 1
                 self._events.append((self._event_seq, time.time(), pkt_type, data))
@@ -94,6 +104,16 @@ class VehicleState:
         elif not armed:
             self._baro_ref_hpa += self.BARO_REF_ALPHA * (p - self._baro_ref_hpa)
         self._baro_rel_alt_m = 44330.77 * (1.0 - (p / self._baro_ref_hpa) ** 0.190263)
+
+    HEIGHT_SOURCE_NAMES = {0: "UNKNOWN", 1: "LIDAR", 2: "BARO", 3: "SET3"}
+
+    def set_height_source_set(self, source_set: int):
+        with self._lock:
+            self._height_source_set = int(source_set)
+
+    def get_height_source_set(self) -> int:
+        with self._lock:
+            return self._height_source_set
 
     def reset_baro_reference(self):
         """Next SCALED_PRESSURE becomes the new zero (used after 'calibrate baro')."""
@@ -323,6 +343,8 @@ class VehicleState:
             },
             "pi_flow": self._export_pi_flow(),
             "baro": self._export_baro(),
+            "height_src": {"set": self.get_height_source_set(),
+                           "name": self.HEIGHT_SOURCE_NAMES.get(self.get_height_source_set(), "?")},
             "statustext_log": self._export_statustext_log(),
             "rc_channels": {
                 "roll_ch1": rc.get("chan1_raw", 0),

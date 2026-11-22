@@ -71,6 +71,10 @@ class MAVLinkManager:
         """Snapshot of parameters, Pi flow, Pixhawk flow and EKF state as (tag, text) lines."""
         self.rx_listener.refresh_params()
         lines = flow_check.check_params(self.state.get_params())
+        hs = self.state.get_height_source_set()
+        lines.append(("PASS" if hs in (1, 2) else "WARN",
+                      f"Active height source: {self.state.HEIGHT_SOURCE_NAMES.get(hs, hs)} "
+                      f"(change with 'heightsrc lidar|baro', disarmed)"))
         lines += flow_check.check_live(self.state, self.sensor_feed)
         lines.append(flow_check.verdict(lines))
         return lines
@@ -170,6 +174,7 @@ class MAVLinkManager:
                         self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
                         self.system_cmd.request_message_intervals()
+                        threading.Timer(2.0, self._reset_height_source_if_disarmed).start()
                         self.system_cmd.set_ekf_origin()
                     else:
                         self._cleanup_partial_connection()
@@ -257,6 +262,19 @@ class MAVLinkManager:
 
     def preflight_calibration(self, kind: str) -> bool:
         return self.system_cmd.preflight_calibration(kind)
+
+    def set_ekf_source_set(self, source_set: int) -> bool:
+        return self.system_cmd.set_ekf_source_set(source_set)
+
+    def _reset_height_source_if_disarmed(self):
+        """After (re)connecting, put the Pixhawk in a known state: source set 1 (lidar
+        height), the same as at every Pixhawk boot. Never while armed."""
+        if not self.connected or self.state.is_armed():
+            print("[MAVLink] Height source unknown (vehicle armed at connect); not changed.")
+            return
+        if self.system_cmd.set_ekf_source_set(1):
+            self.state.set_height_source_set(1)
+            print("[MAVLink] Height source set to LIDAR (EKF source set 1).")
 
     def run_prearm_checks(self) -> bool:
         return self.system_cmd.run_prearm_checks()

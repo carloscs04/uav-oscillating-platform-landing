@@ -19,6 +19,7 @@ class MAVLinkCLI(BaseNodeCLI):
         mavutil.mavlink.MAV_CMD_NAV_LAND,
         401,  # MAV_CMD_RUN_PREARM_CHECKS
         mavutil.mavlink.MAV_CMD_PREFLIGHT_CALIBRATION,
+        42007,  # MAV_CMD_SET_EKF_SOURCE_SET
     }
     SEVERITY_TAG = {0: "ERROR", 1: "ERROR", 2: "ERROR", 3: "ERROR", 4: "WARN", 5: "STATUS", 6: "INFO", 7: "INFO"}
     SEVERITY_NAME = {0: "EMERG", 1: "ALERT", 2: "CRIT", 3: "ERR", 4: "WARN", 5: "NOTICE", 6: "INFO", 7: "DEBUG"}
@@ -76,7 +77,8 @@ class MAVLinkCLI(BaseNodeCLI):
         ok = result == mavutil.mavlink.MAV_RESULT_ACCEPTED
         if cmd not in self.USER_COMMANDS and ok:
             return
-        cmd_name = "RUN_PREARM_CHECKS" if cmd == 401 else self._enum_name("MAV_CMD", cmd, "MAV_CMD_")
+        cmd_name = {401: "RUN_PREARM_CHECKS", 42007: "SET_EKF_SOURCE_SET"}.get(
+            cmd, self._enum_name("MAV_CMD", cmd, "MAV_CMD_"))
         res_name = self._enum_name("MAV_RESULT", result, "MAV_RESULT_")
         self.log(f"Pixhawk ACK: {cmd_name} -> {res_name}", "OK" if ok else "ERROR")
 
@@ -133,6 +135,7 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
         self.register_cmd("prearm", self.cmd_prearm, "Why won't it arm? Runs the Pixhawk pre-arm checks and lists failing sensors", aliases=["why", "checks"])
         self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro>", aliases=["cal"])
+        self.register_cmd("heightsrc", self.cmd_heightsrc, "Height source: heightsrc [lidar|baro] (normal flights: lidar; over the platform: baro). Disarmed only", aliases=["hsrc"])
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
         self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
@@ -345,6 +348,43 @@ class MAVLinkCLI(BaseNodeCLI):
         self.log(f"{kind.upper()} calibration FAILED "
                  f"({self._enum_name('MAV_RESULT', result, 'MAV_RESULT_')}). Reason in the 'Pixhawk:' lines above.", "ERROR")
         return "CAL_FAILED"
+
+    HEIGHT_SOURCES = {"lidar": 1, "baro": 2}
+
+    def cmd_heightsrc(self, args: List[str]) -> str:
+        vs = self.manager.state
+        cur = vs.get_height_source_set() if hasattr(vs, "get_height_source_set") else 0
+        cur_name = vs.HEIGHT_SOURCE_NAMES.get(cur, cur) if hasattr(vs, "HEIGHT_SOURCE_NAMES") else cur
+        if not args:
+            self.log(f"Active height source: {cur_name}. Use 'heightsrc lidar' (normal) or "
+                     f"'heightsrc baro' (over the platform).", "STATUS")
+            return f"HEIGHTSRC_{cur_name}"
+        name = args[0].lower()
+        if name not in self.HEIGHT_SOURCES:
+            self.log("Usage: heightsrc [lidar|baro]", "ERROR")
+            return "HEIGHTSRC_USAGE"
+        if not self.manager.is_healthy():
+            self.log("heightsrc: MAVLink is OFFLINE (no Pixhawk heartbeat).", "ERROR")
+            return "MAVLINK_OFFLINE"
+        if vs.is_armed():
+            self.log("heightsrc refused: vehicle is ARMED. Change it on the ground, disarmed.", "BLOCKED")
+            return "HEIGHTSRC_REFUSED_ARMED"
+        want = self.HEIGHT_SOURCES[name]
+        seq = self._event_seq()
+        if not self.manager.set_ekf_source_set(want):
+            self.log("heightsrc: could not send the command.", "ERROR")
+            return "HEIGHTSRC_SEND_FAILED"
+        result = self._wait_ack(42007, seq, timeout=2.0)
+        if result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            vs.set_height_source_set(want)
+            self.log(f"Height source is now {name.upper()} (EKF source set {want}).", "OK")
+            if name == "baro":
+                self.log("Run 'calibrate baro' now if you did not on this take-off spot. "
+                         "A Pixhawk reboot or Pi restart goes back to LIDAR.", "WARN")
+            return f"HEIGHTSRC_{name.upper()}"
+        why = "no answer in 2 s" if result is None else self._enum_name("MAV_RESULT", result, "MAV_RESULT_")
+        self.log(f"heightsrc {name} FAILED ({why}). Height source unchanged: {cur_name}.", "ERROR")
+        return "HEIGHTSRC_FAILED"
 
     def cmd_flowcheck(self, _args: List[str]) -> str:
         if not self.manager.is_healthy():

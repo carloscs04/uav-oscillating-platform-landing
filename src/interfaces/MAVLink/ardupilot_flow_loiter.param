@@ -16,18 +16,28 @@ EK3_ENABLE,1
 EK3_SRC1_POSXY,0
 # Horizontal velocity: optical flow
 EK3_SRC1_VELXY,5
-# Height: rangefinder (VL53L1X). Chosen on 2026-11-21 because the pilot saw the baro
-# height misbehave in flight. Never measured: at that time the gyro had a ~7 deg/s
-# bias and the EKF attitude was inconsistent, which also corrupts the height estimate.
-# The ground station CSV now logs baro_rel_alt_m next to the lidar to measure it; see
-# ardupilot_flow_loiter_baro.param for the baro-height profile.
-# Needs a flat floor below the drone and a working rangefinder at all times.
+# Height (source set 1, active at every boot): rangefinder (VL53L1X) = height above
+# whatever is below the drone. Used for normal flights over the floor/tarp.
 EK3_SRC1_POSZ,2
 EK3_SRC1_VELZ,0
 # Yaw: none (gyro only, slow drift; no compass indoors). See flowcheck notes.
 EK3_SRC1_YAW,0
-# Baro->rangefinder switching: not used, because the rangefinder is the main height source
+# Baro->rangefinder switching: off (the height source is chosen with the source sets)
 EK3_RNG_USE_HGT,-1
+# --- Source set 2: same as set 1 but HEIGHT FROM THE BAROMETER, for flights over the
+# 1 m landing platform (with lidar height the drone would climb 1 m over it, and lose
+# the lidar when it leaves the platform at ~2 m). Selected from the master panel with
+# 'heightsrc baro' (disarmed only); every Pixhawk boot and every Pi restart goes back
+# to set 1 (lidar). The lidar is still used for flow scaling, the LAND slow-down and
+# the Pi's GUIDED_NOGPS controller. Set 2 defaults to NO flow, so everything is listed.
+EK3_SRC2_POSXY,0
+EK3_SRC2_VELXY,5
+EK3_SRC2_POSZ,1
+EK3_SRC2_VELZ,0
+EK3_SRC2_YAW,0
+# Surface tracking off: with baro height it would still follow the lidar and climb
+# over the platform; with lidar height it has nothing to add. Needs a reboot.
+SURFTRAK_MODE,0
 # Use flow for navigation
 EK3_FLOW_USE,1
 # Camera + Pi + link delay in ms, measured with 'flowtest' (2026-11-21: ~50 ms)

@@ -150,6 +150,23 @@ class SystemCommands:
             print(f"[System TX Error] PREFLIGHT_CALIBRATION {kind}: {e}")
             return False
 
+    def set_ekf_source_set(self, source_set: int) -> bool:
+        """MAV_CMD_SET_EKF_SOURCE_SET (42007), sent as COMMAND_INT as ArduPilot handles it.
+        1 = EK3_SRC1_* (lidar height), 2 = EK3_SRC2_* (baro height)."""
+        if not self.master or source_set not in (1, 2, 3):
+            return False
+        try:
+            self.master.mav.command_int_send(
+                self.master.target_system,
+                self.master.target_component,
+                0, 42007, 0, 0,
+                float(source_set), 0, 0, 0, 0, 0, 0,
+            )
+            return True
+        except Exception as e:
+            print(f"[System TX Error] SET_EKF_SOURCE_SET {source_set}: {e}")
+            return False
+
     def stop_telemetry_streams(self):
         if not self.master:
             return

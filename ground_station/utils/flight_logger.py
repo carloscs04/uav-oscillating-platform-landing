@@ -126,6 +126,7 @@ class FlightExperimentLogger:
         "pi_flow_age_ms",
         "pi_flow_tx_hz",
         # Barometer (Pixhawk SCALED_PRESSURE): height above the take-off point
+        "height_src",
         "baro_rel_alt_m",
         "baro_press_hpa",
         "baro_temp_c",
@@ -199,6 +200,7 @@ class FlightExperimentLogger:
         self._last_statustext = ""
         self._last_mode = -1
         self._row_count = 0
+        self._last_hsrc = None
 
         # Texts from the last 30 s before arming (PreArm, EKF, ...) head the events log
         for ts, sev, text in self._pending_texts:
@@ -280,6 +282,10 @@ class FlightExperimentLogger:
         sys_st = packets.get("sys_status") or {}
         pif = packets.get("pi_flow") or {}
         baro = packets.get("baro") or {}
+        hsrc = packets.get("height_src") or {}
+        if hsrc.get("name") and hsrc.get("name") != getattr(self, "_last_hsrc", None):
+            self._log_event(f"HEIGHT_SOURCE -> {hsrc.get('name')} at t+{elapsed}s")
+            self._last_hsrc = hsrc.get("name")
 
         row = [
             self._current_codename,
@@ -347,6 +353,7 @@ class FlightExperimentLogger:
             pif.get("samples", 0),
             pif.get("age_ms", -1),
             pif.get("tx_hz", 0.0),
+            hsrc.get("name", "UNKNOWN"),
             baro.get("rel_alt_m", 0.0),
             baro.get("press_hpa", 0.0),
             baro.get("temp_c", 0.0),

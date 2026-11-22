@@ -34,10 +34,7 @@ MAV_PARAM_TYPES = {
 }
 DEFAULT_MAV_PARAM_TYPE = 2   # every other parameter in the file is an 8-bit integer
 QGC_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_qgc.params")
-# Baro-height profile (for flying over the landing platform); flowcheck compares the
-# Pixhawk with this file when it reports EK3_SRC1_POSZ = 1.
-BARO_PARAM_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_baro.param")
-BARO_QGC_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_baro_qgc.params")
+
 
 # Values that are tuned per vehicle: a difference from the file is not an error.
 TUNED_PARAMS = {"EK3_FLOW_DELAY", "FLOW_FXSCALER", "FLOW_FYSCALER", "DISARM_DELAY"}
@@ -95,11 +92,7 @@ def _fmt_age(age: Optional[float]) -> str:
 # ---------------------------------------------------------------- flowcheck
 def check_params(params: dict) -> List[Line]:
     lines: List[Line] = []
-    baro = params.get("EK3_SRC1_POSZ") == 1
-    lines.append(("INFO", "Height profile: " + (
-        "BARO (ardupilot_flow_loiter_baro.param) - run 'calibrate baro' on the take-off spot"
-        if baro else "LIDAR (ardupilot_flow_loiter.param)")))
-    for name, want in load_expected(BARO_PARAM_FILE if baro else PARAM_FILE):
+    for name, want in load_expected():
         have = params.get(name)
         if name == "ARMING_CHECK" and have is None and "ARMING_SKIPCHK" in params:
             skip = params["ARMING_SKIPCHK"]   # ArduPilot 4.7+: set bits = checks SKIPPED
@@ -359,5 +352,4 @@ if __name__ == "__main__":
     # Regenerate the QGroundControl file after editing ardupilot_flow_loiter.param:
     #   python -m src.interfaces.MAVLink.flow_check
     print(f"Wrote {export_qgc()}")
-    print(f"Wrote {export_qgc(BARO_PARAM_FILE, BARO_QGC_FILE)}")
 
