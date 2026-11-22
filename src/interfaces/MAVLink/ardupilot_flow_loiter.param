@@ -16,7 +16,11 @@ EK3_ENABLE,1
 EK3_SRC1_POSXY,0
 # Horizontal velocity: optical flow
 EK3_SRC1_VELXY,5
-# Height: rangefinder (VL53L1X). The barometer is unreliable on this vehicle.
+# Height: rangefinder (VL53L1X). Chosen on 2026-11-21 because the pilot saw the baro
+# height misbehave in flight. Never measured: at that time the gyro had a ~7 deg/s
+# bias and the EKF attitude was inconsistent, which also corrupts the height estimate.
+# The ground station CSV now logs baro_rel_alt_m next to the lidar to measure it; see
+# ardupilot_flow_loiter_baro.param for the baro-height profile.
 # Needs a flat floor below the drone and a working rangefinder at all times.
 EK3_SRC1_POSZ,2
 EK3_SRC1_VELZ,0
