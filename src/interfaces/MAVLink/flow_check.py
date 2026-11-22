@@ -351,7 +351,11 @@ def watch(vehicle_state: Any, feed: Any, seconds: float, log: Callable[[str, str
         if p0 is None and p_now > 0 and h is not None:
             # Zero on the averaged reference (EMA over ~2 s while disarmed), not one raw
             # sample: a single reading is +/-0.2 m of noise and biases the whole run.
-            ref = getattr(vehicle_state, "_baro_ref_hpa", None)
+            # Only while disarmed: once armed that reference is frozen at the take-off
+            # spot, while the lidar zero here would be the current height (mismatch).
+            hb = vehicle_state.get_packet("HEARTBEAT") or {}
+            armed = bool(int(hb.get("base_mode", 0) or 0) & 128)
+            ref = None if armed else getattr(vehicle_state, "_baro_ref_hpa", None)
             p0, h0 = (ref if ref else p_now), h
         baro_txt = ""
         if p0 and p_now > 0:
