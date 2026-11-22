@@ -28,6 +28,8 @@ SCAN_DICTS = ("DICT_APRILTAG_36h11", "DICT_5X5_1000", "DICT_6X6_1000", "DICT_7X7
 SCAN_HZ = 2.0          # full scan (all families): finds unknown markers of any family
 SCAN_FAST_HZ = 10.0    # in between, only the families of known markers + the current target
 SCAN_HOLD_S = 1.0      # a marker missed by one scan stays this long (no blinking outline)
+TARGET_MAX_AGE_S = 0.15   # only a marker seen this recently can be the control target
+KNOWN_HOLD_S = 0.5        # a known marker lost this recently: do not switch to an unknown one
 # Printed tags are often slightly bent / seen through lens distortion: the default 0.03
 # rejected a real AprilTag whose edges were not perfectly straight.
 SCAN_POLY_ACCURACY = 0.05
@@ -85,6 +87,7 @@ class CameraNode:
         self.registry = []
         self.reload_registry()
         self._target_label = None
+        self._known_seen = {}   # known label -> (centre px, side px, monotonic time last seen)
 
         self.fps = 0.0
         self.proc_ms = 0.0
@@ -295,12 +298,39 @@ class CameraNode:
         K = getattr(self.model, "camera_matrix", None)
         pp = (float(K[0][2]), float(K[1][2])) if K is not None else (shape[1] / 2.0, shape[0] / 2.0)
         f = (float(K[0][0]), float(K[1][1])) if K is not None else None
-        idx, known = select_target([(c[0], c[1]) for c in cands], self.registry, pp, self._target_label)
-        self._target_label = cands[idx][0] if idx is not None else None
+        cands = self._drop_phantoms(cands, now)
+        # Control target: only fresh detections (held scan results are drawn, never followed),
+        # and no switch to an unknown marker right after a known one was lost for a frame.
+        fresh = [c for c in cands if now - c[3] <= TARGET_MAX_AGE_S]
+        known_recent = any(now - t <= KNOWN_HOLD_S for _c, _s, t in self._known_seen.values())
+        if known_recent and not any(c[0] in self.registry for c in fresh):
+            fresh = []
+        idx, known = select_target([(c[0], c[1]) for c in fresh], self.registry, pp, self._target_label)
+        chosen = fresh[idx] if idx is not None else None
+        self._target_label = chosen[0] if chosen else None
         rank = set(self.registry)
         items = [(label, c, ax, label in rank) for label, c, ax, _t in cands]
         self.vision_state.update_overlay(items, shape[1], shape[0], self._target_label, pp, f)
-        self._publish_pixel_target(cands[idx] if idx is not None else None, known, shape)
+        self._publish_pixel_target(chosen, known, shape)
+
+    def _drop_phantoms(self, cands, now):
+        """A known marker misread by another dictionary in the scan (seen: ARUCO_ORIGINAL #193
+        on top of the 4x4 #20) is not a second marker: drop unknown candidates whose centre is
+        within one side of a known marker seen in the last KNOWN_HOLD_S."""
+        for label, c, _ax, t in cands:
+            if label in self.registry and now - t <= TARGET_MAX_AGE_S:
+                p = np.asarray(c, np.float64).reshape(4, 2)
+                side = float(np.mean(np.linalg.norm(p - np.roll(p, 1, axis=0), axis=1)))
+                self._known_seen[label] = (p.mean(axis=0), side, t)
+        recent = [(ctr, side) for ctr, side, t in self._known_seen.values() if now - t <= KNOWN_HOLD_S]
+        out = []
+        for cand in cands:
+            if cand[0] not in self.registry:
+                ctr = np.asarray(cand[1], np.float64).reshape(4, 2).mean(axis=0)
+                if any(np.linalg.norm(ctr - kc) < max(side, 10.0) for kc, side in recent):
+                    continue
+            out.append(cand)
+        return out
 
     def _lidar_height(self):
         st = self.height_state

@@ -104,6 +104,36 @@ def test_node_flow():
     assert vs.get_pixel_target() == {"detected": False}
 
 
+def test_phantom_and_stale_never_target():
+    """Seen 2026-11-22: the scan misread the 4x4 #20 as ARUCO_ORIGINAL #193; when #20 dropped
+    for one frame the held (1 s old) phantom became the target."""
+    node, vs = _node()
+    shape, now = (360, 640), time.monotonic()
+    node.tracker.detector.last_all = [(20, square(300, 200))]
+    node._scan_found = [("ARUCO_ORIGINAL #193", square(303, 198), now)]
+    node._publish_overlay([], shape)
+    assert vs.get_pixel_target()["source"] == "4X4_50 #20"
+    assert [i["label"] for i in vs.overlay["items"]] == ["4X4_50 #20"]       # phantom dropped
+    # #20 missing for a frame, phantom still held by the scan -> no target, not the phantom
+    node.tracker.detector.last_all = []
+    node._publish_overlay([], shape)
+    assert vs.get_pixel_target() == {"detected": False}
+    # a real unknown elsewhere, but #20 was lost < 0.5 s ago -> still no switch
+    node._scan_found = [("APRILTAG_36h11 #3", square(500, 100), time.monotonic())]
+    node._publish_overlay([], shape)
+    assert vs.get_pixel_target() == {"detected": False}
+    # known gone for > 0.5 s -> the unknown may become the target
+    node._known_seen = {k: (c, s, t - 1.0) for k, (c, s, t) in node._known_seen.items()}
+    node._scan_found = [("APRILTAG_36h11 #3", square(500, 100), time.monotonic())]
+    node._publish_overlay([], shape)
+    assert vs.get_pixel_target()["source"] == "APRILTAG_36h11 #3"
+    # a held (stale) scan result is drawn but never the target
+    node._scan_found = [("APRILTAG_36h11 #3", square(500, 100), time.monotonic() - 0.6)]
+    node._publish_overlay([], shape)
+    assert vs.get_pixel_target() == {"detected": False}
+    assert vs.overlay["items"][0]["label"] == "APRILTAG_36h11 #3"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     failed = 0
