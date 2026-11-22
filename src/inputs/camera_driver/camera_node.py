@@ -384,7 +384,15 @@ class CameraNode:
         h = pt.get("h_vert_m") if pt.get("h_vert_m") is not None else self._lidar_height()
         out = self.landing.step(target, h, time.monotonic())
         out["target"] = ("pad" if pt.get("pad_fwd_m") is not None else "marker") if target else None
-        out["mode"] = "SHADOW"
+        out["t"] = time.monotonic()     # GuidedSender: law output age
+        sender = getattr(self, "guided_sender", None)
+        out["mode"] = sender.mode_word() if sender is not None else "SHADOW"
+        if sender is not None:
+            last = sender.status()
+            out["sent"] = int(bool(last.get("sent")))
+            out["sent_v_fwd"], out["sent_v_right"], out["sent_v_down"] = (
+                last.get("v_fwd"), last.get("v_right"), last.get("v_down"))
+            out["sent_reason"] = last.get("reason")
         if hasattr(self.vision_state, "update_landing_shadow"):
             self.vision_state.update_landing_shadow(out)
 

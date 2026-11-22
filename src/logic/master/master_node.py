@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from src.inputs.distance_sensor.master_sensor import DistanceManager
 from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
+from src.logic.control.guided_sender import GuidedSender
 from src.logic.control.master_control import ControlManager, MissionPhase
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 from src.logic.master.cmd_nodes.camera_cmd import CameraCLI
@@ -103,6 +104,14 @@ class MasterNode:
             else None
         )
 
+        # Landing law -> GUIDED velocity sender. Disarmed at start (shadow only); armed with
+        # `landshadow arm align|descend`, sends only while the PILOT has the Pixhawk in GUIDED.
+        self.guided_sender = GuidedSender(
+            self.mavlink_node, self.vision_node.state,
+            log=lambda msg, level="INFO": self.state.append_cli_log(f"[GUIDED] {msg}", level))
+        if self._camera_driver is not None:
+            self._camera_driver.guided_sender = self.guided_sender
+
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
 
@@ -110,7 +119,8 @@ class MasterNode:
         self.node_clis: Dict[str, BaseNodeCLI] = {
             "mavlink": MAVLinkCLI(self.mavlink_node, self.state, self.guard, sim_ref=self.simulator),
             "camera": CameraCLI(self.camera_node, self.state, self.guard),
-            "vision": VisionCLI(self.vision_node, self.state, self.guard, camera_driver=self._camera_driver),
+            "vision": VisionCLI(self.vision_node, self.state, self.guard, camera_driver=self._camera_driver,
+                                guided_sender=self.guided_sender),
             "distance": DistanceCLI(self.distance_node, self.state, self.guard),
             "control": ControlCLI(self.control_node, self.state, self.guard),
         }
@@ -170,6 +180,8 @@ class MasterNode:
         self._running = False
         self.simulator.active = False
         self._pending_mission_confirm = False
+        self.guided_sender.disarm("shutdown")
+        self.guided_sender.stop()
         self.state.append_cli_log("Shutting down all UAV subsystems...", "SYSTEM")
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")

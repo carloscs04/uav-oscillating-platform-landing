@@ -290,6 +290,9 @@ class MAVLinkManager:
     def send_velocity(self, vx: float, vy: float, vz: float):
         self.flight_cmd.send_velocity(vx, vy, vz)
 
+    def send_velocity_body(self, v_fwd: float, v_right: float, v_down: float):
+        self.flight_cmd.send_velocity_body(v_fwd, v_right, v_down)
+
     def debug_force_arm(self) -> bool:
         self.state.clear_transient_packets()
         return self.system_cmd.debug_force_arm()

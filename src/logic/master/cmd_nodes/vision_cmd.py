@@ -10,8 +10,9 @@ from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 class VisionCLI(BaseNodeCLI):
     """All VisionManager CLI commands and aliases."""
 
-    def __init__(self, manager, state, guard, camera_driver=None):
+    def __init__(self, manager, state, guard, camera_driver=None, guided_sender=None):
         self.camera_driver = camera_driver  # CameraNode: owns the known-marker registry
+        self.guided_sender = guided_sender  # GuidedSender: law -> Pixhawk, only in GUIDED
         super().__init__("vision", manager, state, guard)
         # Asks in the terminal when the target is a marker that is not registered
         self._asked = set()        # unknown labels already asked about (once each)
@@ -29,7 +30,8 @@ class VisionCLI(BaseNodeCLI):
                           "Record the pixel target + lidar + attitude to CSV, 20 Hz [seconds] | stop",
                           aliases=["vlog"])
         self.register_cmd("landshadow", self.cmd_landshadow,
-                          "Landing law in SHADOW mode (computed, NOT sent): status | reset", aliases=["lshadow"])
+                          "Landing law: status | reset | arm <align|descend> (sends ONLY in GUIDED) | disarm",
+                          aliases=["lshadow"])
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
         self.register_cmd("markers", self.cmd_markers,
@@ -117,7 +119,27 @@ class VisionCLI(BaseNodeCLI):
             drv.landing.reset()
             self.log("Landing law reset to SEARCH (shadow mode, nothing is sent).", "OK")
             return "LANDSHADOW_RESET"
+        gs = self.guided_sender
+        if args and args[0].lower() in ("arm", "disarm"):
+            if gs is None:
+                self.log("No GUIDED sender on this machine.", "ERROR")
+                return "NO_SENDER"
+            if args[0].lower() == "disarm":
+                gs.disarm("pilot")
+                self.log("Sender disarmed: law back to SHADOW, nothing is sent.", "OK")
+                return "LANDSHADOW_DISARMED"
+            if drv is not None:
+                drv.landing.reset()         # start from SEARCH
+            ok, msg = gs.arm(args[1] if len(args) > 1 else "")
+            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow arm <align|descend>",
+                     "OK" if ok else "ERROR")
+            return "LANDSHADOW_ARMED" if ok else "LANDSHADOW_ARM_REFUSED"
         self.log(self._shadow_text(), "STATUS")
+        if gs is not None:
+            st = gs.status()
+            self.log(f"  sender: {gs.mode_word()}  in_guided={st['in_guided']}  sent={st['sent_count']}  "
+                     f"last fwd={st['v_fwd'] * 100:+.1f} right={st['v_right'] * 100:+.1f} "
+                     f"down={st['v_down'] * 100:+.1f} cm/s  ({st['reason']})  floor={gs.p.floor_h} m", "STATUS")
         if drv is not None:
             p = drv.landing.p
             self.log(f"  kp={p.kp} v_max={p.v_max} m/s  align<{p.align_tol * 100:.0f} cm for {p.align_hold_s} s  "
@@ -129,7 +151,7 @@ class VisionCLI(BaseNodeCLI):
         ls = self.manager.state.get_landing_shadow() if hasattr(self.manager.state, "get_landing_shadow") else {}
         err = ls.get("err_m")
         h = ls.get("h_m")
-        return (f"SHADOW {ls.get('phase', '?'):<9} v fwd={ls.get('v_fwd', 0) * 100:+5.1f} right={ls.get('v_right', 0) * 100:+5.1f} "
+        return (f"{ls.get('mode', 'SHADOW')} {ls.get('phase', '?'):<9} v fwd={ls.get('v_fwd', 0) * 100:+5.1f} right={ls.get('v_right', 0) * 100:+5.1f} "
                 f"down={ls.get('v_down', 0) * 100:+5.1f} cm/s  err={'--' if err is None else f'{err * 100:4.1f}'} cm  "
                 f"h={'--' if h is None else f'{h:.2f}'} m  [{ls.get('target') or '-'}] {ls.get('note', '')}")
 
