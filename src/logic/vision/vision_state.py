@@ -81,24 +81,33 @@ class VisionState:
 
     def update_overlay(self, markers, img_w: int, img_h: int, primary_id: int = -1, principal_px=None,
                        others=None, focal_px=None):
-        """markers: [(marker_id, corners (4, 2) pixels), ...] seen in THIS frame."""
+        """markers: [(marker_id, corners (4, 2) px[, axes (4, 2) px]), ...] pad markers seen in
+        THIS frame; others: same with a text label instead of the id (any other marker).
+        axes = projected marker origin + ends of its X (red), Y (green), Z (blue) axes."""
         w, h = float(max(1, img_w)), float(max(1, img_h))
+
+        def norm(points):
+            return [[round(float(u) / w, 4), round(float(v) / h, 4)] for u, v in points]
+
+        def entry(key, value, corners, axes=None):
+            e = {key: value, "c": norm(corners)}
+            if axes is not None:
+                e["ax"] = norm(axes)
+            return e
+
         out, center = [], None
-        for marker_id, corners in markers:
-            c = [[round(float(u) / w, 4), round(float(v) / h, 4)] for u, v in corners]
-            out.append({"id": int(marker_id), "c": c})
-            if int(marker_id) == int(primary_id):
+        for item in markers:
+            e = entry("id", int(item[0]), *item[1:])
+            out.append(e)
+            if e["id"] == int(primary_id):
+                c = e["c"]
                 center = [round(sum(p[0] for p in c) / 4.0, 4), round(sum(p[1] for p in c) / 4.0, 4)]
+        other_list = [entry("label", str(item[0]), *item[1:]) for item in (others or [])]
         # Principal point = where the optical axis hits the image = straight below the lens.
         # x = y = 0 in aruco_pose means the marker sits exactly there (not the image centre).
-        pp = ([round(float(principal_px[0]) / w, 4), round(float(principal_px[1]) / h, 4)]
-              if principal_px is not None else self.overlay.get("pp"))
-        f = ([round(float(focal_px[0]) / w, 4), round(float(focal_px[1]) / h, 4)]
-             if focal_px is not None else self.overlay.get("f"))
+        pp = norm([principal_px])[0] if principal_px is not None else self.overlay.get("pp")
+        f = norm([focal_px])[0] if focal_px is not None else self.overlay.get("f")
         with self._lock:
-            other_list = [{"label": str(label), "c": [[round(float(u) / w, 4), round(float(v) / h, 4)]
-                                                      for u, v in corners]}
-                          for label, corners in (others or [])]
             self.overlay = {"markers": out, "primary": int(primary_id) if center else -1,
                             "center": center, "pp": pp, "f": f, "others": other_list,
                             "seq": self.overlay.get("seq", 0) + 1}

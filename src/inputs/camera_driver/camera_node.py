@@ -9,10 +9,11 @@ import time
 from typing import Any, Dict, Optional
 
 import cv2
+import numpy as np
 
 from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_calibration
 from src.inputs.camera_driver.cameras import load_config, open_camera
-from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg
+from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.optical_flow import OpticalFlowEstimator
 from src.logic.vision.tracker import TargetTracker
 
@@ -219,13 +220,43 @@ class CameraNode:
             tracking_state="LOCKED" if t["in_view"] else "HOLDING",
         )
 
+    def _marker_axes(self, corners, rvec=None, tvec=None, size_m=None):
+        """Image points of the marker origin and of the tips of its X, Y, Z axes (half a side
+        long). Without a known pose/size, solve it with size 1: the rotation (what the axes
+        show) does not depend on the size, only the distance does."""
+        if self.model is None:
+            return None
+        K, dist = self.model.camera_matrix, self.model.dist_coeffs
+        if rvec is None or tvec is None or not size_m:
+            size_m = 1.0
+            obj = marker_object_points(size_m)
+            ok, rvec, tvec = cv2.solvePnP(obj, np.asarray(corners, np.float64).reshape(4, 1, 2),
+                                          K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+            if not ok:
+                return None
+        L = 0.5 * float(size_m)
+        axis = np.array([[0, 0, 0], [L, 0, 0], [0, L, 0], [0, 0, L]], np.float64)
+        pts, _ = cv2.projectPoints(axis, np.asarray(rvec, np.float64), np.asarray(tvec, np.float64), K, dist)
+        return pts.reshape(4, 2)
+
     def _publish_overlay(self, measurements, shape):
-        """Outlines of the markers in this frame -> VisionState (drawn by the ground station,
-        so the Pi only sends ~8 numbers per marker instead of re-encoding an annotated image)."""
+        """Outlines + RGB axes of the markers in this frame -> VisionState (drawn by the ground
+        station, so the Pi only sends a few numbers per marker instead of an annotated image)."""
         t = self.tracker.target()
         primary = int(t["id"]) if t.get("detected") and t.get("in_view") else -1
-        markers = [(m.marker_id, m.corners) for m in measurements if m.corners is not None]
-        others = self._scan_found if getattr(self.vision_state, "scan_any", False) else []
+        markers, pad_ids = [], set()
+        for m in measurements:
+            if m.corners is None:
+                continue
+            pad_ids.add(m.marker_id)
+            markers.append((m.marker_id, m.corners,
+                            self._marker_axes(m.corners, m.rvec, m.tvec, self.tracker.sizes_m.get(m.marker_id))))
+        # Same family, any other ID (already decoded by the detector: no extra detection pass)
+        dict_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
+        others = [(f"{dict_name} #{i}", c, self._marker_axes(c))
+                  for i, c in getattr(self.tracker.detector, "last_all", []) if i not in pad_ids]
+        if getattr(self.vision_state, "scan_any", False):
+            others += [(label, c, self._marker_axes(c)) for label, c in self._scan_found]
         K = getattr(self.model, "camera_matrix", None)
         pp = (float(K[0][2]), float(K[1][2])) if K is not None else None
         f = (float(K[0][0]), float(K[1][1])) if K is not None else None
@@ -255,7 +286,6 @@ class CameraNode:
                         (name.replace("DICT_", ""), cv2.aruco.ArucoDetector(d, cv2.aruco.DetectorParameters())))
         t0 = time.perf_counter()
         main_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
-        main_ids = set(self.tracker.detector.ids or []) if self.tracker else set()
         found, taken = [], []
         for name, det in self._scan_detectors:
             corners, ids, _ = det.detectMarkers(gray)
@@ -267,9 +297,9 @@ class CameraNode:
                 # Same square found by a bigger family (4X4_1000 vs 4X4_50...): keep the first.
                 if any(((centre - t) ** 2).sum() < 25.0 for t in taken):
                     continue
-                if name.startswith(main_name.split("_")[0]) and marker_id in main_ids:
+                if name.startswith(main_name.split("_")[0]):
                     taken.append(centre)
-                    continue  # already tracked and drawn by the main pipeline
+                    continue  # pad family: every ID is already outlined by the main pipeline
                 taken.append(centre)
                 found.append((f"{name} #{marker_id}", c))
         # One missed scan (blur, motion) should not make the outline blink: keep the last

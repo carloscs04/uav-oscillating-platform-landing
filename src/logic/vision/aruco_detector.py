@@ -108,11 +108,16 @@ class ArucoDetector:
         self.refine = refine
         self.ids = set(int(i) for i in ids) if ids else None
         self._detector = cv2.aruco.ArucoDetector(get_dictionary(dictionary), params)
+        self.last_all = []
 
     def detect(self, image):
         """Return [(marker_id, corners (4, 2) float32), ...] sorted by id."""
         gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self._detector.detectMarkers(gray)
+        # Every marker of this dictionary in the frame, whatever its ID (unrefined corners),
+        # so the ground station can outline IDs that are not part of the pad at no extra cost.
+        self.last_all = ([] if ids is None else
+                         [(int(i), c.reshape(4, 2).astype(np.float32)) for i, c in zip(ids.ravel(), corners)])
         if ids is None:
             return []
         found = []

@@ -161,6 +161,7 @@ class CameraView(tk.LabelFrame):
                                     fill=color, outline="", tags=tag)
             self.canvas.create_text(pts[0], pts[1] - 10, text=f"ID {m.get('id')}", fill=color,
                                     font=("Consolas", 8, "bold"), tags=tag)
+            self._draw_axes(m.get("ax"), cw, ch, tag)
 
         # Discovery scan (`arucoscan on`): markers outside the configured pad (no pose: size
         # unknown). Their centre is marked and, with the lidar height, converted to cm.
@@ -180,6 +181,7 @@ class CameraView(tk.LabelFrame):
             self.canvas.create_line(ox, oy - 12, ox, oy + 12, fill=orange, width=2, tags=tag)
             self.canvas.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill=orange, outline="", tags=tag)
             self.canvas.create_line(cx, cy, ox, oy, fill=orange, dash=(4, 3), tags=tag)
+            self._draw_axes(o.get("ax"), cw, ch, tag)
             if first_offset is None:
                 first_offset = (o.get("label", "?"), mu - pp[0], mv - pp[1])
 
@@ -210,6 +212,17 @@ class CameraView(tk.LabelFrame):
                                     text=f"OFFSET  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm",
                                     tags=tag)
         self.canvas.tag_raise(tag)
+
+    def _draw_axes(self, ax, cw, ch, tag):
+        """Marker frame at its centre: X red (marker right), Y green (marker top), Z blue
+        (out of the marker, towards the camera)."""
+        if not ax or len(ax) != 4:
+            return
+        o = (ax[0][0] * cw, ax[0][1] * ch)
+        for (u, v), color in zip(ax[1:], ("#FF3B30", "#34C759", "#0A84FF")):
+            self.canvas.create_line(o[0], o[1], u * cw, v * ch, fill=color, width=3,
+                                    arrow="last", arrowshape=(8, 10, 4), tags=tag)
+        self.canvas.create_oval(o[0] - 3, o[1] - 3, o[0] + 3, o[1] + 3, fill="white", outline="", tags=tag)
 
     @staticmethod
     def _lidar_height_m():
