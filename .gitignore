@@ -32,5 +32,3 @@ ros2_ws/log/
 # ==========================================
 configs/*.env
 *.log
-# Onboard test recordings (visionlog)
-logs/

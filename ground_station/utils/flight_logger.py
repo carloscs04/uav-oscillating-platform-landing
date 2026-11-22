@@ -142,8 +142,9 @@ class FlightExperimentLogger:
 
     def __init__(self, base_dir: Optional[str] = None):
         if base_dir is None:
-            gs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            base_dir = os.path.join(gs_root, "experiments")
+            # <repo>/experiments/flights/<date>/ (next to experiments/vision/)
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            base_dir = os.path.join(repo_root, "experiments", "flights")
 
         self.base_dir = base_dir
         self._lock = threading.Lock()

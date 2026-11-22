@@ -8,7 +8,8 @@ from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 
 
-LOG_DIR = Path(__file__).resolve().parents[4] / "logs" / "vision"
+# <repo>/experiments/vision/<date>/ (next to experiments/flights/, same layout)
+LOG_DIR = Path(__file__).resolve().parents[4] / "experiments" / "vision"
 LOG_FIELDS = ("t", "source", "approval", "du_px", "dv_px", "nx", "ny", "h_m", "x_m", "y_m",
               "fwd_raw_m", "right_raw_m", "fwd_m", "right_m", "h_vert_m", "roll_deg", "pitch_deg",
               "att_age_s", "age_s")
@@ -91,8 +92,9 @@ class VisionCLI(BaseNodeCLI):
         if getattr(self, "_log_thread", None) and self._log_thread.is_alive():
             self.log("visionlog already recording (visionlog stop).", "WARN")
             return "VISIONLOG_BUSY"
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        path = LOG_DIR / time.strftime("visionlog_%Y-%m-%d_%H%M%S.csv")
+        day_dir = LOG_DIR / time.strftime("%Y-%m-%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+        path = day_dir / time.strftime("visionlog_%H-%M-%S.csv")
         self._log_until = time.time() + seconds
         self._log_thread = threading.Thread(target=self._log_loop, args=(path,), name="VisionLog", daemon=True)
         self._log_thread.start()
