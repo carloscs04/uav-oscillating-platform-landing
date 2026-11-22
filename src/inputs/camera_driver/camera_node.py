@@ -22,9 +22,16 @@ UDP_SAFE_B64_CHARS = 60000  # keep the video packet under the ~65 KB UDP limit
 
 # Families tried by the discovery scan (`arucoscan on`). Each one costs a full detection pass,
 # so the scan runs only on request and at SCAN_HZ, never at camera rate.
-SCAN_DICTS = ("DICT_4X4_1000", "DICT_5X5_1000", "DICT_6X6_1000", "DICT_7X7_1000",
-              "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_36h11", "DICT_APRILTAG_25h9", "DICT_APRILTAG_16h5")
-SCAN_HZ = 3.0
+SCAN_DICTS = ("DICT_APRILTAG_36h11", "DICT_5X5_1000", "DICT_6X6_1000", "DICT_7X7_1000",
+              "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_25h9", "DICT_APRILTAG_16h5")
+SCAN_HZ = 2.0          # full scan (all families) while nothing is found
+SCAN_LOCKED_HZ = 10.0  # once a family is found, only that family is re-checked, faster
+# Printed tags are often slightly bent / seen through lens distortion: the default 0.03
+# rejected a real AprilTag whose edges were not perfectly straight.
+SCAN_POLY_ACCURACY = 0.05
+# Close up a tag's cells are ~20 px: the default largest threshold window (23 px) is too
+# small to binarise them and the tag is missed. Larger windows = a bit slower (own thread).
+SCAN_THRESH_WIN_MAX = 53
 
 
 class CameraNode:
@@ -49,6 +56,9 @@ class CameraNode:
         self.preview_width = int(vcfg.get("preview_width", 480))
         self.preview_quality = int(vcfg.get("preview_quality", 60))
         self.preview_period = 1.0 / max(1.0, float(vcfg.get("preview_hz", 15)))
+        # Other marker families (AprilTag...) found by the background scan, on by default
+        if hasattr(self.vision_state, "scan_any"):
+            self.vision_state.scan_any = bool(vcfg.get("scan_any", True))
 
         self.cam = None
         self.model: Optional[CameraModel] = None
@@ -302,7 +312,7 @@ class CameraNode:
         worker = getattr(self, "_scan_thread", None)
         if worker is not None and worker.is_alive():
             return
-        self._next_scan = stamp + 1.0 / SCAN_HZ
+        self._next_scan = stamp + 1.0 / (SCAN_LOCKED_HZ if getattr(self, "_scan_family", None) else SCAN_HZ)
         self._scan_thread = threading.Thread(target=self._scan_frame, args=(gray.copy(),),
                                              name="ArucoScan", daemon=True)
         self._scan_thread.start()
@@ -314,12 +324,16 @@ class CameraNode:
             for name in SCAN_DICTS:
                 if hasattr(cv2.aruco, name):
                     d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name))
-                    self._scan_detectors.append(
-                        (name.replace("DICT_", ""), cv2.aruco.ArucoDetector(d, cv2.aruco.DetectorParameters())))
+                    params = cv2.aruco.DetectorParameters()
+                    params.polygonalApproxAccuracyRate = SCAN_POLY_ACCURACY
+                    params.adaptiveThreshWinSizeMax = SCAN_THRESH_WIN_MAX
+                    self._scan_detectors.append((name.replace("DICT_", ""), cv2.aruco.ArucoDetector(d, params)))
         t0 = time.perf_counter()
         main_name = self.config["aruco"]["dictionary"].replace("DICT_", "")
         found, taken = [], []
-        for name, det in self._scan_detectors:
+        family = getattr(self, "_scan_family", None)
+        detectors = [d for d in self._scan_detectors if d[0] == family] or self._scan_detectors
+        for name, det in detectors:
             corners, ids, _ = det.detectMarkers(gray)
             if ids is None:
                 continue
@@ -334,6 +348,8 @@ class CameraNode:
                     continue  # pad family: every ID is already outlined by the main pipeline
                 taken.append(centre)
                 found.append((f"{name} #{marker_id}", c))
+        # Remember the family that matched; if it stops matching, go back to the full scan.
+        self._scan_family = next((label.split(" #")[0] for label, _c in found), None)
         # One missed scan (blur, motion) should not make the outline blink: keep the last
         # result for up to ~1 s.
         now = time.monotonic()

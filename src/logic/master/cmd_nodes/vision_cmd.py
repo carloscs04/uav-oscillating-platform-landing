@@ -57,9 +57,8 @@ class VisionCLI(BaseNodeCLI):
         on = args[0].lower() == "on"
         self.manager.state.scan_any = on
         if on:
-            self.log("arucoscan ON: markers of any family are outlined in ORANGE (name #id) on the "
-                     "video, ~3 Hz. Only the configured pad markers get a pose. Turn it off before "
-                     "flying (extra CPU).", "WARN")
+            self.log("arucoscan ON: AprilTags and other marker families are found ~5 Hz in a "
+                     "background thread (ArUco 4x4 of any ID are always found at camera rate).", "OK")
         else:
             self.log("arucoscan OFF.", "OK")
         return "ARUCOSCAN_" + ("ON" if on else "OFF")
