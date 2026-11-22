@@ -227,7 +227,32 @@ class CameraView(tk.LabelFrame):
                 bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418",
                                                   outline="", tags=tag)
                 self.canvas.tag_lower(bg, item)
+        self._render_landing_shadow(vis_rx, cx, cy, cw, ch, tag)
         self.canvas.tag_raise(tag)
+
+    def _render_landing_shadow(self, vis_rx, cx, cy, cw, ch, tag):
+        """Landing law in SHADOW mode (computed on the Pi, NOT sent): magenta arrow from the
+        fixed cross = horizontal velocity it would command, drawn in the image. The camera is
+        mounted forward = -x_img, right = -y_img, so velocity (fwd, right) -> (-fwd, -right) px."""
+        ls = vis_rx.get_packet("landing_shadow", {}) or {}
+        if not ls:
+            return
+        vf, vr, vd = float(ls.get("v_fwd") or 0), float(ls.get("v_right") or 0), float(ls.get("v_down") or 0)
+        scale = 110.0 / 0.30            # 0.3 m/s (v_max) = 110 px
+        ex, ey = cx - vf * scale, cy - vr * scale
+        magenta = "#FF2DF0"
+        if abs(ex - cx) + abs(ey - cy) > 2:
+            self.canvas.create_line(cx, cy, ex, ey, fill=magenta, width=4, arrow="last",
+                                    arrowshape=(14, 16, 6), tags=tag)
+        err = ls.get("err_m")
+        text = (f"LAW (shadow, not sent): {ls.get('phase', '?')}   v fwd {vf * 100:+.0f}  right {vr * 100:+.0f}  "
+                f"{'down' if vd >= 0 else 'UP'} {abs(vd) * 100:.0f} cm/s   "
+                f"err {'--' if err is None else f'{err * 100:.1f}'} cm  {ls.get('note', '')}")
+        item = self.canvas.create_text(12, ch - 12, anchor="sw", fill=magenta,
+                                       font=("Consolas", 9, "bold"), text=text, tags=tag)
+        x1, y1, x2, y2 = self.canvas.bbox(item)
+        bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418", outline="", tags=tag)
+        self.canvas.tag_lower(bg, item)
 
     def _draw_axes(self, ax, cw, ch, tag):
         """Marker frame at its centre: X red (marker right), Y green (marker top), Z blue

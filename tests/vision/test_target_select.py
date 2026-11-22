@@ -134,6 +134,37 @@ def test_phantom_and_stale_never_target():
     assert vs.overlay["items"][0]["label"] == "APRILTAG_36h11 #3"
 
 
+def test_node_shadow_law():
+    """Pad marker in view, level drone: the law (shadow) must move TOWARDS the touchdown point,
+    and ID 10 seen alone must give the same target as ID 20 (pad offset applied)."""
+    node, vs = _node()
+    node.registry = ["4X4_50 #10", "4X4_50 #20"]
+    node.pad_centers = {20: (0.0, 0.0), 10: (-100.0, 0.0)}
+    node.vehicle_state = types.SimpleNamespace(get_packet_with_time=lambda k: ({"roll": 0.0, "pitch": 0.0}, time.time()))
+    shape = (360, 640)
+    # ID 20 to the RIGHT in the image (u > cx): x_cam > 0 -> marker BEHIND the drone
+    node.tracker.detector.last_all = [(20, square(370, 180))]
+    node._publish_overlay([], shape)
+    pt, ls = vs.get_pixel_target(), vs.get_landing_shadow()
+    assert pt["pad_fwd_m"] is not None and abs(pt["pad_fwd_m"] - pt["fwd_m"]) < 1e-3   # ID 20 = touchdown
+    assert ls["phase"] == "ALIGN" and ls["v_fwd"] < 0 and ls["target"] == "pad"
+    # Panel arrow: image x = -fwd -> v_fwd < 0 draws to the right, towards the marker. OK.
+    # ID 10 alone, 100 mm to the pad's left of a touchdown point that is straight below:
+    # f=500 px, h=0.8 m -> 0.1 m = 62.5 px. Pad front = drone forward = -x_img, pad right =
+    # drone right = -y_img, so pad left = +y_img (down in the image).
+    # Printed top edge towards the pad FRONT = drone forward = image LEFT (-x); marker right =
+    # clockwise from that seen from above = image UP (-y). Corners TL, TR, BR, BL:
+    cx, cy, k = PP[0], PP[1] + 62.5, 20
+    pad10 = np.array([[cx - k, cy + k], [cx - k, cy - k], [cx + k, cy - k], [cx + k, cy + k]], np.float32)
+    node.tracker.detector.last_all = [(10, pad10)]
+    node._known_seen = {}
+    node._publish_overlay([], shape)
+    pt = vs.get_pixel_target()
+    assert pt["source"] == "4X4_50 #10"
+    assert abs(pt["right_m"] + 0.10) < 2e-3, pt["right_m"]            # marker centre 10 cm left
+    assert abs(pt["pad_fwd_m"]) < 0.01 and abs(pt["pad_right_m"]) < 0.01, (pt["pad_fwd_m"], pt["pad_right_m"])
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     failed = 0

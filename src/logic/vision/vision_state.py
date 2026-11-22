@@ -31,6 +31,9 @@ class VisionState:
         # CLI `visionlog`: the GROUND STATION records the vision packets to CSV while rec is
         # True (nothing is written on the Pi). name = the CSV file name it uses.
         self.vision_log: Dict[str, Any] = {"rec": False, "name": ""}
+        # Landing law output (src/logic/control/landing_law.py). mode SHADOW = computed and
+        # shown only, NOT sent to the Pixhawk.
+        self.landing_shadow: Dict[str, Any] = {"phase": "SEARCH", "mode": "SHADOW"}
         # Control measurement (src/logic/vision/pixel_target.py): centre of ANY marker in pixels
         # vs the optical axis -> angle; x/y in metres = angle x lidar height.
         self.pixel_target: Dict[str, Any] = {"detected": False}
@@ -117,6 +120,14 @@ class VisionState:
     def update_pixel_target(self, target: Optional[Dict[str, Any]]):
         with self._lock:
             self.pixel_target = dict(target) if target else {"detected": False}
+
+    def update_landing_shadow(self, out: Dict[str, Any]):
+        with self._lock:
+            self.landing_shadow = dict(out)
+
+    def get_landing_shadow(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self.landing_shadow)
 
     def get_pixel_target(self) -> Dict[str, Any]:
         with self._lock:
@@ -205,6 +216,7 @@ class VisionState:
                 "aruco_overlay": dict(self.overlay),
                 "pixel_target": dict(self.pixel_target),
                 "vision_log": dict(self.vision_log),
+                "landing_shadow": dict(self.landing_shadow),
                 "status": {
                     "target_locked": self.aruco_detected,
                     "tracking_state": self.tracking_state,

@@ -15,7 +15,8 @@ from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_cali
 from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.optical_flow import OpticalFlowEstimator
-from src.logic.vision.pixel_target import pixel_target, tilt_compensate
+from src.logic.vision.pixel_target import pad_touchdown, pixel_target, tilt_compensate
+from src.logic.control.landing_law import LandingLaw, LandingParams
 from src.logic.vision.target_select import load_registry, select_target
 from src.logic.vision.tracker import TargetTracker
 
@@ -87,6 +88,14 @@ class CameraNode:
         self.registry = []
         self.reload_registry()
         self._target_label = None
+        # Landing pad layout (config landing_pad): pad-family marker id -> centre on the pad, mm.
+        # Any of them then points at the touchdown point (no jump from ID 10 to ID 20).
+        pad = self.config.get("landing_pad") or {}
+        same_dict = pad.get("dictionary", self.config["aruco"]["dictionary"]) == self.config["aruco"]["dictionary"]
+        self.pad_centers = {int(m["id"]): tuple(float(v) for v in m["center_mm"])
+                            for m in (pad.get("markers") or []) if same_dict and "center_mm" in m}
+        # Landing law in SHADOW mode: computed every frame, published, never sent to the Pixhawk.
+        self.landing = LandingLaw(LandingParams.from_dict(self.config.get("landing_law")))
         self._known_seen = {}   # known label -> (centre px, side px, monotonic time last seen)
 
         self.fps = 0.0
@@ -157,6 +166,7 @@ class CameraNode:
             self.vision_state.update_overlay([], 1, 1)
         if hasattr(self.vision_state, "update_pixel_target"):
             self.vision_state.update_pixel_target(None)
+            self._shadow_step()
 
     def _open(self):
         cam = open_camera(self.camera_name, self.config)
@@ -345,24 +355,46 @@ class CameraNode:
         always for a known marker, for an unknown one only after `followunknown yes`."""
         if chosen is None or self.model is None:
             self.vision_state.update_pixel_target(None)
+            self._shadow_step()
             return
         label, corners, _ax, seen_at = chosen
         allowed = getattr(self.vision_state, "follow_unknown", None)
         approval = "known" if known else {None: "ask", True: "yes", False: "no"}[allowed]
         lidar = self._lidar_height()
         t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, lidar)
-        t.update(self._tilt_fields(t, lidar))
+        t.update(self._tilt_fields(t, lidar, corners, label))
         t.update({"detected": True, "source": label, "known": bool(known),
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),
                   "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
         self.vision_state.update_pixel_target(t)
+        self._shadow_step()
 
-    def _tilt_fields(self, t, lidar):
+    def _shadow_step(self):
+        """Run the landing law on the current measurement (SHADOW: published only). Target =
+        pad touchdown point if the marker is on the pad, else the marker itself; only fresh,
+        tilt-compensated and allowed (`follow`) measurements count."""
+        pt = self.vision_state.get_pixel_target()
+        target = None
+        if pt.get("detected") and pt.get("follow") and (pt.get("age_s") or 0) <= 0.2:
+            if pt.get("pad_fwd_m") is not None:
+                target = (pt["pad_fwd_m"], pt["pad_right_m"])
+            elif pt.get("fwd_m") is not None:
+                target = (pt["fwd_m"], pt["right_m"])
+        h = pt.get("h_vert_m") if pt.get("h_vert_m") is not None else self._lidar_height()
+        out = self.landing.step(target, h, time.monotonic())
+        out["target"] = ("pad" if pt.get("pad_fwd_m") is not None else "marker") if target else None
+        out["mode"] = "SHADOW"
+        if hasattr(self.vision_state, "update_landing_shadow"):
+            self.vision_state.update_landing_shadow(out)
+
+    def _tilt_fields(self, t, lidar, corners=None, label=None):
         """Marker offset from the drone centre in the drone's forward/right directions:
-        raw (camera only) and tilt-compensated with the Pixhawk ATTITUDE (if recent)."""
+        raw (camera only) and tilt-compensated with the Pixhawk ATTITUDE (if recent). For a
+        pad marker, also the touchdown point (pad_fwd_m, pad_right_m)."""
         out = {"fwd_raw_m": None, "right_raw_m": None, "fwd_m": None, "right_m": None,
-               "h_vert_m": None, "roll_deg": None, "pitch_deg": None, "att_age_s": None}
+               "h_vert_m": None, "roll_deg": None, "pitch_deg": None, "att_age_s": None,
+               "pad_fwd_m": None, "pad_right_m": None}
         if lidar is not None:
             out["fwd_raw_m"], out["right_raw_m"], _ = (round(v, 4) for v in
                                                        tilt_compensate(t["nx"], t["ny"], 0.0, 0.0, lidar))
@@ -380,7 +412,21 @@ class CameraNode:
             f, r, h = tilt_compensate(t["nx"], t["ny"], roll, pitch, lidar)
             if f is not None:
                 out.update({"fwd_m": round(f, 4), "right_m": round(r, 4), "h_vert_m": round(h, 4)})
+            mid = self._pad_id(label)
+            if f is not None and corners is not None and mid is not None:
+                td = pad_touchdown(corners, self.pad_centers[mid], self.model.camera_matrix,
+                                   self.model.dist_coeffs, roll, pitch, lidar)
+                if td is not None:
+                    out.update({"pad_fwd_m": round(td[0], 4), "pad_right_m": round(td[1], 4)})
         return out
+
+    def _pad_id(self, label):
+        """'4X4_50 #10' -> 10 if it is a marker of the configured landing pad, else None."""
+        family = self.config["aruco"]["dictionary"].replace("DICT_", "")
+        if not label or not label.startswith(family + " #"):
+            return None
+        mid = int(label.split("#")[1])
+        return mid if mid in self.pad_centers else None
 
     def _scan_any(self, gray, stamp):
         """Start a discovery scan on a copy of this frame in its own thread (~25-40 ms for all

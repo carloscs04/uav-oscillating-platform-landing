@@ -28,6 +28,8 @@ class VisionCLI(BaseNodeCLI):
         self.register_cmd("visionlog", self.cmd_visionlog,
                           "Record the pixel target + lidar + attitude to CSV, 20 Hz [seconds] | stop",
                           aliases=["vlog"])
+        self.register_cmd("landshadow", self.cmd_landshadow,
+                          "Landing law in SHADOW mode (computed, NOT sent): status | reset", aliases=["lshadow"])
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
         self.register_cmd("markers", self.cmd_markers,
@@ -102,6 +104,31 @@ class VisionCLI(BaseNodeCLI):
             time.sleep(0.1)
         self.manager.state.vision_log = {"rec": False, "name": name}
         self.log(f"visionlog finished ({name}.csv on the ground station).", "OK")
+
+    def cmd_landshadow(self, args: List[str]) -> str:
+        drv = self.camera_driver
+        if args and args[0].lower() == "reset":
+            if drv is None:
+                self.log("No camera driver on this machine.", "ERROR")
+                return "NO_CAMERA"
+            drv.landing.reset()
+            self.log("Landing law reset to SEARCH (shadow mode, nothing is sent).", "OK")
+            return "LANDSHADOW_RESET"
+        self.log(self._shadow_text(), "STATUS")
+        if drv is not None:
+            p = drv.landing.p
+            self.log(f"  kp={p.kp} v_max={p.v_max} m/s  align<{p.align_tol * 100:.0f} cm for {p.align_hold_s} s  "
+                     f"descend {p.descend_speed} m/s (pause > {p.pause_err * 100:.0f} cm)  final<{p.final_h} m "
+                     f"@{p.final_speed} m/s  touchdown<{p.touchdown_h} m", "STATUS")
+        return "LANDSHADOW_STATUS"
+
+    def _shadow_text(self):
+        ls = self.manager.state.get_landing_shadow() if hasattr(self.manager.state, "get_landing_shadow") else {}
+        err = ls.get("err_m")
+        h = ls.get("h_m")
+        return (f"SHADOW {ls.get('phase', '?'):<9} v fwd={ls.get('v_fwd', 0) * 100:+5.1f} right={ls.get('v_right', 0) * 100:+5.1f} "
+                f"down={ls.get('v_down', 0) * 100:+5.1f} cm/s  err={'--' if err is None else f'{err * 100:4.1f}'} cm  "
+                f"h={'--' if h is None else f'{h:.2f}'} m  [{ls.get('target') or '-'}] {ls.get('note', '')}")
 
     def cmd_followunknown(self, args: List[str]) -> str:
         state = self.manager.state
@@ -194,5 +221,6 @@ class VisionCLI(BaseNodeCLI):
                          f"{metric}", "STATUS")
             else:
                 self.log(f"no marker  [{st['tracking_state']}]", "STATUS")
+            self.log("    " + self._shadow_text(), "STATUS")
             time.sleep(0.5)
         self.log("arucowatch finished.", "OK")

@@ -82,3 +82,34 @@ def tilt_compensate(nx, ny, roll_rad, pitch_rad, lidar_range_m, cam_to_body=CAM_
     if lv[2] <= 1e-6:
         return None, None, h
     return float(lv[0] / lv[2] * h), float(lv[1] / lv[2] * h), h
+
+
+def _level_point(px, camera_matrix, dist_coeffs, roll_rad, pitch_rad, lidar_range_m):
+    nx, ny = pixel_to_ray(px, camera_matrix, dist_coeffs)
+    f, r, _ = tilt_compensate(nx, ny, roll_rad, pitch_rad, lidar_range_m)
+    return None if f is None else np.array([f, r])
+
+
+def pad_touchdown(corners, center_mm, camera_matrix, dist_coeffs, roll_rad, pitch_rad, lidar_range_m):
+    """Touchdown point (pad origin) seen from ONE pad marker, in the level drone frame.
+
+    The marker's position on the pad is known (config landing_pad.markers center_mm, pad x =
+    right, y = FRONT, every marker glued with its printed top edge to the front). Its corners
+    on the floor give the pad's right/front directions, so any pad marker points at the same
+    spot: no jump when the target changes from ID 10 to ID 20. The marker size is not needed.
+
+    Returns (forward_m, right_m) of the touchdown point, or None."""
+    p = np.asarray(corners, np.float64).reshape(4, 2)  # OpenCV order: TL, TR, BR, BL (printed)
+    g = [_level_point(c, camera_matrix, dist_coeffs, roll_rad, pitch_rad, lidar_range_m) for c in p]
+    c = _level_point(marker_center_px(p), camera_matrix, dist_coeffs, roll_rad, pitch_rad, lidar_range_m)
+    if c is None or any(x is None for x in g):
+        return None
+    tl, tr, br, bl = g
+    ex = (tr - tl) + (br - bl)          # pad right
+    ey = (tl - bl) + (tr - br)          # pad front
+    nx_, ny_ = np.linalg.norm(ex), np.linalg.norm(ey)
+    if nx_ < 1e-9 or ny_ < 1e-9:
+        return None
+    ex, ey = ex / nx_, ey / ny_
+    t = c - (center_mm[0] / 1000.0) * ex - (center_mm[1] / 1000.0) * ey
+    return float(t[0]), float(t[1])

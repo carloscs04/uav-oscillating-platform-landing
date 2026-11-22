@@ -16,8 +16,10 @@ class VisionExperimentLogger:
 
     FIELDS = ("source", "approval", "du_px", "dv_px", "nx", "ny", "h_m", "x_m", "y_m",
               "fwd_raw_m", "right_raw_m", "fwd_m", "right_m", "h_vert_m", "roll_deg", "pitch_deg",
-              "att_age_s", "age_s")
-    HEADERS = ("gs_time_iso", "elapsed_s", "detected", "tracking_state") + FIELDS
+              "att_age_s", "age_s", "pad_fwd_m", "pad_right_m")
+    SHADOW = ("phase", "v_fwd", "v_right", "v_down", "err_m", "target", "note")
+    HEADERS = (("gs_time_iso", "elapsed_s", "detected", "tracking_state") + FIELDS
+               + tuple("law_" + k for k in SHADOW))
 
     def __init__(self, base_dir: Optional[str] = None):
         if base_dir is None:
@@ -61,6 +63,8 @@ class VisionExperimentLogger:
         row = [datetime.now().isoformat(timespec="milliseconds"), f"{now - self._t0:.3f}",
                int(bool(pt.get("detected"))), status.get("tracking_state", "")]
         row += ["" if pt.get(k) is None else pt.get(k) for k in self.FIELDS]
+        ls = packets.get("landing_shadow") or {}
+        row += ["" if ls.get(k) is None else ls.get(k) for k in self.SHADOW]
         self._writer.writerow(row)
         self._rows += 1
 
