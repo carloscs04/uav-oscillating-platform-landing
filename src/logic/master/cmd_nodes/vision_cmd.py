@@ -30,7 +30,7 @@ class VisionCLI(BaseNodeCLI):
                           "Record the pixel target + lidar + attitude to CSV, 20 Hz [seconds] | stop",
                           aliases=["vlog"])
         self.register_cmd("landshadow", self.cmd_landshadow,
-                          "Landing law: status | reset | arm <align|descend> (sends ONLY in GUIDED) | disarm",
+                          "Landing law: status | reset | arm <align|descend|land> (sends ONLY in GUIDED) | disarm",
                           aliases=["lshadow"])
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
@@ -132,7 +132,7 @@ class VisionCLI(BaseNodeCLI):
             if drv is not None:
                 drv.landing.reset()         # start from SEARCH
             ok, msg = gs.arm(args[1] if len(args) > 1 else "")
-            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow arm <align|descend>",
+            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow arm <align|descend|land>",
                      "OK" if ok else "ERROR")
             return "LANDSHADOW_ARMED" if ok else "LANDSHADOW_ARM_REFUSED"
         self.log(self._shadow_text(), "STATUS")
@@ -143,7 +143,7 @@ class VisionCLI(BaseNodeCLI):
                      f"down={st['v_down'] * 100:+.1f} cm/s  ({st['reason']})  floor={gs.p.floor_h} m", "STATUS")
         if drv is not None:
             p = drv.landing.p
-            self.log(f"  kp={p.kp} v_max={p.v_max} m/s  align<{p.align_tol * 100:.0f} cm for {p.align_hold_s} s  "
+            self.log(f"  kp={p.kp} kd={p.kd} v_max={p.v_max} m/s  align<{p.align_tol * 100:.0f} cm for {p.align_hold_s} s  "
                      f"descend {p.descend_speed} m/s (pause > {p.pause_err * 100:.0f} cm)  final<{p.final_h} m "
                      f"@{p.final_speed} m/s  touchdown<{p.touchdown_h} m", "STATUS")
         return "LANDSHADOW_STATUS"

@@ -4,7 +4,7 @@ The law (landing_law.py) runs every camera frame in camera_node and publishes it
 in VisionState.landing_shadow. This sender reads it at a fixed rate and sends it as a
 BODY-frame velocity setpoint (forward / right / down) ONLY when all of these hold:
 
-    1. the pilot armed the sender in the CLI (`landshadow arm align|descend`), while NOT
+    1. the pilot armed the sender in the CLI (`landshadow arm align|descend|land`), while NOT
        in GUIDED: the drone only starts moving when the pilot flips channel 5 to GUIDED;
     2. the Pixhawk is armed and its last HEARTBEAT (recent) says GUIDED;
     3. the law output is fresh (camera thread alive).
@@ -17,7 +17,9 @@ Pixhawk itself stops after ~3 s without setpoints.
 Stages (what the law is allowed to do):
     align    horizontal only, v_down = 0 (first flight: check directions and gains)
     descend  also descends, but never below floor_h: there it holds height, centred, and the
-             pilot lands with channel 7 (LAND). Final touchdown method still to be decided.
+             pilot lands with channel 7 (LAND).
+    land     the whole landing in GUIDED: no floor, the law descends to the ground (blind below
+             its commit_h) and keeps pushing down; the pilot disarms with ch6 once landed.
 """
 
 import math
@@ -26,7 +28,7 @@ import time
 from dataclasses import dataclass, fields
 
 GUIDED = 4                      # ArduCopter custom_mode
-STAGES = ("align", "descend")
+STAGES = ("align", "descend", "land")
 
 
 @dataclass

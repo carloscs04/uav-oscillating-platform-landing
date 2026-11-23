@@ -13,7 +13,7 @@ from src.logic.control.landing_law import LandingLaw, LandingParams  # noqa: E40
 
 
 def test_signs_and_limit():
-    law = LandingLaw()
+    law = LandingLaw(LandingParams(kd=0.0))             # P only: these jumps are not real motion
     o = law.step((0.10, 0.0), 1.0, 0.0)          # target 10 cm in FRONT -> go forward
     assert o["phase"] == "ALIGN" and o["v_fwd"] > 0 and o["v_right"] == 0 and o["v_down"] == 0
     o = law.step((0.0, -0.10), 1.0, 0.1)         # target to the LEFT -> negative right
@@ -86,6 +86,50 @@ def test_hold_rearms_when_target_gone():
     assert o["phase"] == "SEARCH"
     o = law.step((0.0, 0.0), 1.0, 5.1)
     assert o["phase"] == "ALIGN"
+
+
+def test_d_term_opposes_drift():
+    law = LandingLaw(LandingParams(kp=0.0, deadband=0.0))
+    o = None
+    for i in range(20):                                  # target sliding right at 0.1 m/s
+        o = law.step((0.0, 0.05 + 0.1 * i * 0.033), 1.0, i * 0.033)
+    assert o["v_right"] > 0.02                            # chases it (drone drifting left)
+    law.step(None, 1.0, 1.0)                              # lost -> rate cleared
+    o = law.step((0.0, 0.0), 1.0, 1.05)
+    assert o["v_right"] == 0
+
+
+def test_committed_blind_descent_and_touchdown_push():
+    law, t, h = LandingLaw(), 0.0, 0.5
+    while law.phase != "FINAL":
+        o = law.step((0.0, 0.0), h, t)
+        h -= o["v_down"] * 0.05
+        t += 0.05
+    while h > 0.15:
+        o = law.step((0.0, 0.0), h, t)
+        h -= o["v_down"] * 0.05
+        t += 0.05
+    assert law.committed
+    o = law.step((0.15, 0.0), h, t)                       # big error low: no pause any more
+    assert o["v_down"] > 0
+    for i in range(100):                                  # pad out of view: keep going down
+        o = law.step(None, h, t + 0.05 * (i + 1))
+        h = max(0.05, h - o["v_down"] * 0.05)
+    assert o["v_down"] > 0 and law.phase == "TOUCHDOWN" and o["v_fwd"] == 0
+
+
+def test_lost_at_22cm_keeps_descending():
+    law, t, h = LandingLaw(), 0.0, 0.5                    # flight 2026-11-22: lost at 0.22 m
+    while h > 0.22:
+        o = law.step((0.0, 0.0), h, t)
+        h -= o["v_down"] * 0.05
+        t += 0.05
+    assert law.phase == "FINAL" and law.committed
+    for i in range(100):                                  # never brakes or climbs
+        o = law.step(None, h, t + 0.05 * i)
+        assert o["v_down"] > 0, (i, o)
+        h = max(0.05, h - o["v_down"] * 0.05)
+    assert law.phase == "TOUCHDOWN"
 
 
 def test_params_from_config():
