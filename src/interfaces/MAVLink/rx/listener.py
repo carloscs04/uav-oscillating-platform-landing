@@ -16,6 +16,25 @@ class MAVLinkRXListener:
         "PSC_D_ACC_P",
         "PSC_D_VEL_P",
         "PSC_D_POS_P",
+        "PSC_NE_VEL_IMAX",
+        # Attitude controller and level trim (recorded in the flight events log)
+        "ATC_RAT_RLL_P",
+        "ATC_RAT_RLL_I",
+        "ATC_RAT_RLL_D",
+        "ATC_RAT_RLL_IMAX",
+        "ATC_RAT_PIT_P",
+        "ATC_RAT_PIT_I",
+        "ATC_RAT_PIT_D",
+        "ATC_RAT_PIT_IMAX",
+        "ATC_RAT_YAW_P",
+        "ATC_RAT_YAW_I",
+        "ATC_RAT_YAW_D",
+        "ATC_RAT_YAW_IMAX",
+        "ATC_ANG_RLL_P",
+        "ATC_ANG_PIT_P",
+        "ATC_ANG_YAW_P",
+        "AHRS_TRIM_X",
+        "AHRS_TRIM_Y",
         # Optical flow + rangefinder navigation (checked by the 'flowcheck' command)
         "AHRS_EKF_TYPE",
         "EK3_ENABLE",
@@ -176,7 +195,7 @@ class MAVLinkRXListener:
                             param_id = str(raw_id).strip("\x00").strip()
                             param_val = data.get("param_value")
                             if param_id and param_val is not None:
-                                self.state.update_param(param_id, round(float(param_val), 4))
+                                self.state.update_param(param_id, round(float(param_val), 6))  # rate D gains are ~0.003
                         else:
                             self.state.update_packet(pkt_type, data)
 
