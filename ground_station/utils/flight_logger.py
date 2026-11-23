@@ -161,6 +161,7 @@ class FlightExperimentLogger:
         self._row_count: int = 0
         # Pre-arm/arming texts are logged even while DISARMED (that is when the arm fails)
         self._pending_texts: list = []
+        self._logged_params: Dict[str, Any] = {}
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         """Evaluates arming state and records telemetry rows while armed."""
@@ -175,7 +176,18 @@ class FlightExperimentLogger:
                 self._stop_session()
 
             if self._is_recording:
+                self._log_params(packets)
                 self._write_sample(packets, health_info)
+
+    def _log_params(self, packets: Dict[str, Any]):
+        """Pixhawk params in the events log: all at arm, then any late or changed value."""
+        params = packets.get("pixhawk_params") or {}
+        new = {k: v for k, v in params.items() if self._logged_params.get(k) != v}
+        if not new:
+            return
+        label = "PARAMS_UPDATE" if self._logged_params else "PARAMS"
+        self._log_event(f"{label}: " + " ".join(f"{k}={new[k]}" for k in sorted(new)))
+        self._logged_params.update(new)
 
     def _start_session(self, hb: Dict[str, Any], health_info: Dict[str, Any]):
         now = datetime.now()
@@ -202,6 +214,7 @@ class FlightExperimentLogger:
         self._last_mode = -1
         self._row_count = 0
         self._last_hsrc = None
+        self._logged_params = {}
 
         # Texts from the last 30 s before arming (PreArm, EKF, ...) head the events log
         for ts, sev, text in self._pending_texts:
