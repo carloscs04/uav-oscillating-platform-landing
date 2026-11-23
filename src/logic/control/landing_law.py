@@ -33,7 +33,8 @@ from dataclasses import dataclass, fields
 
 @dataclass
 class LandingParams:
-    kp: float = 0.5                 # m/s per m of error (0.5 -> 10 cm error = 5 cm/s)
+    kp: float = 0.25                # m/s per m of error (0.25 -> 10 cm error = 2.5 cm/s)
+                                    # (flight 2026-11-22: Pixhawk velocity lags 2-3 s, 0.5 swung)
     kd: float = 0.4                 # s: m/s per m/s of error rate (damps the drift)
     d_tau: float = 0.25             # low-pass time constant of the error rate, s
     v_max: float = 0.30             # horizontal speed limit, m/s
