@@ -57,7 +57,8 @@ class GuidedSender:
         self.last = {"sent": False, "v_fwd": 0.0, "v_right": 0.0, "v_down": 0.0,
                      "reason": "disarmed", "t": None}
         self.sent_count = 0
-        self._running = False
+        self.on_activate = None         # called when GUIDED starts (resets the law: its timers
+        self._running = False           # must not run out while the pilot is still in LOITER)
         if start_thread:
             self.start()
 
@@ -139,6 +140,10 @@ class GuidedSender:
         if stage and was and not guided:
             self.disarm(f"left GUIDED ({why})")
             return None
+        if stage and guided and not was:
+            self._log(f"GUIDED detected: sending law output ({stage})", "WARN")
+            if self.on_activate:
+                self.on_activate()
         if not stage or not guided:
             with self._lock:
                 self.last.update(sent=False, reason="disarmed" if not stage else f"waiting: {why}")

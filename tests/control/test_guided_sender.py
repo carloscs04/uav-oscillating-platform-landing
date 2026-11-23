@@ -116,6 +116,21 @@ def test_heartbeat_lost_or_disarmed_stops():
         assert s.stage is None and len(mav.sent) == 1
 
 
+def test_entering_guided_resets_law_once():
+    mav, vis, s = make()
+    calls = []
+    s.on_activate = lambda: calls.append(1)
+    mav.state.set(LOITER)
+    s.arm("align")
+    s.tick()
+    assert calls == []
+    mav.state.set(GUIDED)
+    vis.set(0.0, 0.0, 0.0)
+    s.tick()
+    s.tick()
+    assert calls == [1]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -111,6 +111,7 @@ class MasterNode:
             log=lambda msg, level="INFO": self.state.append_cli_log(f"[GUIDED] {msg}", level))
         if self._camera_driver is not None:
             self._camera_driver.guided_sender = self.guided_sender
+            self.guided_sender.on_activate = self._camera_driver.landing.reset
 
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
