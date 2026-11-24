@@ -61,8 +61,7 @@ class MasterWIFI:
         # Dedicated CLI receiver for MasterNode
         self.master_cmd_rx = MasterCommandReceiver(
             port=self.master_rx_port,
-            master_node=self.master_node,
-            allowed_ip_getter=self.pc_bridge.get_active_ip,
+            master_node=self.master_node
         )
 
     def set_mavlink_node(self, node: Any):

@@ -7,10 +7,8 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/uav-opl
-ExecStart=/bin/bash /home/pi/uav-opl/src/launchers/start.sh
-Environment=PYTHONUNBUFFERED=1
-KillSignal=SIGINT
-TimeoutStopSec=10
+ExecStart=/home/pi/uav-opl/src/launchers/start_onboard.sh
+ExecStop=/home/pi/uav-opl/src/launchers/stop_onboard.sh
 Restart=on-failure
 RestartSec=3s
 

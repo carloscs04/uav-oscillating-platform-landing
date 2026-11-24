@@ -45,12 +45,9 @@ class FlightExperimentLogger:
         7: "CIRCLE",
         9: "LAND",
         16: "POSHOLD",
+        17: "BRAKE",
         20: "GUIDED_NOGPS",
-        22: "FLOWHOLD",
     }
-
-    # Pixhawk data older than this on the Pi = frozen telemetry (link to the Pixhawk lost)
-    STALE_RX_AGE_S = 1.0
 
     CSV_HEADERS = [
         "codename",
@@ -102,6 +99,8 @@ class FlightExperimentLogger:
         "ekf_pos_h_var",
         "ekf_pos_v_var",
         "ekf_compass_var",
+        "ekf_terrain_var",
+        "ekf_age_ms",
         # RC Pilot Inputs (PWM)
         "rc1_roll",
         "rc2_pitch",
@@ -115,6 +114,23 @@ class FlightExperimentLogger:
         "clip_0",
         "clip_1",
         "clip_2",
+        "vib_age_ms",
+        # Pi-side optical flow actually sent to the Pixhawk (raw camera, before gating)
+        "pi_flow_rate_x",
+        "pi_flow_rate_y",
+        "pi_flow_quality",
+        "pi_flow_sent_quality",
+        "pi_flow_gated",
+        "pi_lidar_m",
+        "pi_flow_samples",
+        "pi_flow_age_ms",
+        "pi_flow_tx_hz",
+        # Barometer (Pixhawk SCALED_PRESSURE): height above the take-off point
+        "height_src",
+        "baro_rel_alt_m",
+        "baro_press_hpa",
+        "baro_temp_c",
+        "baro_age_ms",
         # Power & System Health
         "voltage_v",
         "current_a",
@@ -122,23 +138,13 @@ class FlightExperimentLogger:
         "cpu_load_pct",
         "link_status",
         "link_rate_hz",
-        # Pi <-> Pixhawk link freshness (stale=1: every Pixhawk column above is a repeated old value)
-        "pi_rx_age_s",
-        "stale",
-        "pi_feed_hz",
-        # OPTICAL_FLOW exactly as the Pi sent it to the Pixhawk (rad/s, ArduPilot axes)
-        "pi_flow_rate_x",
-        "pi_flow_rate_y",
-        "pi_flow_quality",
-        "pi_flow_frames",
-        "pi_flow_good_frames",
-        "pi_flow_tx_age_s",
     ]
 
     def __init__(self, base_dir: Optional[str] = None):
         if base_dir is None:
+            # <repo>/experiments/flights/<date>/ (next to experiments/vision/)
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            base_dir = os.path.join(repo_root, "experiments")
+            base_dir = os.path.join(repo_root, "experiments", "flights")
 
         self.base_dir = base_dir
         self._lock = threading.Lock()
@@ -150,10 +156,12 @@ class FlightExperimentLogger:
         self._current_csv_path: Optional[str] = None
         self._current_codename: str = ""
         self._last_statustext: str = ""
+        self._last_statustext_seq: int = 0
         self._last_mode: int = -1
-        self._logged_params_snapshot: Dict[str, Any] = {}
         self._row_count: int = 0
-        self._stale_since: Optional[float] = None
+        # Pre-arm/arming texts are logged even while DISARMED (that is when the arm fails)
+        self._pending_texts: list = []
+        self._logged_params: Dict[str, Any] = {}
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         """Evaluates arming state and records telemetry rows while armed."""
@@ -161,15 +169,27 @@ class FlightExperimentLogger:
         armed = bool(hb.get("armed", False))
 
         with self._lock:
+            self._collect_statustexts(packets)
             if armed and not self._is_recording:
-                self._start_session(hb, packets, health_info)
+                self._start_session(hb, health_info)
             elif not armed and self._is_recording:
                 self._stop_session()
 
             if self._is_recording:
+                self._log_params(packets)
                 self._write_sample(packets, health_info)
 
-    def _start_session(self, hb: Dict[str, Any], packets: Dict[str, Any], health_info: Dict[str, Any]):
+    def _log_params(self, packets: Dict[str, Any]):
+        """Pixhawk params in the events log: all at arm, then any late or changed value."""
+        params = packets.get("pixhawk_params") or {}
+        new = {k: v for k, v in params.items() if self._logged_params.get(k) != v}
+        if not new:
+            return
+        label = "PARAMS_UPDATE" if self._logged_params else "PARAMS"
+        self._log_event(f"{label}: " + " ".join(f"{k}={new[k]}" for k in sorted(new)))
+        self._logged_params.update(new)
+
+    def _start_session(self, hb: Dict[str, Any], health_info: Dict[str, Any]):
         now = datetime.now()
         date_folder = now.strftime("%Y-%m-%d")
         time_tag = now.strftime("%H-%M-%S")
@@ -192,23 +212,20 @@ class FlightExperimentLogger:
         self._current_codename = codename
         self._last_statustext = ""
         self._last_mode = -1
-        self._logged_params_snapshot = {}
         self._row_count = 0
-        self._stale_since = None
+        self._last_hsrc = None
+        self._logged_params = {}
+
+        # Texts from the last 30 s before arming (PreArm, EKF, ...) head the events log
+        for ts, sev, text in self._pending_texts:
+            if time.time() - ts < 30.0:
+                self._log_event(f"(before arm) STATUSTEXT [sev={sev}]: {text}")
+        self._pending_texts = []
 
         self._log_event(
             f"ARMED [{codename.upper()}] | Initial mode={self._mode_name(hb.get('custom_mode', -1))} | "
             f"Voltage={health_info.get('voltage_v', 0.0)}V | Link={health_info.get('status', 'UNKNOWN')}"
         )
-
-        params = packets.get("pixhawk_params") or {}
-        if isinstance(params, dict) and params:
-            self._logged_params_snapshot = dict(params)
-            formatted_params = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
-            self._log_event(f"PIXHAWK_PARAMS | {formatted_params}")
-        else:
-            self._log_event("PIXHAWK_PARAMS | Pending sync from Pixhawk...")
-
         print(f"[FLIGHT_LOGGER] Recording started [{codename}] -> {csv_path}")
 
     def _stop_session(self):
@@ -242,7 +259,6 @@ class FlightExperimentLogger:
         self._event_file = None
         self._current_csv_path = None
         self._current_codename = ""
-        self._logged_params_snapshot = {}
 
     def _write_sample(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         if not self._csv_writer:
@@ -252,18 +268,6 @@ class FlightExperimentLogger:
         elapsed = round(now_ts - self._arm_start_time, 3)
         iso_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-        # Log any late-arriving Pixhawk parameter updates into _events.log
-        params = packets.get("pixhawk_params") or {}
-        if isinstance(params, dict) and params != self._logged_params_snapshot:
-            new_or_changed = {
-                k: v for k, v in params.items()
-                if self._logged_params_snapshot.get(k) != v
-            }
-            if new_or_changed:
-                self._logged_params_snapshot = dict(params)
-                formatted = ", ".join(f"{k}={v}" for k, v in sorted(new_or_changed.items()))
-                self._log_event(f"PIXHAWK_PARAMS_SYNC | {formatted}")
-
         hb = packets.get("heartbeat") or {}
         custom_mode = hb.get("custom_mode", -1)
         mode_str = self._mode_name(custom_mode)
@@ -272,11 +276,13 @@ class FlightExperimentLogger:
             self._log_event(f"MODE_CHANGE -> {mode_str} ({custom_mode}) at t+{elapsed}s")
             self._last_mode = custom_mode
 
-        st = packets.get("statustext") or {}
-        st_text = str(st.get("text", "")).strip()
-        if st_text and st_text != self._last_statustext:
-            self._log_event(f"STATUSTEXT [sev={st.get('severity', -1)}]: {st_text}")
-            self._last_statustext = st_text
+        if not packets.get("statustext_log"):
+            # Older Pi software: only the latest STATUSTEXT is available
+            st = packets.get("statustext") or {}
+            st_text = str(st.get("text", "")).strip()
+            if st_text and st_text != self._last_statustext:
+                self._log_event(f"STATUSTEXT [sev={st.get('severity', -1)}]: {st_text}")
+                self._last_statustext = st_text
 
         lpos = packets.get("local_position") or {}
         flow = packets.get("optical_flow") or {}
@@ -288,28 +294,12 @@ class FlightExperimentLogger:
         rc = packets.get("rc_channels") or {}
         vib = packets.get("vibration") or {}
         sys_st = packets.get("sys_status") or {}
-        pi_link = packets.get("pi_link") or {}
-        flow_tx = pi_link.get("flow_tx") or {}
-
-        # Stale detection: the Pi keeps streaming its last cached Pixhawk values when the
-        # serial link drops, so rows look normal but are frozen. rx_age_s exposes that.
-        rx_age = pi_link.get("rx_age_s", -1.0)
-        try:
-            rx_age = float(rx_age)
-        except (TypeError, ValueError):
-            rx_age = -1.0
-        stale = bool(pi_link) and (rx_age < 0.0 or rx_age > self.STALE_RX_AGE_S or not pi_link.get("connected", True))
-        if stale and self._stale_since is None:
-            self._stale_since = elapsed
-            self._log_event(
-                f"STALE_TELEMETRY START at t+{elapsed}s | Pixhawk data age={rx_age}s "
-                f"connected={pi_link.get('connected')} (Pi lost the Pixhawk link)"
-            )
-        elif not stale and self._stale_since is not None:
-            self._log_event(
-                f"STALE_TELEMETRY END at t+{elapsed}s | lasted {round(elapsed - self._stale_since, 2)}s"
-            )
-            self._stale_since = None
+        pif = packets.get("pi_flow") or {}
+        baro = packets.get("baro") or {}
+        hsrc = packets.get("height_src") or {}
+        if hsrc.get("name") and hsrc.get("name") != getattr(self, "_last_hsrc", None):
+            self._log_event(f"HEIGHT_SOURCE -> {hsrc.get('name')} at t+{elapsed}s")
+            self._last_hsrc = hsrc.get("name")
 
         row = [
             self._current_codename,
@@ -354,6 +344,8 @@ class FlightExperimentLogger:
             ekf.get("pos_h_var", 0.0),
             ekf.get("pos_v_var", 0.0),
             ekf.get("compass_var", 0.0),
+            ekf.get("terrain_var", 0.0),
+            ekf.get("age_ms", -1),
             rc.get("roll_ch1", 0),
             rc.get("pitch_ch2", 0),
             rc.get("throttle_ch3", 0),
@@ -365,21 +357,27 @@ class FlightExperimentLogger:
             vib.get("clip_0", 0),
             vib.get("clip_1", 0),
             vib.get("clip_2", 0),
+            vib.get("age_ms", -1),
+            pif.get("rate_x", 0.0),
+            pif.get("rate_y", 0.0),
+            pif.get("quality", 0),
+            pif.get("sent_quality", 0),
+            pif.get("gated", 0),
+            pif.get("lidar_m", -1.0),
+            pif.get("samples", 0),
+            pif.get("age_ms", -1),
+            pif.get("tx_hz", 0.0),
+            hsrc.get("name", "UNKNOWN"),
+            baro.get("rel_alt_m", 0.0),
+            baro.get("press_hpa", 0.0),
+            baro.get("temp_c", 0.0),
+            baro.get("age_ms", -1),
             sys_st.get("voltage_v", 0.0),
             sys_st.get("current_a", 0.0),
             sys_st.get("battery_pct", -1),
             sys_st.get("cpu_load_pct", 0.0),
             health_info.get("status", "UNKNOWN"),
             health_info.get("rate_hz", 0.0),
-            rx_age,
-            int(stale),
-            pi_link.get("feed_hz", 0.0),
-            flow_tx.get("rate_x", 0.0),
-            flow_tx.get("rate_y", 0.0),
-            flow_tx.get("quality", 0),
-            flow_tx.get("frames", 0),
-            flow_tx.get("good_frames", 0),
-            pi_link.get("flow_tx_age_s", -1.0),
         ]
 
         self._csv_writer.writerow(row)
@@ -387,6 +385,28 @@ class FlightExperimentLogger:
 
         if self._row_count % 20 == 0 and self._csv_file:
             self._csv_file.flush()
+
+    def _collect_statustexts(self, packets: Dict[str, Any]):
+        """Every new Pixhawk STATUSTEXT (the Pi sends the last 10 with a sequence number)."""
+        log = packets.get("statustext_log")
+        if not isinstance(log, list) or not log:
+            return
+        newest = max(int(e[0]) for e in log)
+        if newest < self._last_statustext_seq:      # Pi restarted: sequence starts again
+            self._last_statustext_seq = 0
+        for entry in log:
+            try:
+                seq, sev, text = int(entry[0]), entry[1], str(entry[2]).strip()
+            except (TypeError, ValueError, IndexError):
+                continue
+            if seq <= self._last_statustext_seq or not text:
+                continue
+            if self._is_recording:
+                self._log_event(f"STATUSTEXT [sev={sev}]: {text}")
+            else:
+                self._pending_texts.append((time.time(), sev, text))
+        self._last_statustext_seq = max(self._last_statustext_seq, newest)
+        self._pending_texts = self._pending_texts[-30:]
 
     def _log_event(self, message: str):
         if self._event_file:

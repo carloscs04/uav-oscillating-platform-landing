@@ -18,6 +18,25 @@ class VisionState:
         self.distance_m: float = 0.0
         self.tracking_state: str = "SEARCHING"
         self.last_detection_ts: float = 0.0
+        # Marker outlines of the latest processed frame, for drawing over the video on
+        # the ground station (normalised 0..1 image coords, a few hundred bytes).
+        self.overlay: Dict[str, Any] = {"items": [], "target": None, "seq": 0}
+        # Discovery mode (CLI `arucoscan on`): the camera node also looks for markers of ANY
+        # family/ID at a few Hz (AprilTags etc.), not only the pad family.
+        self.scan_any: bool = False
+        # Follow a target that is NOT in known_markers.yaml? None = not decided yet (the CLI
+        # asks), True / False = answered with `followunknown yes|no`. Never read from a file:
+        # starts undecided at every service start on purpose.
+        self.follow_unknown: Optional[bool] = None
+        # CLI `visionlog`: the GROUND STATION records the vision packets to CSV while rec is
+        # True (nothing is written on the Pi). name = the CSV file name it uses.
+        self.vision_log: Dict[str, Any] = {"rec": False, "name": ""}
+        # Landing law output (src/logic/control/landing_law.py). mode SHADOW = computed and
+        # shown only, NOT sent to the Pixhawk.
+        self.landing_shadow: Dict[str, Any] = {"phase": "SEARCH", "mode": "SHADOW"}
+        # Control measurement (src/logic/vision/pixel_target.py): centre of ANY marker in pixels
+        # vs the optical axis -> angle; x/y in metres = angle x lidar height.
+        self.pixel_target: Dict[str, Any] = {"detected": False}
 
         # Optical flow state buffer (read by MAVLinkSensorFeed at 30Hz)
         self.flow_rad_x: float = 0.0
@@ -29,14 +48,13 @@ class VisionState:
         self.flow_seq: int = 0
         self.last_flow_ts: float = 0.0
 
-        # Flow accumulator drained by MAVLinkSensorFeed (take_optical_flow), so no
-        # camera frame is lost when the feed loop runs slower than the camera.
+        # Accumulator: every camera flow sample (30 Hz) is summed here until the
+        # MAVLink feed (20 Hz) takes it, so no motion is lost between sends.
         self._acc_rad_x: float = 0.0
         self._acc_rad_y: float = 0.0
-        self._acc_dt_s: float = 0.0        # time covered by good (quality > 0) frames
-        self._acc_quality_sum: int = 0     # quality summed over ALL frames (bad frames count as 0)
-        self._acc_frames: int = 0
-        self._acc_good_frames: int = 0
+        self._acc_dt_s: float = 0.0
+        self._acc_quality_sum: int = 0
+        self._acc_count: int = 0
 
     def update_aruco_pose(
         self,
@@ -74,6 +92,47 @@ class VisionState:
             if detected:
                 self.last_detection_ts = time.time()
 
+    def update_overlay(self, items, img_w: int, img_h: int, target_label=None, principal_px=None,
+                       focal_px=None):
+        """items: [(label, corners (4, 2) px, axes (4, 2) px or None, known: bool), ...] every
+        marker seen in THIS frame (label = "<FAMILY> #<ID>"); target_label = the one chosen
+        by target_select. axes = projected marker origin + ends of its X (red), Y (green),
+        Z (blue) axes. Coordinates are sent normalised 0..1."""
+        w, h = float(max(1, img_w)), float(max(1, img_h))
+
+        def norm(points):
+            return [[round(float(u) / w, 4), round(float(v) / h, 4)] for u, v in points]
+
+        out = []
+        for label, corners, axes, known in items:
+            e = {"label": str(label), "c": norm(corners), "k": bool(known)}
+            if axes is not None:
+                e["ax"] = norm(axes)
+            out.append(e)
+        # Principal point = where the optical axis hits the image = straight below the lens.
+        # x = y = 0 in the pixel target means the marker sits exactly there.
+        pp = norm([principal_px])[0] if principal_px is not None else self.overlay.get("pp")
+        f = norm([focal_px])[0] if focal_px is not None else self.overlay.get("f")
+        with self._lock:
+            self.overlay = {"items": out, "target": target_label, "pp": pp, "f": f,
+                            "seq": self.overlay.get("seq", 0) + 1}
+
+    def update_pixel_target(self, target: Optional[Dict[str, Any]]):
+        with self._lock:
+            self.pixel_target = dict(target) if target else {"detected": False}
+
+    def update_landing_shadow(self, out: Dict[str, Any]):
+        with self._lock:
+            self.landing_shadow = dict(out)
+
+    def get_landing_shadow(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self.landing_shadow)
+
+    def get_pixel_target(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self.pixel_target)
+
     def update_optical_flow(
         self,
         rad_x: float,
@@ -94,44 +153,28 @@ class VisionState:
             self.flow_seq += 1
             self.last_flow_ts = time.time()
 
-            self._acc_frames += 1
+            self._acc_rad_x += float(rad_x)
+            self._acc_rad_y += float(rad_y)
+            self._acc_dt_s += float(dt_s)
             self._acc_quality_sum += int(quality)
-            if int(quality) > 0 and dt_s > 0.0:
-                self._acc_rad_x += float(rad_x)
-                self._acc_rad_y += float(rad_y)
-                self._acc_dt_s += float(dt_s)
-                self._acc_good_frames += 1
+            self._acc_count += 1
 
     def take_optical_flow(self) -> Optional[Dict[str, Any]]:
-        """Return flow summed over every frame since the previous call, then reset.
-
-        rate_x/rate_y are the mean angular rates (rad/s) over the good frames.
-        quality is averaged over all frames, so rejected frames pull it down.
-        Returns None when no frame arrived since the previous call.
-        """
+        """Return all flow accumulated since the last call (summed angles, summed dt,
+        mean quality) and reset the accumulator. None if no new sample arrived."""
         with self._lock:
-            frames = self._acc_frames
-            if frames == 0:
+            if self._acc_count == 0:
                 return None
-            good = self._acc_good_frames
-            dt = self._acc_dt_s
             out = {
                 "rad_x": self._acc_rad_x,
                 "rad_y": self._acc_rad_y,
-                "dt_s": dt,
-                "rate_x": self._acc_rad_x / dt if dt > 0.0 else 0.0,
-                "rate_y": self._acc_rad_y / dt if dt > 0.0 else 0.0,
-                "quality": int(round(self._acc_quality_sum / frames)) if good > 0 else 0,
-                "frames": frames,
-                "good_frames": good,
+                "dt_s": self._acc_dt_s,
+                "quality": int(round(self._acc_quality_sum / self._acc_count)),
+                "samples": self._acc_count,
                 "ts": self.last_flow_ts,
             }
-            self._acc_rad_x = 0.0
-            self._acc_rad_y = 0.0
-            self._acc_dt_s = 0.0
-            self._acc_quality_sum = 0
-            self._acc_frames = 0
-            self._acc_good_frames = 0
+            self._acc_rad_x = self._acc_rad_y = self._acc_dt_s = 0.0
+            self._acc_quality_sum = self._acc_count = 0
             return out
 
     def get_optical_flow(self) -> Dict[str, Any]:
@@ -170,6 +213,10 @@ class VisionState:
                     "px_dx": self.flow_px_dx,
                     "px_dy": self.flow_px_dy,
                 },
+                "aruco_overlay": dict(self.overlay),
+                "pixel_target": dict(self.pixel_target),
+                "vision_log": dict(self.vision_log),
+                "landing_shadow": dict(self.landing_shadow),
                 "status": {
                     "target_locked": self.aruco_detected,
                     "tracking_state": self.tracking_state,

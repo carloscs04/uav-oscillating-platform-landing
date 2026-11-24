@@ -117,10 +117,6 @@ class MavlinkTransmitter(threading.Thread):
                                 if self.active_filter == "ALL" or pkt_name in (self.active_filter, "heartbeat"):
                                     payload[pkt_name] = pkt_data
 
-                    # 3. Link freshness + what the Pi actually fed the Pixhawk (always sent, for the flight logger).
-                    #    rx_age_s grows when Pixhawk data stops arriving, so frozen telemetry is detectable.
-                    payload["pi_link"] = self._build_pi_link(is_connected, rate_hz)
-
                     return payload
 
                 except Exception as e:
@@ -139,24 +135,6 @@ class MavlinkTransmitter(threading.Thread):
                 payload["status"] = "NO_CONNECTION_ESTABLISHED"
 
         return payload
-
-    def _build_pi_link(self, is_connected: bool, rate_hz: float) -> Dict[str, Any]:
-        node = self.mavlink_node
-        listener = getattr(node, "rx_listener", None)
-        last_rx = float(getattr(listener, "last_recv_time", 0.0) or 0.0)
-        rx_age = round(time.time() - last_rx, 3) if last_rx > 0.0 else -1.0
-
-        feed = getattr(node, "sensor_feed", None)
-        flow_tx = dict(getattr(feed, "last_flow_tx", {}) or {})
-        flow_ts = float(flow_tx.pop("ts", 0.0) or 0.0)
-        return {
-            "connected": bool(is_connected),
-            "rx_age_s": rx_age,
-            "rx_rate_hz": rate_hz,
-            "feed_hz": round(float(getattr(feed, "actual_rate_hz", 0.0) or 0.0), 1),
-            "flow_tx": flow_tx,
-            "flow_tx_age_s": round(time.time() - flow_ts, 3) if flow_ts > 0.0 else -1.0,
-        }
 
     def stop(self):
         self.running = False

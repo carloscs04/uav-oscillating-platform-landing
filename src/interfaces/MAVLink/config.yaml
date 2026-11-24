@@ -10,8 +10,3 @@ mavlink:
   settings:
     heartbeat_timeout: 3.0
     max_connection_retries: 15
-    # MAVLink identity of the Pi. 1/191 = companion computer on vehicle 1.
-    # pymavlink's default 255/0 shares system id 255 with QGroundControl.
-    # To roll back to the old behaviour set 255 / 0.
-    source_system: 1
-    source_component: 191

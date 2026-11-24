@@ -84,6 +84,24 @@ class FlightCommands:
             0.0,
         )
 
+    def send_velocity_body(self, v_fwd: float, v_right: float, v_down: float):
+        """Velocity setpoint in the drone's frame (m/s): + forward, + right, + DOWN.
+        MAV_FRAME_BODY_OFFSET_NED: ArduCopter rotates it by the current heading. Yaw and yaw
+        rate ignored (heading held). Only acted on in GUIDED; ~3 s without one -> it stops."""
+        if not self.master:
+            return
+        self.master.mav.set_position_target_local_ned_send(
+            0,
+            self.master.target_system,
+            self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
+            0b0000111111000111,  # velocity only
+            0.0, 0.0, 0.0,
+            float(v_fwd), float(v_right), float(v_down),
+            0.0, 0.0, 0.0,
+            0.0, 0.0,
+        )
+
     def takeoff(self, altitude_m: float = 1.5) -> bool:
         """Sends standard NAV_TAKEOFF command (used when GPS/EKF position is available)."""
         if not self.master:

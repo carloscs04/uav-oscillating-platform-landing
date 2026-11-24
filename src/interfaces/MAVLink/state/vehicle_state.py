@@ -1,5 +1,7 @@
 # file: src/interfaces/MAVLink/state/vehicle_state.py
+import collections
 import threading
+import time
 from typing import Any, Dict, List, Optional, Set
 from pymavlink import mavutil
 import math
@@ -22,6 +24,7 @@ class VehicleState:
         "DISTANCE_SENSOR",
         "EKF_STATUS_REPORT",
         "VIBRATION",
+        "SCALED_PRESSURE",
         "POWER_STATUS",
         "HIGHRES_IMU",
         "NAV_CONTROLLER_OUTPUT",
@@ -44,6 +47,7 @@ class VehicleState:
         "NAV_CONTROLLER_OUTPUT",
         "SERVO_OUTPUT_RAW",
         "VIBRATION",
+        "SCALED_PRESSURE",
         "RC_CHANNELS"
     ]
 
@@ -51,11 +55,128 @@ class VehicleState:
         self._lock = threading.Lock()
         self._watched_packets: Set[str] = set(self.DEFAULT_WATCHED_PACKETS)
         self._latest_telemetry_cache: Dict[str, Dict[str, Any]] = {}
+        self._rx_time: Dict[str, float] = {}
         self._pixhawk_params: Dict[str, float] = {}
+        # Every STATUSTEXT / COMMAND_ACK in arrival order (the cache above keeps only the
+        # latest one, and ArduPilot sends PreArm reasons as several texts in a row).
+        self._event_seq: int = 0
+        self._events: collections.deque = collections.deque(maxlen=200)
+        # Pi-side sensor feed (OPTICAL_FLOW we send), exported for the ground station CSV
+        self._sensor_feed: Any = None
+        # Barometer altitude relative to the ground pressure, which is averaged while
+        # DISARMED and frozen while ARMED (= height above the take-off point). Logged
+        # to compare against the lidar before trusting the baro as the height source.
+        self._baro_ref_hpa: Optional[float] = None
+        self._baro_rel_alt_m: Optional[float] = None
+        # EKF source set in use: 1 = lidar height, 2 = baro height, 0 = unknown.
+        # ArduPilot does not report it, so it is tracked from our own ACKed commands and
+        # reset to 1 when the Pixhawk reboots (every boot starts with source set 1).
+        self._height_source_set: int = 0
+        self._last_boot_ms: Optional[int] = None
+
+    EVENT_PACKETS = ("STATUSTEXT", "COMMAND_ACK")
 
     def update_packet(self, pkt_type: str, data: Dict[str, Any]):
         with self._lock:
             self._latest_telemetry_cache[pkt_type] = data
+            self._rx_time[pkt_type] = time.time()
+            if pkt_type == "SCALED_PRESSURE":
+                self._update_baro_locked(data)
+            elif pkt_type == "ATTITUDE":
+                boot_ms = int(data.get("time_boot_ms", 0) or 0)
+                if self._last_boot_ms is not None and boot_ms + 5000 < self._last_boot_ms:
+                    self._height_source_set = 1   # Pixhawk rebooted -> source set 1 (lidar)
+                self._last_boot_ms = boot_ms
+            if pkt_type in self.EVENT_PACKETS:
+                self._event_seq += 1
+                self._events.append((self._event_seq, time.time(), pkt_type, data))
+
+    BARO_REF_ALPHA = 0.05   # ~2 s smoothing at 10 Hz while disarmed
+
+    def _update_baro_locked(self, data: Dict[str, Any]):
+        p = float(data.get("press_abs", 0.0) or 0.0)
+        if p <= 0.0:
+            return
+        hb = self._latest_telemetry_cache.get("HEARTBEAT") or {}
+        armed = bool(hb.get("base_mode", 0) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        if self._baro_ref_hpa is None:
+            self._baro_ref_hpa = p
+        elif not armed:
+            self._baro_ref_hpa += self.BARO_REF_ALPHA * (p - self._baro_ref_hpa)
+        self._baro_rel_alt_m = 44330.77 * (1.0 - (p / self._baro_ref_hpa) ** 0.190263)
+
+    HEIGHT_SOURCE_NAMES = {0: "UNKNOWN", 1: "LIDAR", 2: "BARO", 3: "SET3"}
+
+    def set_height_source_set(self, source_set: int):
+        with self._lock:
+            self._height_source_set = int(source_set)
+
+    def get_height_source_set(self) -> int:
+        with self._lock:
+            return self._height_source_set
+
+    def reset_baro_reference(self):
+        """Next SCALED_PRESSURE becomes the new zero (used after 'calibrate baro')."""
+        with self._lock:
+            self._baro_ref_hpa = None
+
+    def _export_baro(self) -> Dict[str, Any]:
+        with self._lock:
+            d = self._latest_telemetry_cache.get("SCALED_PRESSURE") or {}
+            ref, alt = self._baro_ref_hpa, self._baro_rel_alt_m
+        return {
+            "press_hpa": round(float(d.get("press_abs", 0.0) or 0.0), 3),
+            "temp_c": round(float(d.get("temperature", 0) or 0) / 100.0, 2),
+            "rel_alt_m": round(alt, 3) if alt is not None else 0.0,
+            "ref_hpa": round(ref, 3) if ref is not None else 0.0,
+            "age_ms": self._age_ms("SCALED_PRESSURE"),
+        }
+
+    def get_events_since(self, seq: int) -> List[tuple]:
+        """(seq, rx_time, pkt_type, data) for every STATUSTEXT/COMMAND_ACK newer than seq."""
+        with self._lock:
+            return [e for e in self._events if e[0] > seq]
+
+    def last_event_seq(self) -> int:
+        with self._lock:
+            return self._event_seq
+
+    def attach_sensor_feed(self, sensor_feed: Any):
+        self._sensor_feed = sensor_feed
+
+    def _export_pi_flow(self) -> Dict[str, Any]:
+        """What the Pi sends to the Pixhawk: raw camera flow (rad/s), quality, lidar height."""
+        feed = self._sensor_feed
+        f = dict(getattr(feed, "last_flow", None) or {}) if feed else {}
+        h = f.get("height_m")
+        t = f.get("t")
+        return {
+            "rate_x": round(float(f.get("raw_rate_x", 0.0)), 5),
+            "rate_y": round(float(f.get("raw_rate_y", 0.0)), 5),
+            "quality": int(f.get("raw_quality", 0)),
+            "sent_quality": int(f.get("quality", 0)),
+            "gated": int(bool(f.get("gated", False))),
+            "lidar_m": round(float(h), 3) if h is not None else -1.0,
+            "samples": int(f.get("samples", 0) or 0),
+            "age_ms": int((time.time() - t) * 1000) if t else -1,
+            "tx_hz": round(float(getattr(feed, "actual_rate_hz", 0.0) or 0.0), 1) if feed else 0.0,
+        }
+
+    def _export_statustext_log(self, n: int = 10) -> List[list]:
+        with self._lock:
+            evs = [e for e in self._events if e[2] == "STATUSTEXT"][-n:]
+        return [[seq, d.get("severity", -1), str(d.get("text", ""))] for seq, _t, _k, d in evs]
+
+    def get_packet_age(self, pkt_type: str) -> Optional[float]:
+        """Seconds since pkt_type was last received from the Pixhawk (None = never)."""
+        with self._lock:
+            t = self._rx_time.get(pkt_type)
+        return None if t is None else time.time() - t
+
+    def get_packet_with_time(self, pkt_type: str):
+        """(data, receive_time) for pkt_type, or (None, None)."""
+        with self._lock:
+            return self._latest_telemetry_cache.get(pkt_type), self._rx_time.get(pkt_type)
 
     def get_packet(self, pkt_type: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -194,6 +315,8 @@ class VehicleState:
                 "pos_h_var": round(ekf.get("pos_horiz_variance", 0.0), 4),
                 "pos_v_var": round(ekf.get("pos_vert_variance", 0.0), 4),
                 "compass_var": round(ekf.get("compass_variance", 0.0), 4),
+                "terrain_var": round(ekf.get("terrain_alt_variance", 0.0), 4),
+                "age_ms": self._age_ms("EKF_STATUS_REPORT"),
             },
             "nav_output": {
                 "nav_roll": round(nav.get("nav_roll", 0.0), 2),
@@ -216,7 +339,13 @@ class VehicleState:
                 "clip_0": vib.get("clipping_0", 0),
                 "clip_1": vib.get("clipping_1", 0),
                 "clip_2": vib.get("clipping_2", 0),
+                "age_ms": self._age_ms("VIBRATION"),
             },
+            "pi_flow": self._export_pi_flow(),
+            "baro": self._export_baro(),
+            "height_src": {"set": self.get_height_source_set(),
+                           "name": self.HEIGHT_SOURCE_NAMES.get(self.get_height_source_set(), "?")},
+            "statustext_log": self._export_statustext_log(),
             "rc_channels": {
                 "roll_ch1": rc.get("chan1_raw", 0),
                 "pitch_ch2": rc.get("chan2_raw", 0),
@@ -230,6 +359,11 @@ class VehicleState:
             },
             "pixhawk_params": self.get_params(),
         }
+
+    def _age_ms(self, pkt_type: str) -> int:
+        """ms since pkt_type arrived (-1 = never): shows in the CSV whether a column is live."""
+        age = self.get_packet_age(pkt_type)
+        return -1 if age is None else int(age * 1000)
 
     def export_node_health(self, rate_hz: float, is_connected: bool) -> Dict[str, Any]:
         """Unchanged node health export used by Ground Station NodeHealthView."""

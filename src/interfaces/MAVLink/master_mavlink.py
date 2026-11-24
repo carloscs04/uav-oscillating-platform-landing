@@ -7,9 +7,13 @@ import threading
 import yaml
 from typing import Any, Optional
 
-# OPTICAL_FLOW flow_rate_x/y are MAVLink2-only fields (also set in src/main.py).
+# Speak MAVLink 2 from the first packet. pymavlink otherwise starts in MAVLink 1 and
+# only switches after it receives a MAVLink 2 packet; until then OPTICAL_FLOW has no
+# flow_rate_x/y fields and optical_flow_send() raises TypeError (seen 2026-11-21:
+# flow_tx=0 for a whole session). ArduPilot always accepts MAVLink 2.
 os.environ.setdefault("MAVLINK20", "1")
-from pymavlink import mavutil
+from pymavlink import mavutil  # noqa: E402
+mavutil.set_dialect("ardupilotmega")  # re-select v2 even if pymavlink was imported earlier
 
 
 from src.interfaces.MAVLink.state.vehicle_state import VehicleState
@@ -19,6 +23,7 @@ from src.interfaces.MAVLink.tx.system_cmd import SystemCommands
 from src.interfaces.MAVLink.tx.flight_cmd import FlightCommands
 from src.interfaces.MAVLink.tx.heartbeat import MAVLinkHeartbeatEmitter
 from src.interfaces.MAVLink.tx.sensor_feed import MAVLinkSensorFeed
+from src.interfaces.MAVLink import flow_check
 
 
 class MAVLinkManager:
@@ -45,6 +50,7 @@ class MAVLinkManager:
         self.heartbeat_emitter = MAVLinkHeartbeatEmitter()
         self.sensor_feed = MAVLinkSensorFeed(rate_hz=20.0)
         self.sensor_feed.bind_states(vehicle_state=self.state)
+        self.state.attach_sensor_feed(self.sensor_feed)
 
     def bind_sensor_states(self, distance_state: Any = None, vision_state: Any = None):
         """Binds LiDAR, Optical Flow, and VehicleState buffers to the EKF3 sensor feed."""
@@ -59,6 +65,36 @@ class MAVLinkManager:
         for _ in range(samples):
             self.sensor_feed.print_axis_check()
             time.sleep(interval_s)
+
+    # --- No-flight optical flow checks (see flow_check.py) ---
+    def flow_check(self) -> list:
+        """Snapshot of parameters, Pi flow, Pixhawk flow and EKF state as (tag, text) lines."""
+        self.rx_listener.refresh_params()
+        lines = flow_check.check_params(self.state.get_params())
+        hs = self.state.get_height_source_set()
+        lines.append(("PASS" if hs in (1, 2) else "WARN",
+                      f"Active height source: {self.state.HEIGHT_SOURCE_NAMES.get(hs, hs)} "
+                      f"(change with 'heightsrc lidar|baro', disarmed)"))
+        lines += flow_check.check_live(self.state, self.sensor_feed)
+        lines.append(flow_check.verdict(lines))
+        return lines
+
+    def flow_test(self, seconds: float, log) -> bool:
+        """Rotation test in a background thread; results go to log(text, tag). Disarmed only."""
+        if self.state.is_armed():
+            log("flowtest refused: vehicle is ARMED. Disarm, props off.", "BLOCKED")
+            return False
+        if not hasattr(self, "_flow_tester"):
+            self._flow_tester = flow_check.FlowTester(self.state, self.sensor_feed)
+        threading.Thread(target=self._flow_tester.run, args=(seconds, log), daemon=True).start()
+        return True
+
+    def flow_watch(self, seconds: float, log) -> bool:
+        """Live one-line-per-second flow/EKF monitor in a background thread."""
+        self.sensor_feed.reset_bench_odometry()
+        threading.Thread(target=flow_check.watch, args=(self.state, self.sensor_feed, seconds, log),
+                         daemon=True).start()
+        return True
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r") as f:
@@ -95,12 +131,7 @@ class MAVLinkManager:
 
         raw_uri = target_info["uri"]
         baud = target_info.get("baud_rate", 921600)
-        settings = self.config.get("settings", {})
-        hb_timeout = settings.get("heartbeat_timeout", 3.0)
-        # Companion-computer identity: same system as the vehicle, onboard-computer component.
-        # pymavlink's default (255/0) collides with QGroundControl's system id.
-        src_sys = int(settings.get("source_system", 255))
-        src_comp = int(settings.get("source_component", 0))
+        hb_timeout = self.config.get("settings", {}).get("heartbeat_timeout", 3.0)
 
         attempt_logged = False
 
@@ -123,13 +154,9 @@ class MAVLinkManager:
 
                 try:
                     if "udp:" in raw_uri:
-                        self.master = mavutil.mavlink_connection(
-                            raw_uri, source_system=src_sys, source_component=src_comp
-                        )
+                        self.master = mavutil.mavlink_connection(raw_uri)
                     else:
-                        self.master = mavutil.mavlink_connection(
-                            raw_uri, baud=baud, source_system=src_sys, source_component=src_comp
-                        )
+                        self.master = mavutil.mavlink_connection(raw_uri, baud=baud)
 
                     self.rx_listener.set_master(self.master)
                     self.system_cmd.set_master(self.master)
@@ -146,6 +173,8 @@ class MAVLinkManager:
                         self.heartbeat_emitter.start()
                         self.sensor_feed.start()
                         self.system_cmd.request_telemetry_streams(rate_hz=50)
+                        self.system_cmd.request_message_intervals()
+                        threading.Timer(2.0, self._reset_height_source_if_disarmed).start()
                         self.system_cmd.set_ekf_origin()
                     else:
                         self._cleanup_partial_connection()
@@ -231,6 +260,25 @@ class MAVLinkManager:
         self.state.clear_transient_packets()
         return self.system_cmd.set_mode(mode_name)
 
+    def preflight_calibration(self, kind: str) -> bool:
+        return self.system_cmd.preflight_calibration(kind)
+
+    def set_ekf_source_set(self, source_set: int) -> bool:
+        return self.system_cmd.set_ekf_source_set(source_set)
+
+    def _reset_height_source_if_disarmed(self):
+        """After (re)connecting, put the Pixhawk in a known state: source set 1 (lidar
+        height), the same as at every Pixhawk boot. Never while armed."""
+        if not self.connected or self.state.is_armed():
+            print("[MAVLink] Height source unknown (vehicle armed at connect); not changed.")
+            return
+        if self.system_cmd.set_ekf_source_set(1):
+            self.state.set_height_source_set(1)
+            print("[MAVLink] Height source set to LIDAR (EKF source set 1).")
+
+    def run_prearm_checks(self) -> bool:
+        return self.system_cmd.run_prearm_checks()
+
     def takeoff(self, altitude_m: float = 1.5) -> bool:
         self.state.clear_transient_packets()
         return self.flight_cmd.takeoff(altitude_m)
@@ -241,6 +289,9 @@ class MAVLinkManager:
 
     def send_velocity(self, vx: float, vy: float, vz: float):
         self.flight_cmd.send_velocity(vx, vy, vz)
+
+    def send_velocity_body(self, v_fwd: float, v_right: float, v_down: float):
+        self.flight_cmd.send_velocity_body(v_fwd, v_right, v_down)
 
     def debug_force_arm(self) -> bool:
         self.state.clear_transient_packets()

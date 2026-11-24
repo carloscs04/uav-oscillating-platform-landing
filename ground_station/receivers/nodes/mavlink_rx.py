@@ -1,4 +1,4 @@
-# file: ground_station/receivers/nodes/mavlink_rx.py
+import atexit
 import json
 import socket
 import threading
@@ -10,7 +10,7 @@ from ground_station.utils.flight_logger import FlightExperimentLogger
 
 
 class MavlinkReceiver(threading.Thread):
-    """Modular UDP receiver for MAVLink Telemetry with automatic armed flight logging."""
+    """Modular UDP receiver for PX4 MAVLink Telemetry."""
 
     _active_instance = None
 
@@ -31,7 +31,7 @@ class MavlinkReceiver(threading.Thread):
         self.velocity: Dict[str, float] = {}
         self.distance_sensor: Dict[str, float] = {}
 
-        # Isolated health metadata (untouched for UI NodeHealthView)
+        # Isolated health metadata
         self.health_info: Dict[str, Any] = {
             "status": "OFFLINE",
             "rate_hz": 0.0,
@@ -39,7 +39,10 @@ class MavlinkReceiver(threading.Thread):
             "voltage_v": 0.0
         }
 
+        # Records experiments/flights/<date>/flight_*.csv while the Pixhawk is ARMED
         self.flight_logger = FlightExperimentLogger()
+        atexit.register(self.flight_logger.close)
+
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
         self._sock: Optional[socket.socket] = None
@@ -115,7 +118,7 @@ class MavlinkReceiver(threading.Thread):
                 continue
 
             try:
-                data, addr = self._sock.recvfrom(65535)
+                data, addr = self._sock.recvfrom(65535)  # telemetry JSON is ~3 KB and growing; 4096 would silently drop it
                 if not data:
                     continue
 
@@ -135,7 +138,7 @@ class MavlinkReceiver(threading.Thread):
                     self.last_seen = time.time()
                     incoming_packets = payload["packets"]
 
-                    # Extract node_health cleanly for UI matrix only
+                    # Extract node_health cleanly without polluting telemetry inspection tables
                     if "node_health" in incoming_packets:
                         self.health_info = incoming_packets.pop("node_health")
 
@@ -146,20 +149,23 @@ class MavlinkReceiver(threading.Thread):
                             self.velocity = pkt_data
                         elif pkt_type == "distance_sensor":
                             self.distance_sensor = pkt_data
+                    packets_snapshot = dict(self.packets)
+                    health_snapshot = dict(self.health_info)
 
-                    current_packets = dict(self.packets)
-                    current_health = dict(self.health_info)
-
-                # Record flight data automatically while armed
-                self.flight_logger.process_telemetry(current_packets, current_health)
+                # Flight logger: starts a CSV on ARM, closes it on DISARM (outside the lock)
+                try:
+                    self.flight_logger.process_telemetry(packets_snapshot, health_snapshot)
+                except Exception as e:
+                    if not getattr(self, "_logger_err_shown", False):
+                        print(f"[GCS FLIGHT_LOGGER_ERR] {type(e).__name__}: {e}")
+                        self._logger_err_shown = True
 
             except socket.timeout:
                 continue
-            except Exception:
+            except Exception as e:
                 if self.running:
                     time.sleep(0.05)
 
-        self.flight_logger.close()
         if self._sock:
             self._sock.close()
 

@@ -2,6 +2,7 @@
 
 import base64
 import io
+import time
 import tkinter as tk
 from ground_station.utils.colors import (
     BG_CARD, BG_DARK, FG_CYAN, FG_WHITE, ACCENT_GREEN, ACCENT_RED, ACCENT_YELLOW,
@@ -72,13 +73,39 @@ class CameraView(tk.LabelFrame):
         if not pose.get("detected", False) and ctrl_rx:
             pose = ctrl_rx.get_packet("aruco_pose", pose)
 
-        if pose.get("detected", False):
+        status = vis_rx.get_packet("status", {}) if vis_rx else {}
+        tracking = str(status.get("tracking_state", "")).upper()
+        pt = (vis_rx.get_packet("pixel_target", {}) or {}) if vis_rx else {}
+        fresh = vis_rx is not None and time.time() - getattr(vis_rx, "last_seen", 0.0) <= 1.0
+
+        if fresh and pt.get("detected"):
+            # Where the controller wants to go (known marker by priority, else nearest unknown)
+            label = pt.get("source", "?")
+            approval = pt.get("approval")
+            if approval == "known":
+                self.lbl_target.config(text=f"TARGET: {label} (KNOWN)", fg=ACCENT_GREEN)
+            elif approval == "yes":
+                self.lbl_target.config(text=f"TARGET: {label} (UNKNOWN, followunknown YES)", fg=ACCENT_YELLOW)
+            elif approval == "no":
+                self.lbl_target.config(text=f"WANTS: {label} (UNKNOWN, BLOCKED)", fg="#FF6A00")
+            else:
+                self.lbl_target.config(text=f"WANTS: {label} (UNKNOWN) -> followunknown yes/no?",
+                                       fg=ACCENT_YELLOW)
+            if pt.get("x_m") is not None:
+                self.lbl_coords.config(text=f"x: {pt['x_m'] * 100:+.1f} cm | y: {pt['y_m'] * 100:+.1f} cm | "
+                                            f"z: {pt['h_m']:.2f} m (lidar)")
+            else:
+                self.lbl_coords.config(text=f"dx: {pt.get('du_px', 0):+.0f} px | dy: {pt.get('dv_px', 0):+.0f} px | no lidar")
+        elif pose.get("detected", False):
             x = float(pose.get("x", 0.0))
             y = float(pose.get("y", 0.0))
             z = float(pose.get("z", 0.0))
             dist = (x**2 + y**2 + z**2) ** 0.5
             target_id = pose.get("id", 0)
-            self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
+            if tracking == "HOLDING":   # lost this frame, last pose kept for hold_s
+                self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} HOLDING (lost)", fg=ACCENT_YELLOW)
+            else:
+                self.lbl_target.config(text=f"TARGET: ARUCO ID {target_id} DETECTED", fg=ACCENT_GREEN)
             self.lbl_coords.config(text=f"X: {x:+.2f} | Y: {y:+.2f} | Z: {z:+.2f} | Dist: {dist:.2f} m")
         else:
             self.lbl_target.config(text="TARGET: NO ARUCO DETECTED", fg=ACCENT_RED)
@@ -113,8 +140,130 @@ class CameraView(tk.LabelFrame):
                 fill=COLOR_PLOT_TEXT, font=("Consolas", 10, "bold"), tags="video_layer"
             )
 
-        # 3. Overlay drone battery read from MAVLink
+        # 3. ArUco outlines drawn here from a few numbers sent by the Pi (no extra Pi CPU)
+        self._render_aruco_overlay(vis_rx if raw_b64 else None)
+
+        # 4. Overlay drone battery read from MAVLink
         self._render_battery_overlay()
+
+    def _render_aruco_overlay(self, vis_rx):
+        self.canvas.delete("aruco_overlay")
+        if not vis_rx or time.time() - getattr(vis_rx, "last_seen", 0.0) > 1.0:
+            return
+        ov = vis_rx.get_packet("aruco_overlay", {}) or {}
+        cw = self.canvas.winfo_width() or 320
+        ch = self.canvas.winfo_height() or 240
+        tag = "aruco_overlay"
+
+        # Fixed reference: the optical axis (principal point from the calibration) = straight
+        # below the lens. The camera is mounted at the drone centre, so this is the drone centre.
+        pp = ov.get("pp") or [0.5, 0.5]
+        cx, cy = pp[0] * cw, pp[1] * ch
+        self.canvas.create_line(cx - 14, cy, cx + 14, cy, fill=FG_CYAN, width=2, tags=tag)
+        self.canvas.create_line(cx, cy - 14, cx, cy + 14, fill=FG_CYAN, width=2, tags=tag)
+        self.canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=FG_CYAN, outline="", tags=tag)
+
+        # Every marker in view. green = registered (known_markers.yaml), yellow = unregistered
+        # but it is the one the controller wants (no known one visible), orange = unregistered.
+        orange, yellow = "#FF6A00", "#FFEB3B"   # clearly apart (the theme's amber is too close)
+        target = ov.get("target")
+        pt = vis_rx.get_packet("pixel_target", {}) or {}
+        for m in ov.get("items", []):
+            c = m.get("c", [])
+            pts = [coord for u, v in c for coord in (u * cw, v * ch)]
+            if len(pts) != 8:
+                continue
+            label, known, is_target = m.get("label", "?"), m.get("k", False), m.get("label") == target
+            color = ACCENT_GREEN if known else (yellow if is_target else orange)
+            style = {} if known else {"dash": (6, 3)}
+            self.canvas.create_polygon(pts, outline=color, fill="", width=3 if is_target else 2,
+                                       tags=tag, **style)
+            # first corner = printed top-left: shows the marker's orientation
+            self.canvas.create_oval(pts[0] - 3, pts[1] - 3, pts[0] + 3, pts[1] + 3,
+                                    fill=color, outline="", tags=tag)
+            text = label + ("  <- TARGET" if is_target else "")
+            self.canvas.create_text(pts[0], pts[1] - 8, anchor="sw", text=text, fill=color,
+                                    font=("Consolas", 9, "bold"), tags=tag)
+            mu, mv = sum(p[0] for p in c) / 4.0, sum(p[1] for p in c) / 4.0
+            ox, oy = mu * cw, mv * ch
+            self.canvas.create_line(ox - 10, oy, ox + 10, oy, fill=color, width=2, tags=tag)
+            self.canvas.create_line(ox, oy - 10, ox, oy + 10, fill=color, width=2, tags=tag)
+            self._draw_axes(m.get("ax"), cw, ch, tag)
+
+        # Control measurement (computed on the Pi): target centre vs the fixed cross in pixels,
+        # x/y in cm = angle x lidar height. Same numbers the landing controller will use.
+        if pt.get("detected"):
+            approval = pt.get("approval")
+            tx, ty = pt.get("un", 0.5) * cw, pt.get("vn", 0.5) * ch
+            go = approval in ("known", "yes")
+            style = {} if go else {"dash": (5, 4)}
+            self.canvas.create_line(cx, cy, tx, ty, fill="white" if go else yellow, width=2,
+                                    tags=tag, **style)
+            if pt.get("x_m") is not None:
+                ex, ey, err = pt["x_m"] * 100, pt["y_m"] * 100, pt["err_m"] * 100
+                color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
+                txt = (f"{pt.get('source', '?')}  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm  "
+                       f"z={pt['h_m']:.2f} m (lidar)")
+            else:
+                color = ACCENT_YELLOW
+                txt = (f"{pt.get('source', '?')}  dx={pt.get('du_px', 0):+6.1f} px  "
+                       f"dy={pt.get('dv_px', 0):+6.1f} px  (no lidar: no cm)")
+            state = {"known": "GOING TO (known)", "yes": "GOING TO (unknown, allowed)",
+                     "no": "WANTS (unknown) - BLOCKED: followunknown no",
+                     "ask": "WANTS (unknown) - waiting: followunknown yes/no"}.get(approval, "")
+            if pt.get("fwd_m") is not None:
+                txt2 = (f"drone frame (tilt-comp): fwd={pt['fwd_m'] * 100:+5.1f} cm  right={pt['right_m'] * 100:+5.1f} cm"
+                        f"   roll {pt.get('roll_deg', 0):+4.1f}  pitch {pt.get('pitch_deg', 0):+4.1f} deg")
+            else:
+                txt2 = "drone frame (tilt-comp): no attitude from the Pixhawk"
+            lines = [(txt, color, ("Consolas", 10, "bold")), (txt2, "white", ("Consolas", 9)),
+                     (f"{state}   pixels dx={pt.get('du_px', 0):+6.1f} dy={pt.get('dv_px', 0):+6.1f}  "
+                      f"angle {pt.get('angle_x_deg', 0):+5.1f}/{pt.get('angle_y_deg', 0):+5.1f} deg",
+                      "white", ("Consolas", 9))]
+            for i, (text, fg, font) in enumerate(lines):
+                y0 = 8 + 17 * i
+                item = self.canvas.create_text(12, y0, anchor="nw", fill=fg, font=font, text=text, tags=tag)
+                x1, y1, x2, y2 = self.canvas.bbox(item)
+                bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418",
+                                                  outline="", tags=tag)
+                self.canvas.tag_lower(bg, item)
+        self._render_landing_shadow(vis_rx, cx, cy, cw, ch, tag)
+        self.canvas.tag_raise(tag)
+
+    def _render_landing_shadow(self, vis_rx, cx, cy, cw, ch, tag):
+        """Landing law in SHADOW mode (computed on the Pi, NOT sent): magenta arrow from the
+        fixed cross = horizontal velocity it would command, drawn in the image. The camera is
+        mounted forward = -x_img, right = -y_img, so velocity (fwd, right) -> (-fwd, -right) px."""
+        ls = vis_rx.get_packet("landing_shadow", {}) or {}
+        if not ls:
+            return
+        vf, vr, vd = float(ls.get("v_fwd") or 0), float(ls.get("v_right") or 0), float(ls.get("v_down") or 0)
+        scale = 110.0 / 0.30            # 0.3 m/s (v_max) = 110 px
+        ex, ey = cx - vf * scale, cy - vr * scale
+        magenta = "#FF2DF0"
+        if abs(ex - cx) + abs(ey - cy) > 2:
+            self.canvas.create_line(cx, cy, ex, ey, fill=magenta, width=4, arrow="last",
+                                    arrowshape=(14, 16, 6), tags=tag)
+        err = ls.get("err_m")
+        text = (f"LAW (shadow, not sent): {ls.get('phase', '?')}   v fwd {vf * 100:+.0f}  right {vr * 100:+.0f}  "
+                f"{'down' if vd >= 0 else 'UP'} {abs(vd) * 100:.0f} cm/s   "
+                f"err {'--' if err is None else f'{err * 100:.1f}'} cm  {ls.get('note', '')}")
+        item = self.canvas.create_text(12, ch - 12, anchor="sw", fill=magenta,
+                                       font=("Consolas", 9, "bold"), text=text, tags=tag)
+        x1, y1, x2, y2 = self.canvas.bbox(item)
+        bg = self.canvas.create_rectangle(x1 - 4, y1 - 1, x2 + 4, y2 + 1, fill="#101418", outline="", tags=tag)
+        self.canvas.tag_lower(bg, item)
+
+    def _draw_axes(self, ax, cw, ch, tag):
+        """Marker frame at its centre: X red (marker right), Y green (marker top), Z blue
+        (out of the marker, towards the camera)."""
+        if not ax or len(ax) != 4:
+            return
+        o = (ax[0][0] * cw, ax[0][1] * ch)
+        for (u, v), color in zip(ax[1:], ("#FF3B30", "#34C759", "#0A84FF")):
+            self.canvas.create_line(o[0], o[1], u * cw, v * ch, fill=color, width=3,
+                                    arrow="last", arrowshape=(8, 10, 4), tags=tag)
+        self.canvas.create_oval(o[0] - 3, o[1] - 3, o[0] + 3, o[1] + 3, fill="white", outline="", tags=tag)
 
     def _render_battery_overlay(self):
         self.canvas.delete("bat_overlay")
