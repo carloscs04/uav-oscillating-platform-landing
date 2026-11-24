@@ -263,3 +263,18 @@ def test_descend_brakes_before_the_approach_floor():
     vis.set(0.0, 0.0, 0.15, h=0.7)               # 10 cm above: slowed to kp * 0.10
     assert abs(s.tick()[2] - s.p.hold_kp * 0.10) < 1e-6
     assert s.last["reason"] == "approach height: slowing"
+
+
+def test_land_wait_holds_lidar_height():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=0.25)
+    s.mission_start()
+    s.select("touchdown")
+    vis.ls["phase"] = "FINAL"
+    s.tick()                                      # latches 0.25 m
+    assert s.last["reason"] == "waiting for error: holding"
+    vis.set(0.0, 0.0, 0.0, h=0.20)
+    vis.ls["phase"] = "FINAL"
+    assert s.tick()[2] < 0                        # sank 5 cm while waiting -> climbs back

@@ -264,9 +264,15 @@ class GuidedSender:
                     if cap < vd:
                         vd = max(0.0, cap)
                         reason = "approach height: slowing"
+        if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") == "FINAL":
+            # FINAL waiting for the error: hold the lidar height (v_down = 0 alone sinks)
+            vd = self._hold("land_wait", ls.get("h_m"))
+            reason = "waiting for error: holding"
+        elif stage == "land" and self._hold_stage == "land_wait":
+            self._hold_stage = None
         if stage == "stop" and t is not None and now - t <= self.p.law_max_age_s:
             vd = self._hold(stage, ls.get("h_m"))
-        if stage not in ("stop", "align"):
+        if stage not in ("stop", "align", "land"):
             self._hold_stage = None
         self.mav.send_velocity_body(vf, vr, vd)
         self._check_touchdown(stage, ls, reason == "law", now)

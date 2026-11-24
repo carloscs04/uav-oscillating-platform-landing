@@ -47,6 +47,9 @@ class LandingParams:
     pause_err: float = 0.10         # stop descending while |err| above this, m
     final_h: float = 0.30           # FINAL below this height, m
     final_speed: float = 0.10       # m/s
+    final_pause_err: float = 0.05   # FINAL (even committed): wait, no descent, while |err| above this, m
+                                    # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
+    final_pause_min_h: float = 0.15 # ...but below this height keep descending (too close to hover), m
     commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
     touchdown_h: float = 0.13       # TOUCHDOWN below this lidar height, m (on the ground it reads 0.09-0.10)
@@ -198,15 +201,18 @@ class LandingLaw:
         if self.phase == "FINAL":
             if h_m < p.commit_h and (not self.strict_descent or e <= pause_err):
                 self.committed = True
-            pause = e > pause_err and not self.committed
+            pause = (e > pause_err and not self.committed) or \
+                    (e > p.final_pause_err and h_m >= p.final_pause_min_h)
             out["v_down"] = 0.0 if pause else p.final_speed
             if h_m < p.touchdown_h and not pause:
                 self._set("TOUCHDOWN", now, h_m)
                 out["v_fwd"] = out["v_right"] = 0.0
                 out["v_down"] = p.final_speed
-        paused = e > pause_err and (self.phase == "DESCEND" or (self.phase == "FINAL" and not self.committed))
-        if paused:
+        if self.phase == "DESCEND" and e > pause_err:
             out["note"] = "error > pause: holding height"
+        elif self.phase == "FINAL" and out["v_down"] == 0.0:
+            lim = pause_err if (e > pause_err and not self.committed) else p.final_pause_err
+            out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.0f} cm, not descending"
         out["phase"] = self.phase
         return self._round(out)
 
