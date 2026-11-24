@@ -112,6 +112,7 @@ class MasterNode:
         if self._camera_driver is not None:
             self._camera_driver.guided_sender = self.guided_sender
             self.guided_sender.on_activate = self._camera_driver.landing.reset
+        self.mavlink_node.state.set_control_params_provider(self._control_params)
 
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
@@ -186,6 +187,17 @@ class MasterNode:
         self.state.append_cli_log("Shutting down all UAV subsystems...", "SYSTEM")
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
+
+    def _control_params(self) -> Dict[str, Any]:
+        """Landing law (law.*) and GUIDED sender (sender.*) params, for the events log."""
+        from dataclasses import asdict
+        out = {}
+        drv = self._camera_driver
+        if drv is not None and getattr(drv, "landing", None) is not None:
+            out.update({f"law.{k}": v for k, v in asdict(drv.landing.p).items()})
+        if self.guided_sender is not None:
+            out.update({f"sender.{k}": v for k, v in asdict(self.guided_sender.p).items()})
+        return out
 
     def bind_wifi_bridge(self, bridge: Any):
         """Links MasterWIFI so its active heartbeat keeps the GCS link watchdog alive."""

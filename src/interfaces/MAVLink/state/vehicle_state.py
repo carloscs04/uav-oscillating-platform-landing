@@ -57,6 +57,9 @@ class VehicleState:
         self._latest_telemetry_cache: Dict[str, Dict[str, Any]] = {}
         self._rx_time: Dict[str, float] = {}
         self._pixhawk_params: Dict[str, float] = {}
+        # Pi-side control gains (landing law + GUIDED sender), read through a callable so
+        # the ground station events log records the values actually flying.
+        self._control_params_fn = None
         # Every STATUSTEXT / COMMAND_ACK in arrival order (the cache above keeps only the
         # latest one, and ArduPilot sends PreArm reasons as several texts in a row).
         self._event_seq: int = 0
@@ -190,6 +193,18 @@ class VehicleState:
     def get_params(self) -> Dict[str, float]:
         with self._lock:
             return dict(self._pixhawk_params)
+
+    def set_control_params_provider(self, fn):
+        self._control_params_fn = fn
+
+    def get_control_params(self) -> Dict[str, Any]:
+        fn = self._control_params_fn
+        if fn is None:
+            return {}
+        try:
+            return dict(fn())
+        except Exception:
+            return {}
 
     def is_armed(self) -> bool:
         """Returns True if the latest HEARTBEAT indicates the drone is armed."""
@@ -358,6 +373,7 @@ class VehicleState:
                 "text": statustext.get("text", ""),
             },
             "pixhawk_params": self.get_params(),
+            "control_params": self.get_control_params(),
         }
 
     def _age_ms(self, pkt_type: str) -> int:

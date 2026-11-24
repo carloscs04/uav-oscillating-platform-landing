@@ -162,6 +162,7 @@ class FlightExperimentLogger:
         # Pre-arm/arming texts are logged even while DISARMED (that is when the arm fails)
         self._pending_texts: list = []
         self._logged_params: Dict[str, Any] = {}
+        self._logged_ctrl: Dict[str, Any] = {}
 
     def process_telemetry(self, packets: Dict[str, Any], health_info: Dict[str, Any]):
         """Evaluates arming state and records telemetry rows while armed."""
@@ -177,6 +178,7 @@ class FlightExperimentLogger:
 
             if self._is_recording:
                 self._log_params(packets)
+                self._log_control_params(packets)
                 self._write_sample(packets, health_info)
 
     def _log_params(self, packets: Dict[str, Any]):
@@ -188,6 +190,16 @@ class FlightExperimentLogger:
         label = "PARAMS_UPDATE" if self._logged_params else "PARAMS"
         self._log_event(f"{label}: " + " ".join(f"{k}={new[k]}" for k in sorted(new)))
         self._logged_params.update(new)
+
+    def _log_control_params(self, packets: Dict[str, Any]):
+        """Pi landing law / GUIDED sender params: all at arm, then any changed value."""
+        params = packets.get("control_params") or {}
+        new = {k: v for k, v in params.items() if self._logged_ctrl.get(k) != v}
+        if not new:
+            return
+        label = "CONTROL_PARAMS_UPDATE" if self._logged_ctrl else "CONTROL_PARAMS"
+        self._log_event(f"{label}: " + " ".join(f"{k}={new[k]}" for k in sorted(new)))
+        self._logged_ctrl.update(new)
 
     def _start_session(self, hb: Dict[str, Any], health_info: Dict[str, Any]):
         now = datetime.now()
@@ -215,6 +227,7 @@ class FlightExperimentLogger:
         self._row_count = 0
         self._last_hsrc = None
         self._logged_params = {}
+        self._logged_ctrl = {}
 
         # Texts from the last 30 s before arming (PreArm, EKF, ...) head the events log
         for ts, sev, text in self._pending_texts:
