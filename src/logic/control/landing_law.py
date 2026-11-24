@@ -48,7 +48,7 @@ class LandingParams:
     final_speed: float = 0.10       # m/s
     commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
-    touchdown_h: float = 0.08       # TOUCHDOWN below this height, m
+    touchdown_h: float = 0.13       # TOUCHDOWN below this lidar height, m (on the ground it reads 0.09-0.10)
     lost_hold_s: float = 0.5        # brake (v = 0) while lost less than this
     lost_search_s: float = 3.0      # back to SEARCH after this
     climb_speed: float = 0.15       # SEARCH after a loss low down: climb at this, m/s

@@ -49,7 +49,7 @@ class SenderParams:
     hb_max_age_s: float = 1.5
     floor_h: float = 0.35       # descend stage: no descent below this lidar height, m
     min_flight_h: float = 0.15  # START and stages refused below this lidar height, m
-    disarm_h: float = 0.10      # land stage: motors off only below this lidar height, m
+    disarm_h: float = 0.14      # land stage: motors off only below this lidar height, m
     disarm_after_s: float = 1.5 # ... continuously for this long
     disarm_band_m: float = 0.03 # ... with the height moving less than this (not still descending)
 
