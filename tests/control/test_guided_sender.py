@@ -111,6 +111,8 @@ def test_stages_need_start_and_stop_blocks_them():
     mav.state.set(GUIDED, armed=False)
     vis.set(0.0, 0.0, 0.0, h=1.0)
     assert "not armed" in s.mission_start()[1]
+    mav.state.set(LOITER)
+    assert "GUIDED" in s.mission_start()[1] and not s.mission and s.stage is None
     mav.state.set(GUIDED)
     assert s.mission_start()[0]
     assert s.stage == "stop" and s.select("align")[0]

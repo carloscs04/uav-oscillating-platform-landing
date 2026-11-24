@@ -4,8 +4,8 @@ The law (landing_law.py) runs every camera frame in camera_node and publishes it
 in VisionState.landing_shadow. This sender reads it at a fixed rate and sends it as a
 BODY-frame velocity setpoint (forward / right / down) ONLY when all of these hold:
 
-    1. the pilot selected a stage (panel button or `landshadow arm <stage>`). Selected outside
-       GUIDED it waits for the pilot's channel 5; selected inside GUIDED it starts at once;
+    1. the pilot started the mission and selected a stage (panel button or `landshadow`), which
+       is refused unless the drone is armed, flying and already in GUIDED;
     2. the Pixhawk is armed and its last HEARTBEAT (recent) says GUIDED;
     3. the law output is fresh (camera thread alive).
 
@@ -106,7 +106,7 @@ class GuidedSender:
         return True, f"armed ({stage}). Flip ch5 to GUIDED to start; leaving GUIDED disarms it."
 
     def flight_check(self):
-        """(ok, reason): the Pixhawk is linked and armed and the drone is really in the air."""
+        """(ok, reason): the Pixhawk is linked, armed and in GUIDED, and the drone is in the air."""
         st = getattr(self.mav, "state", None)
         if st is None or not hasattr(st, "get_packet_with_time"):
             return False, "no MAVLink state"
@@ -115,6 +115,8 @@ class GuidedSender:
             return False, "no Pixhawk heartbeat"
         if not (int(hb.get("base_mode", 0)) & 128):
             return False, "drone is not armed"
+        if int(hb.get("custom_mode", -1)) != GUIDED:
+            return False, "not in GUIDED (flip ch5)"
         ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
         t, h = ls.get("t"), ls.get("h_m")
         if t is None or time.monotonic() - t > self.p.law_max_age_s:
