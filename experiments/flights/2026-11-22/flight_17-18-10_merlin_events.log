@@ -1,0 +1,5 @@
+[17:18:10.990] ARMED [MERLIN] | Initial mode=ALT_HOLD | Voltage=11.65V | Link=HEALTHY
+[17:18:10.990] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[17:18:10.990] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[17:18:25.037] MODE_CHANGE -> LAND (9) at t+14.047s
+[17:18:28.999] DISARMED [MERLIN] | Duration=18.01s | Total_samples=355

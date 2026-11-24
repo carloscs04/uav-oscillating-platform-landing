@@ -1,0 +1,9 @@
+[19:49:39.768] (before arm) STATUSTEXT [sev=2]: PreArm: Gyros inconsistent
+[19:49:39.768] ARMED [CONDOR] | Initial mode=ALT_HOLD | Voltage=10.85V | Link=HEALTHY
+[19:49:39.768] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[19:49:39.768] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[19:49:54.416] MODE_CHANGE -> LOITER (5) at t+14.648s
+[19:50:08.729] MODE_CHANGE -> GUIDED (4) at t+28.961s
+[19:50:41.893] MODE_CHANGE -> LOITER (5) at t+62.125s
+[19:50:43.846] MODE_CHANGE -> LAND (9) at t+64.078s
+[19:50:48.116] DISARMED [CONDOR] | Duration=68.35s | Total_samples=1330

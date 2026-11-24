@@ -1,0 +1,6 @@
+[16:06:58.419] ARMED [HOVER] | Initial mode=ALT_HOLD | Voltage=10.96V | Link=HEALTHY
+[16:06:58.419] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[16:07:21.897] STATUSTEXT [sev=4]: EKF3 IMU1 stopped aiding
+[16:07:21.897] STATUSTEXT [sev=6]: EKF3 IMU1 started relative aiding
+[16:07:21.897] STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[16:07:24.425] DISARMED [HOVER] | Duration=26.01s | Total_samples=515

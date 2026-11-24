@@ -1,0 +1,10 @@
+[20:28:50.637] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[20:28:50.638] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[20:28:50.638] (before arm) STATUSTEXT [sev=6]: Trim OK: roll=0.23 pitch=0.28 yaw=0.00
+[20:28:50.638] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[20:28:50.638] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[20:28:50.638] ARMED [CONDOR] | Initial mode=ALT_HOLD | Voltage=10.79V | Link=HEALTHY
+[20:28:50.638] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[20:28:50.638] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[20:30:07.090] MODE_CHANGE -> LAND (9) at t+76.453s
+[20:30:12.638] DISARMED [CONDOR] | Duration=82.0s | Total_samples=1610

@@ -32,3 +32,5 @@ ros2_ws/log/
 # ==========================================
 configs/*.env
 *.log
+# Flight and vision event logs are data the team shares: keep them
+!experiments/**/*.log

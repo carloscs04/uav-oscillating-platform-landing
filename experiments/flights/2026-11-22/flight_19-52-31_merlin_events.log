@@ -1,0 +1,10 @@
+[19:52:31.728] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[19:52:31.728] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[19:52:31.728] (before arm) STATUSTEXT [sev=6]: Trim OK: roll=0.30 pitch=0.43 yaw=0.00
+[19:52:31.728] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[19:52:31.728] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[19:52:31.728] ARMED [MERLIN] | Initial mode=ALT_HOLD | Voltage=10.51V | Link=HEALTHY
+[19:52:31.728] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[19:52:31.728] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[19:53:01.592] MODE_CHANGE -> LAND (9) at t+29.863s
+[19:53:05.748] DISARMED [MERLIN] | Duration=34.02s | Total_samples=664

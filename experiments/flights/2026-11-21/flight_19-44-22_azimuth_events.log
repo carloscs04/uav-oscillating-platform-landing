@@ -1,0 +1,5 @@
+[19:44:22.457] ARMED [AZIMUTH] | Initial mode=ALT_HOLD | Voltage=11.05V | Link=HEALTHY
+[19:44:22.457] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[19:44:22.457] HEIGHT_SOURCE -> BARO at t+0.0s
+[19:45:18.356] MODE_CHANGE -> LAND (9) at t+55.899s
+[19:45:22.457] DISARMED [AZIMUTH] | Duration=60.0s | Total_samples=1185

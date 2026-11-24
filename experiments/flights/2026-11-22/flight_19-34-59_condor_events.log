@@ -1,0 +1,4 @@
+[19:34:59.701] ARMED [CONDOR] | Initial mode=ALT_HOLD | Voltage=10.52V | Link=HEALTHY
+[19:34:59.701] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[19:34:59.702] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[19:35:09.717] DISARMED [CONDOR] | Duration=10.02s | Total_samples=198

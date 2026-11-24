@@ -1,0 +1,11 @@
+[13:11:03.435] ARMED [HOVER] | Initial mode=ALT_HOLD | Voltage=11.1V | Link=HEALTHY
+[13:11:03.435] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[13:11:03.436] STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[13:11:20.471] MODE_CHANGE -> LOITER (5) at t+17.036s
+[13:11:53.031] MODE_CHANGE -> LAND (9) at t+49.596s
+[13:11:53.031] STATUSTEXT [sev=2]: EKF Failsafe: changed to Land Mode
+[13:11:55.602] MODE_CHANGE -> ALT_HOLD (2) at t+52.167s
+[13:11:56.165] MODE_CHANGE -> LAND (9) at t+52.73s
+[13:11:56.712] STATUSTEXT [sev=2]: EKF Failsafe Cleared
+[13:12:02.482] STATUSTEXT [sev=6]: EKF3 IMU1 started relative aiding
+[13:12:03.466] DISARMED [HOVER] | Duration=60.03s | Total_samples=1191

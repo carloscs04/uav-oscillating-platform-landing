@@ -1,0 +1,17 @@
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.554] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.555] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.555] (before arm) STATUSTEXT [sev=2]: PreArm: RC not found
+[17:56:42.555] (before arm) STATUSTEXT [sev=7]: RCInput: decoding PPM (IOMCU)
+[17:56:42.555] (before arm) STATUSTEXT [sev=2]: Arm: Guided mode not armable
+[17:56:42.555] ARMED [ALBATROSS] | Initial mode=ALT_HOLD | Voltage=10.56V | Link=HEALTHY
+[17:56:42.555] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[17:56:42.555] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[17:56:49.558] MODE_CHANGE -> LOITER (5) at t+7.004s
+[17:57:27.694] MODE_CHANGE -> GUIDED (4) at t+45.139s
+[17:58:11.522] STATUSTEXT [sev=2]: EKF Failsafe Cleared
+[17:58:11.522] DISARMED [ALBATROSS] | Duration=88.97s | Total_samples=1722

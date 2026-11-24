@@ -1,0 +1,8 @@
+[18:07:47.981] (before arm) STATUSTEXT [sev=6]: EKF3 IMU1 origin set
+[18:07:47.982] (before arm) STATUSTEXT [sev=6]: Field Elevation Set: 500m
+[18:07:47.982] (before arm) STATUSTEXT [sev=6]: EKF3 IMU1 started relative aiding
+[18:07:47.982] (before arm) STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[18:07:47.982] ARMED [FALCON] | Initial mode=ALT_HOLD | Voltage=10.45V | Link=HEALTHY
+[18:07:47.982] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[18:07:47.982] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[18:07:53.716] DISARMED [FALCON] | Duration=5.74s | Total_samples=113

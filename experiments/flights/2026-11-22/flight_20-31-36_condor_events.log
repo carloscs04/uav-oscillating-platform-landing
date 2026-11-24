@@ -1,0 +1,7 @@
+[20:31:36.632] ARMED [CONDOR] | Initial mode=ALT_HOLD | Voltage=10.53V | Link=HEALTHY
+[20:31:36.632] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[20:31:36.632] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[20:32:01.676] STATUSTEXT [sev=4]: Battery 1 is low 9.42V used 317 mAh
+[20:32:01.676] STATUSTEXT [sev=4]: Battery Failsafe
+[20:32:09.432] MODE_CHANGE -> LAND (9) at t+32.8s
+[20:32:14.276] DISARMED [CONDOR] | Duration=37.64s | Total_samples=739

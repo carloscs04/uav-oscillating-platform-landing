@@ -1,0 +1,9 @@
+[18:08:07.338] (before arm) STATUSTEXT [sev=4]: Radio Failsafe - Disarming
+[18:08:07.338] (before arm) STATUSTEXT [sev=2]: PreArm: Throttle below failsafe
+[18:08:07.338] (before arm) STATUSTEXT [sev=2]: PreArm: Radio failsafe on
+[18:08:07.338] (before arm) STATUSTEXT [sev=4]: Radio Failsafe Cleared
+[18:08:07.338] ARMED [VECTOR] | Initial mode=ALT_HOLD | Voltage=11.15V | Link=HEALTHY
+[18:08:07.338] MODE_CHANGE -> ALT_HOLD (2) at t+0.001s
+[18:08:39.178] MODE_CHANGE -> LOITER (5) at t+31.84s
+[18:09:06.159] MODE_CHANGE -> LAND (9) at t+58.821s
+[18:09:10.327] DISARMED [VECTOR] | Duration=62.99s | Total_samples=1246

@@ -1,0 +1,13 @@
+[19:37:22.648] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[19:37:22.648] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[19:37:22.648] ARMED [OSPREY] | Initial mode=ALT_HOLD | Voltage=10.71V | Link=HEALTHY
+[19:37:22.648] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[19:37:22.648] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[19:37:33.397] MODE_CHANGE -> LOITER (5) at t+10.749s
+[19:37:46.843] MODE_CHANGE -> GUIDED (4) at t+24.196s
+[19:38:31.026] STATUSTEXT [sev=4]: Battery 1 is low 9.44V used 206 mAh
+[19:38:31.027] STATUSTEXT [sev=4]: Battery Failsafe
+[19:38:34.688] MODE_CHANGE -> LOITER (5) at t+72.04s
+[19:38:37.728] MODE_CHANGE -> LAND (9) at t+75.081s
+[19:38:41.349] MODE_CHANGE -> LOITER (5) at t+78.702s
+[19:38:41.601] DISARMED [OSPREY] | Duration=78.95s | Total_samples=1530

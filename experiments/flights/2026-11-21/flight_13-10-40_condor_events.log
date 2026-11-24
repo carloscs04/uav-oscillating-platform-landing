@@ -1,0 +1,4 @@
+[13:10:40.520] ARMED [CONDOR] | Initial mode=ALT_HOLD | Voltage=11.1V | Link=HEALTHY
+[13:10:40.520] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[13:10:40.520] STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[13:10:45.443] DISARMED [CONDOR] | Duration=4.92s | Total_samples=99

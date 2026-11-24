@@ -1,0 +1,9 @@
+[17:19:52.997] ARMED [KESTREL] | Initial mode=ALT_HOLD | Voltage=11.55V | Link=HEALTHY
+[17:19:52.997] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[17:19:52.997] HEIGHT_SOURCE -> LIDAR at t+0.0s
+[17:20:08.184] MODE_CHANGE -> LOITER (5) at t+15.188s
+[17:21:27.907] MODE_CHANGE -> LAND (9) at t+94.911s
+[17:21:35.034] STATUSTEXT [sev=6]: EKF3 IMU1 started relative aiding
+[17:21:35.034] STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[17:21:35.996] STATUSTEXT [sev=2]: EKF Failsafe Cleared
+[17:21:35.996] DISARMED [KESTREL] | Duration=103.0s | Total_samples=2018
