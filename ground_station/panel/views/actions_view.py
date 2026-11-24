@@ -18,6 +18,7 @@ class ActionsView(tk.LabelFrame):
     COLOR_START = "#00695c"
     COLOR_STOP = "#ef6c00"
     LEVELS = ("align", "descend", "land")
+    LABELS = {"align": "ALIGN", "descend": "APPROACH", "land": "TOUCHDOWN"}
 
     def __init__(self, parent, controller=None, **kwargs):
         super().__init__(
@@ -37,24 +38,24 @@ class ActionsView(tk.LabelFrame):
         b_style = {"font": ("Helvetica", 9, "bold"), "bd": 0, "padx": 10, "pady": 6, "cursor": "hand2"}
 
         self.btn_mission = tk.Button(
-            btn_grid, text="▶ START MISSION", bg=self.COLOR_START, fg="white",
+            btn_grid, text="START MISSION", bg=self.COLOR_START, fg="white",
             command=self.cmd_mission, **b_style
         )
         self.btn_mission.grid(row=0, column=0, padx=(0, 5))
 
         self.stage_buttons = {}
         for col, (stage, label) in enumerate((
-            ("align", "🎯 ALIGN"),
-            ("descend", "⬇ APPROACH 35 cm"),
-            ("land", "🛬 TOUCHDOWN"),
+            ("align", "ALIGN"),
+            ("descend", "APPROACH"),
+            ("land", "TOUCHDOWN"),
         ), start=1):
-            btn = tk.Button(btn_grid, text=label, bg=self.COLOR_IDLE, fg="white", state="disabled",
-                            disabledforeground="#90a4ae", command=lambda s=stage: self.cmd_stage(s), **b_style)
+            btn = tk.Button(btn_grid, text=label, bg=self.COLOR_IDLE, fg="white",
+                            command=lambda s=stage: self.cmd_stage(s), **b_style)
             btn.grid(row=0, column=col, padx=5)
             self.stage_buttons[stage] = btn
 
         self.btn_abort = tk.Button(
-            btn_grid, text="⚠ ABORT", bg="#c62828", fg="white",
+            btn_grid, text="ABORT", bg="#c62828", fg="white",
             command=self.cmd_abort, **b_style
         )
         self.btn_abort.grid(row=0, column=4, padx=(5, 0))
@@ -103,7 +104,7 @@ class ActionsView(tk.LabelFrame):
         self._live_stage = stage
         self._mission = bool(shadow.get("mission"))
         self.btn_mission.config(
-            text="■ STOP MISSION" if self._mission else "▶ START MISSION",
+            text="STOP MISSION" if self._mission else "START MISSION",
             bg=self.COLOR_STOP if self._mission else self.COLOR_START,
         )
         level = self.LEVELS.index(stage) if self._mission and stage in self.LEVELS else -1
@@ -111,7 +112,8 @@ class ActionsView(tk.LabelFrame):
             color = self.COLOR_IDLE
             if i <= level:
                 color = self.COLOR_ACTIVE if state == "ACTIVE" else self.COLOR_WAITING
-            self.stage_buttons[name].config(bg=color, state="normal" if self._mission else "disabled")
+            label = self.LABELS[name]
+            self.stage_buttons[name].config(bg=color, text=f"STOP {label}" if i <= level else label)
 
         self.after(200, self._sync_ui_loop)
 

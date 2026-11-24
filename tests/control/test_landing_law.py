@@ -132,6 +132,20 @@ def test_lost_at_22cm_keeps_descending():
     assert law.phase == "TOUCHDOWN"
 
 
+def test_strict_descent_needs_5cm():
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.step((0.0, 0.0), 0.6, 0.0)
+    law.step((0.0, 0.0), 0.6, 0.1)
+    assert law.phase == "DESCEND"
+    assert law.step((0.07, 0.0), 0.6, 0.2)["v_down"] == 0.0     # 7 cm: holds height
+    assert law.step((0.03, 0.0), 0.6, 0.3)["v_down"] > 0.0
+    assert law.step((0.07, 0.0), 0.25, 0.4)["v_down"] == 0.0    # low, 7 cm: no commit
+    assert not law.committed
+    assert law.step((0.03, 0.0), 0.25, 0.5)["v_down"] > 0.0
+    assert law.committed
+
+
 def test_params_from_config():
     p = LandingParams.from_dict({"kp": 0.8, "v_max": 0.2, "unknown_key": 5})
     assert p.kp == 0.8 and p.v_max == 0.2

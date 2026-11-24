@@ -384,6 +384,7 @@ class CameraNode:
         h = pt.get("h_vert_m") if pt.get("h_vert_m") is not None else self._lidar_height()
         selected = getattr(getattr(self, "guided_sender", None), "stage", None)
         self.landing.align_timeout_enabled = not selected
+        self.landing.strict_descent = selected == "land"
         out = self.landing.step(target, h, time.monotonic())
         out["target"] = ("pad" if pt.get("pad_fwd_m") is not None else "marker") if target else None
         out["t"] = time.monotonic()     # GuidedSender: law output age

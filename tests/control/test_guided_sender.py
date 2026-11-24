@@ -106,8 +106,19 @@ def test_stages_need_start_and_stop_blocks_them():
     mav.state.set(GUIDED)
     s.tick()
     assert not s.select("align")[0] and s.stage is None
-    s.mission_start()
+    vis.set(0.0, 0.0, 0.0, h=0.05)
+    assert not s.mission_start()[0] and not s.mission          # on the ground: error
+    mav.state.set(GUIDED, armed=False)
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    assert "not armed" in s.mission_start()[1]
+    mav.state.set(GUIDED)
+    assert s.mission_start()[0]
     assert s.stage == "stop" and s.select("align")[0]
+    assert not s.select("approach", 1.5)[0] and s.stage == "align"
+    assert s.select("approach", 0.6)[0] and s.approach_h == 0.6
+    vis.set(0.0, 0.0, 0.1, h=0.55)
+    assert s.tick()[2] == 0.0                                  # holds at the typed height
+    assert s.select("approach")[0] and s.approach_h == 0.35
     s.mission_stop()
     assert s.stage == "stop" and not s.mission and not s.select("touchdown")[0]
     vis.set(0.2, 0.0, 0.1)
@@ -124,10 +135,23 @@ def _land_tick(mav, vis, s, t, h, phase="TOUCHDOWN"):
     return getattr(mav, "disarms", 0)
 
 
+def test_can_step_back_from_touchdown_when_low():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    s.mission_start()
+    s.select("touchdown")
+    vis.set(0.0, 0.0, 0.1, h=0.12)                # below min_flight_h
+    assert s.select("approach")[0] and s.stage == "descend"
+    assert s.tick()[2] == 0.0
+
+
 def test_motors_off_only_when_stopped_on_ground():
     mav, vis, s = make()
     mav.state.set(GUIDED)
     s.tick()
+    vis.set(0.0, 0.0, 0.0, h=1.0)
     s.mission_start()
     s.select("touchdown")
     assert _land_tick(mav, vis, s, 100.0, 0.05, phase="FINAL") == 0     # low but not TOUCHDOWN

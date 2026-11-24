@@ -16,10 +16,10 @@ Pixhawk itself stops after ~3 s without setpoints.
 
 Stages (what the law is allowed to do):
     align    horizontal only, v_down = 0 (first flight: check directions and gains)
-    descend  also descends, but never below floor_h: there it holds height, centred, and the
-             pilot lands with channel 7 (LAND).
-    land     the whole landing in GUIDED: no floor, the law descends to the ground (blind below
-             its commit_h) and the motors are disarmed once it has really stopped on the ground
+    descend  (APPROACH) also descends, but never below approach_h (0.35-1.0 m, default floor_h):
+             there it holds height, centred.
+    land     the whole landing in GUIDED: no floor, it only descends with the xy error below
+             5 cm (blind below the law's commit_h) and the motors are disarmed once it has really stopped on the ground
              (law in TOUCHDOWN, lidar below disarm_h and steady for disarm_after_s).
     stop     holds in GUIDED with zero velocity; the sticks do nothing until the pilot leaves
              GUIDED with channel 5.
@@ -35,6 +35,7 @@ from dataclasses import dataclass, fields
 
 GUIDED = 4                      # ArduCopter custom_mode
 STAGES = ("align", "descend", "land", "stop")
+APPROACH_MIN_M, APPROACH_MAX_M = 0.35, 1.0
 STAGE_ALIASES = {"acercar": "descend", "approach": "descend", "touchdown": "land", "hold": "stop"}
 
 
@@ -47,6 +48,7 @@ class SenderParams:
     law_max_age_s: float = 0.30
     hb_max_age_s: float = 1.5
     floor_h: float = 0.35       # descend stage: no descent below this lidar height, m
+    min_flight_h: float = 0.15  # START and stages refused below this lidar height, m
     disarm_h: float = 0.10      # land stage: motors off only below this lidar height, m
     disarm_after_s: float = 1.5 # ... continuously for this long
     disarm_band_m: float = 0.03 # ... with the height moving less than this (not still descending)
@@ -66,6 +68,7 @@ class GuidedSender:
         self._lock = threading.Lock()
         self.stage = None               # None = disarmed (shadow only)
         self.mission = False            # START MISSION pressed: stages are allowed
+        self.approach_h = self.p.floor_h  # APPROACH target height, m
         self._td_since = None           # touchdown confirmation window
         self._td_min = self._td_max = 0.0
         self._last_disarm_tx = None
@@ -102,7 +105,30 @@ class GuidedSender:
             return True, f"{stage} active in GUIDED. Leave GUIDED with ch5 to take control."
         return True, f"armed ({stage}). Flip ch5 to GUIDED to start; leaving GUIDED disarms it."
 
+    def flight_check(self):
+        """(ok, reason): the Pixhawk is linked and armed and the drone is really in the air."""
+        st = getattr(self.mav, "state", None)
+        if st is None or not hasattr(st, "get_packet_with_time"):
+            return False, "no MAVLink state"
+        hb, hb_t = st.get_packet_with_time("HEARTBEAT")
+        if not hb or hb_t is None or time.time() - hb_t > self.p.hb_max_age_s:
+            return False, "no Pixhawk heartbeat"
+        if not (int(hb.get("base_mode", 0)) & 128):
+            return False, "drone is not armed"
+        ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
+        t, h = ls.get("t"), ls.get("h_m")
+        if t is None or time.monotonic() - t > self.p.law_max_age_s:
+            return False, "no camera/landing law data"
+        if h is None:
+            return False, "no lidar height"
+        if h < self.p.min_flight_h:
+            return False, f"drone is not flying (lidar {h * 100:.0f} cm)"
+        return True, ""
+
     def mission_start(self):
+        ok, why = self.flight_check()
+        if not ok:
+            return False, why
         with self._lock:
             self.mission = True
         return self.arm("stop")
@@ -116,10 +142,20 @@ class GuidedSender:
         else:
             self.disarm("pilot")
 
-    def select(self, stage):
-        """A stage button: only works while the mission is started."""
+    def select(self, stage, approach_h=None):
+        """A stage button: only works while the mission is started and the drone is flying."""
         if not self.mission:
             return False, "mission not started (press START MISSION)"
+        name = STAGE_ALIASES.get((stage or "").lower(), (stage or "").lower())
+        if name != "stop" and self.stage not in ("align", "descend", "land"):  # never block a step back
+            ok, why = self.flight_check()
+            if not ok:
+                return False, why
+        if name == "descend":
+            target = self.p.floor_h if approach_h is None else float(approach_h)
+            if not APPROACH_MIN_M <= target <= APPROACH_MAX_M:
+                return False, f"approach height must be {APPROACH_MIN_M:.2f}-{APPROACH_MAX_M:.2f} m"
+            self.approach_h = target
         return self.arm(stage)
 
     def disarm(self, reason="pilot"):
@@ -209,9 +245,9 @@ class GuidedSender:
                 vd = 0.0
             elif stage == "descend":
                 h = ls.get("h_m")
-                if (h is None or h < self.p.floor_h) and vd > 0:
+                if (h is None or h < self.approach_h) and vd > 0:
                     vd = 0.0
-                    reason = "floor: pilot LAND (ch7)"
+                    reason = "approach height: holding"
         self.mav.send_velocity_body(vf, vr, vd)
         self._check_touchdown(stage, ls, reason == "law", now)
         with self._lock:

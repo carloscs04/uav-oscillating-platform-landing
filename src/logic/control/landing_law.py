@@ -64,7 +64,8 @@ class LandingParams:
 class LandingLaw:
     def __init__(self, params=None):
         self.p = params or LandingParams()
-        self.align_timeout_enabled = True   # off while a GUIDED stage is selected: keep aligning
+        self.align_timeout_enabled = True
+        self.strict_descent = False     # set by camera_node while the land stage is selected   # off while a GUIDED stage is selected: keep aligning
         self.reset()
 
     def reset(self):
@@ -176,6 +177,8 @@ class LandingLaw:
             self._set("ALIGN", now)
 
         out["v_fwd"], out["v_right"] = self._horizontal(f, r)
+        # TOUCHDOWN stage: only descend (and commit) with the error inside align_tol
+        pause_err = min(p.pause_err, p.align_tol) if self.strict_descent else p.pause_err
 
         if self.phase == "ALIGN":
             if e < p.align_tol:
@@ -188,19 +191,19 @@ class LandingLaw:
                     self._set("HOLD", now, h_m)
                     out["v_fwd"] = out["v_right"] = 0.0
         if self.phase == "DESCEND":
-            out["v_down"] = p.descend_speed if e <= p.pause_err else 0.0
+            out["v_down"] = p.descend_speed if e <= pause_err else 0.0
             if h_m < p.final_h:
                 self._set("FINAL", now)
         if self.phase == "FINAL":
-            if h_m < p.commit_h:
+            if h_m < p.commit_h and (not self.strict_descent or e <= pause_err):
                 self.committed = True
-            pause = e > p.pause_err and not self.committed
+            pause = e > pause_err and not self.committed
             out["v_down"] = 0.0 if pause else p.final_speed
-            if h_m < p.touchdown_h:
+            if h_m < p.touchdown_h and not pause:
                 self._set("TOUCHDOWN", now, h_m)
                 out["v_fwd"] = out["v_right"] = 0.0
                 out["v_down"] = p.final_speed
-        paused = e > p.pause_err and (self.phase == "DESCEND" or (self.phase == "FINAL" and not self.committed))
+        paused = e > pause_err and (self.phase == "DESCEND" or (self.phase == "FINAL" and not self.committed))
         if paused:
             out["note"] = "error > pause: holding height"
         out["phase"] = self.phase

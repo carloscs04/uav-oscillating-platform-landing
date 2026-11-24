@@ -32,6 +32,8 @@ class VisionCLI(BaseNodeCLI):
         self.register_cmd("landshadow", self.cmd_landshadow,
                           "Landing mission: status | reset | start | arm <align|approach|touchdown|hold> (sends ONLY in GUIDED) | stop | disarm",
                           aliases=["lshadow"])
+        self.register_cmd("approach", self.cmd_approach,
+                          "Align and descend to a height [35-100 cm or 0.35-1 m], default 35 cm")
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
         self.register_cmd("markers", self.cmd_markers,
@@ -134,7 +136,10 @@ class VisionCLI(BaseNodeCLI):
             if gs is None:
                 self.log("No GUIDED sender on this machine.", "ERROR")
                 return "NO_SENDER"
-            gs.mission_start()
+            ok, msg = gs.mission_start()
+            if not ok:
+                self.log(f"CANNOT START MISSION: {msg}.", "ERROR")
+                return "LANDSHADOW_START_REFUSED"
             if drv is not None:
                 drv.landing.reset()
             self.log("MISSION STARTED: holding. Choose ALIGN, APPROACH or TOUCHDOWN.", "OK")
@@ -147,17 +152,7 @@ class VisionCLI(BaseNodeCLI):
                 gs.disarm("pilot")
                 self.log("Sender disarmed: law back to SHADOW, nothing is sent.", "OK")
                 return "LANDSHADOW_DISARMED"
-            # Moving between flying stages inside GUIDED keeps the law's progress
-            keep = gs._guided_now()[0] and gs.stage in ("align", "descend", "land")
-            was_aligning = gs.stage == "align"
-            ok, msg = gs.select(args[1] if len(args) > 1 else "")
-            if ok and was_aligning and gs.stage == "descend":
-                self.log("Already aligning: keeps aligning and descends to 35 cm.", "OK")
-            if ok and drv is not None and (not keep or gs.stage == "stop" or drv.landing.phase == "HOLD"):
-                drv.landing.reset()         # start from SEARCH
-            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow start, then arm <align|approach|touchdown|hold>",
-                     "OK" if ok else "ERROR")
-            return "LANDSHADOW_ARMED" if ok else "LANDSHADOW_ARM_REFUSED"
+            return self._select_stage(args[1] if len(args) > 1 else "")
         self.log(self._shadow_text(), "STATUS")
         if gs is not None:
             st = gs.status()
@@ -170,6 +165,55 @@ class VisionCLI(BaseNodeCLI):
                      f"descend {p.descend_speed} m/s (pause > {p.pause_err * 100:.0f} cm)  final<{p.final_h} m "
                      f"@{p.final_speed} m/s  touchdown<{p.touchdown_h} m", "STATUS")
         return "LANDSHADOW_STATUS"
+
+    def _select_stage(self, stage, approach_h=None):
+        gs, drv = self.guided_sender, self.camera_driver
+        if gs is None:
+            self.log("No GUIDED sender on this machine.", "ERROR")
+            return "NO_SENDER"
+        # Moving between flying stages inside GUIDED keeps the law's progress
+        keep = gs._guided_now()[0] and gs.stage in ("align", "descend", "land")
+        ok, msg = gs.select(stage, approach_h)
+        if not ok:
+            self.log(f"CANNOT RUN {str(stage).upper() or 'STAGE'}: {msg}.", "ERROR")
+            return "LANDSHADOW_ARM_REFUSED"
+        if drv is not None and (not keep or gs.stage == "stop" or drv.landing.phase == "HOLD"):
+            drv.landing.reset()             # start from SEARCH
+        if gs.stage == "descend":
+            self.log(f"APPROACH: aligning and descending to {gs.approach_h * 100:.0f} cm.", "OK")
+            h = (self.manager.state.get_landing_shadow() or {}).get("h_m")
+            if h is not None and h < gs.approach_h:
+                self.log(f"Already below that height ({h * 100:.0f} cm): it holds here, it does not climb.", "WARN")
+        elif gs.stage == "land":
+            self.log("TOUCHDOWN: aligning, descends only with xy error below 5 cm, then motors off.", "OK")
+        elif gs.stage == "align":
+            self.log("ALIGN: going to the ArUco, holding height.", "OK")
+        else:
+            self.log("Holding: stable until the next command.", "OK")
+        return "LANDSHADOW_ARMED"
+
+    def cmd_approach(self, args: List[str]) -> str:
+        """approach [distance]: 0.35-1 m or 35-100 cm; default 35 cm."""
+        if not args:
+            if self.guided_sender is not None and self.guided_sender.mission:
+                self.log("No distance given: using the default 35 cm.", "OK")
+            return self._select_stage("approach")
+        text = args[0].lower()
+        try:
+            if text.endswith("cm"):
+                value = float(text[:-2]) / 100.0
+            elif text.endswith("m"):
+                value = float(text[:-1])
+            else:
+                value = float(text)
+                value = value / 100.0 if value > 2.0 else value  # bare 50 = 50 cm, 0.5 = 0.5 m
+        except ValueError:
+            self.log("Usage: approach [35-100 cm or 0.35-1 m]", "ERROR")
+            return "APPROACH_BAD_VALUE"
+        if not 0.35 <= value <= 1.0:
+            self.log(f"Approach distance out of range ({value * 100:.0f} cm): use 35 cm to 1 m.", "ERROR")
+            return "APPROACH_OUT_OF_RANGE"
+        return self._select_stage("approach", value)
 
     def _shadow_text(self):
         ls = self.manager.state.get_landing_shadow() if hasattr(self.manager.state, "get_landing_shadow") else {}
