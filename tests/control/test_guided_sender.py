@@ -35,6 +35,9 @@ class FakeMav:
     def send_velocity_body(self, f, r, d):
         self.sent.append((f, r, d))
 
+    def disarm(self):
+        self.disarms = getattr(self, "disarms", 0) + 1
+
 
 class FakeVision:
     def __init__(self):
@@ -64,11 +67,77 @@ def test_nothing_sent_unless_armed_and_guided():
     assert mav.sent == []
 
 
-def test_arm_refused_while_in_guided():
+def test_stage_selected_inside_guided_starts_at_once():
     mav, vis, s = make()
     mav.state.set(GUIDED)
-    assert not s.arm("align")[0]
-    assert not s.arm("bogus")[0]
+    s.tick()
+    assert not s.arm("bogus")[0] and s.stage is None
+    assert s.arm("acercar")[0] and s.stage == "descend"
+    vis.set(0.05, 0.0, 0.10, h=1.0)
+    assert s.tick() == (0.05, 0.0, 0.10)
+    assert s.arm("touchdown")[0] and s.stage == "land"
+    vis.set(0.0, 0.0, 0.10, h=0.20)           # below the acercar floor: touchdown keeps going
+    assert s.tick()[2] == 0.10
+
+
+def test_stop_holds_even_with_a_law_command():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    s.arm("stop")
+    vis.set(0.2, 0.2, 0.15)
+    assert s.tick() == (0.0, 0.0, 0.0)
+    mav.state.set(LOITER)
+    s.tick()
+    assert s.stage is None
+
+
+def test_pilot_disarm_in_guided_sends_one_zero():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    s.arm("align")
+    s.disarm("pilot")
+    assert mav.sent == [(0.0, 0.0, 0.0)]
+
+
+def test_stages_need_start_and_stop_blocks_them():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    assert not s.select("align")[0] and s.stage is None
+    s.mission_start()
+    assert s.stage == "stop" and s.select("align")[0]
+    s.mission_stop()
+    assert s.stage == "stop" and not s.mission and not s.select("touchdown")[0]
+    vis.set(0.2, 0.0, 0.1)
+    assert s.tick() == (0.0, 0.0, 0.0)
+    mav.state.set(LOITER)
+    s.tick()
+    assert s.stage is None and not s.mission
+
+
+def _land_tick(mav, vis, s, t, h, phase="TOUCHDOWN"):
+    vis.set(0.0, 0.0, 0.05, h=h, t=t)
+    vis.ls["phase"] = phase
+    s.tick(now=t)
+    return getattr(mav, "disarms", 0)
+
+
+def test_motors_off_only_when_stopped_on_ground():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    s.mission_start()
+    s.select("touchdown")
+    assert _land_tick(mav, vis, s, 100.0, 0.05, phase="FINAL") == 0     # low but not TOUCHDOWN
+    for i in range(10):                                                 # still descending
+        assert _land_tick(mav, vis, s, 101.0 + i * 0.2, 0.095 - i * 0.008) == 0
+    assert _land_tick(mav, vis, s, 110.0, 0.05, phase="FINAL") == 0
+    assert _land_tick(mav, vis, s, 111.0, 0.30) == 0                    # lidar jump restarts
+    assert _land_tick(mav, vis, s, 112.0, 0.05) == 0
+    assert _land_tick(mav, vis, s, 113.0, 0.05) == 0
+    assert _land_tick(mav, vis, s, 113.6, 0.05) == 1
 
 
 def test_align_sends_horizontal_only_and_leaving_guided_disarms():

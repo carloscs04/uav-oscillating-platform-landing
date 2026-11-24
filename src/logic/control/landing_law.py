@@ -64,6 +64,7 @@ class LandingParams:
 class LandingLaw:
     def __init__(self, params=None):
         self.p = params or LandingParams()
+        self.align_timeout_enabled = True   # off while a GUIDED stage is selected: keep aligning
         self.reset()
 
     def reset(self):
@@ -167,7 +168,7 @@ class LandingLaw:
                 out["phase"] = self.phase
                 if self.phase == "TOUCHDOWN":
                     out["v_down"] = p.final_speed
-                    out["note"] = "touchdown: pushing down, pilot disarms (ch6)"
+                    out["note"] = "touchdown: pushing down, waiting to disarm"
                 else:
                     out["note"] = "align timeout: pilot"
                 return self._round(out)
@@ -183,7 +184,7 @@ class LandingLaw:
                     self._set("DESCEND", now)
             else:
                 self.aligned_since = None
-                if now - self.phase_t > p.align_timeout_s:
+                if self.align_timeout_enabled and now - self.phase_t > p.align_timeout_s:
                     self._set("HOLD", now, h_m)
                     out["v_fwd"] = out["v_right"] = 0.0
         if self.phase == "DESCEND":

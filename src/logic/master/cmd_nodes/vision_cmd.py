@@ -30,7 +30,7 @@ class VisionCLI(BaseNodeCLI):
                           "Record the pixel target + lidar + attitude to CSV, 20 Hz [seconds] | stop",
                           aliases=["vlog"])
         self.register_cmd("landshadow", self.cmd_landshadow,
-                          "Landing law: status | reset | arm <align|descend|land> (sends ONLY in GUIDED) | disarm",
+                          "Landing mission: status | reset | start | arm <align|approach|touchdown|hold> (sends ONLY in GUIDED) | stop | disarm",
                           aliases=["lshadow"])
         self.register_cmd("followunknown", self.cmd_followunknown,
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
@@ -121,6 +121,24 @@ class VisionCLI(BaseNodeCLI):
             self.log("Landing law reset to SEARCH (shadow mode, nothing is sent).", "OK")
             return "LANDSHADOW_RESET"
         gs = self.guided_sender
+        if args and args[0].lower() == "stop":
+            if gs is None:
+                self.log("No GUIDED sender on this machine.", "ERROR")
+                return "NO_SENDER"
+            in_guided = gs._guided_now()[0]
+            gs.mission_stop()
+            self.log("MISSION STOPPED: holding in GUIDED, stages disabled. Sticks return when you "
+                     "leave GUIDED with ch5." if in_guided else "MISSION STOPPED: nothing is sent.", "OK")
+            return "LANDSHADOW_STOP"
+        if args and args[0].lower() == "start":
+            if gs is None:
+                self.log("No GUIDED sender on this machine.", "ERROR")
+                return "NO_SENDER"
+            gs.mission_start()
+            if drv is not None:
+                drv.landing.reset()
+            self.log("MISSION STARTED: holding. Choose ALIGN, APPROACH or TOUCHDOWN.", "OK")
+            return "LANDSHADOW_START"
         if args and args[0].lower() in ("arm", "disarm"):
             if gs is None:
                 self.log("No GUIDED sender on this machine.", "ERROR")
@@ -129,10 +147,15 @@ class VisionCLI(BaseNodeCLI):
                 gs.disarm("pilot")
                 self.log("Sender disarmed: law back to SHADOW, nothing is sent.", "OK")
                 return "LANDSHADOW_DISARMED"
-            if drv is not None:
+            # Moving between flying stages inside GUIDED keeps the law's progress
+            keep = gs._guided_now()[0] and gs.stage in ("align", "descend", "land")
+            was_aligning = gs.stage == "align"
+            ok, msg = gs.select(args[1] if len(args) > 1 else "")
+            if ok and was_aligning and gs.stage == "descend":
+                self.log("Already aligning: keeps aligning and descends to 35 cm.", "OK")
+            if ok and drv is not None and (not keep or gs.stage == "stop" or drv.landing.phase == "HOLD"):
                 drv.landing.reset()         # start from SEARCH
-            ok, msg = gs.arm(args[1] if len(args) > 1 else "")
-            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow arm <align|descend|land>",
+            self.log(("Sender " + msg) if ok else f"NOT armed: {msg}. Usage: landshadow start, then arm <align|approach|touchdown|hold>",
                      "OK" if ok else "ERROR")
             return "LANDSHADOW_ARMED" if ok else "LANDSHADOW_ARM_REFUSED"
         self.log(self._shadow_text(), "STATUS")

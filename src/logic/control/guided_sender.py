@@ -4,13 +4,13 @@ The law (landing_law.py) runs every camera frame in camera_node and publishes it
 in VisionState.landing_shadow. This sender reads it at a fixed rate and sends it as a
 BODY-frame velocity setpoint (forward / right / down) ONLY when all of these hold:
 
-    1. the pilot armed the sender in the CLI (`landshadow arm align|descend|land`), while NOT
-       in GUIDED: the drone only starts moving when the pilot flips channel 5 to GUIDED;
+    1. the pilot selected a stage (panel button or `landshadow arm <stage>`). Selected outside
+       GUIDED it waits for the pilot's channel 5; selected inside GUIDED it starts at once;
     2. the Pixhawk is armed and its last HEARTBEAT (recent) says GUIDED;
     3. the law output is fresh (camera thread alive).
 
 It NEVER changes the flight mode. Leaving GUIDED (pilot switch, LAND on channel 7, failsafe,
-disarm or lost heartbeat) disarms the sender: it must be armed again before the next GUIDED.
+disarm or lost heartbeat) disarms the sender: a stage must be selected again for the next GUIDED.
 In GUIDED with a stale law output it sends zero velocity (brake). If the link drops, the
 Pixhawk itself stops after ~3 s without setpoints.
 
@@ -19,7 +19,13 @@ Stages (what the law is allowed to do):
     descend  also descends, but never below floor_h: there it holds height, centred, and the
              pilot lands with channel 7 (LAND).
     land     the whole landing in GUIDED: no floor, the law descends to the ground (blind below
-             its commit_h) and keeps pushing down; the pilot disarms with ch6 once landed.
+             its commit_h) and the motors are disarmed once it has really stopped on the ground
+             (law in TOUCHDOWN, lidar below disarm_h and steady for disarm_after_s).
+    stop     holds in GUIDED with zero velocity; the sticks do nothing until the pilot leaves
+             GUIDED with channel 5.
+
+Mission: START MISSION (mission_start) enables the stages and begins holding. STOP
+(mission_stop) holds again and refuses every stage until the next START. Leaving GUIDED ends it.
 """
 
 import math
@@ -28,7 +34,8 @@ import time
 from dataclasses import dataclass, fields
 
 GUIDED = 4                      # ArduCopter custom_mode
-STAGES = ("align", "descend", "land")
+STAGES = ("align", "descend", "land", "stop")
+STAGE_ALIASES = {"acercar": "descend", "approach": "descend", "touchdown": "land", "hold": "stop"}
 
 
 @dataclass
@@ -40,6 +47,9 @@ class SenderParams:
     law_max_age_s: float = 0.30
     hb_max_age_s: float = 1.5
     floor_h: float = 0.35       # descend stage: no descent below this lidar height, m
+    disarm_h: float = 0.10      # land stage: motors off only below this lidar height, m
+    disarm_after_s: float = 1.5 # ... continuously for this long
+    disarm_band_m: float = 0.03 # ... with the height moving less than this (not still descending)
 
     @classmethod
     def from_dict(cls, d):
@@ -55,6 +65,10 @@ class GuidedSender:
         self._log = log or (lambda msg, level="INFO": print(f"[GUIDED_SENDER] {msg}"))
         self._lock = threading.Lock()
         self.stage = None               # None = disarmed (shadow only)
+        self.mission = False            # START MISSION pressed: stages are allowed
+        self._td_since = None           # touchdown confirmation window
+        self._td_min = self._td_max = 0.0
+        self._last_disarm_tx = None
         self.in_guided = False
         self.last = {"sent": False, "v_fwd": 0.0, "v_right": 0.0, "v_down": 0.0,
                      "reason": "disarmed", "t": None}
@@ -76,21 +90,46 @@ class GuidedSender:
 
     def arm(self, stage):
         stage = (stage or "").lower()
+        stage = STAGE_ALIASES.get(stage, stage)
         if stage not in STAGES:
             return False, f"stage must be one of {STAGES}"
-        guided, why = self._guided_now()
-        if guided:
-            return False, "already in GUIDED: switch ch5 out of GUIDED, arm, then switch to GUIDED"
+        guided, _why = self._guided_now()
         with self._lock:
             self.stage = stage
-            self.last.update(sent=False, reason="armed: waiting for GUIDED")
+            if not guided:
+                self.last.update(sent=False, reason="armed: waiting for GUIDED")
+        if guided:
+            return True, f"{stage} active in GUIDED. Leave GUIDED with ch5 to take control."
         return True, f"armed ({stage}). Flip ch5 to GUIDED to start; leaving GUIDED disarms it."
+
+    def mission_start(self):
+        with self._lock:
+            self.mission = True
+        return self.arm("stop")
+
+    def mission_stop(self):
+        """Hold (in GUIDED) or cancel (outside it); every stage is refused until the next START."""
+        if self._guided_now()[0]:
+            self.arm("stop")
+            with self._lock:
+                self.mission = False
+        else:
+            self.disarm("pilot")
+
+    def select(self, stage):
+        """A stage button: only works while the mission is started."""
+        if not self.mission:
+            return False, "mission not started (press START MISSION)"
+        return self.arm(stage)
 
     def disarm(self, reason="pilot"):
         with self._lock:
             was = self.stage
             self.stage = None
+            self.mission = False
             self.last.update(sent=False, v_fwd=0.0, v_right=0.0, v_down=0.0, reason=f"disarmed: {reason}")
+        if was and reason == "pilot" and self._guided_now()[0]:
+            self.mav.send_velocity_body(0.0, 0.0, 0.0)  # do not coast on the last setpoint
         if was:
             self._log(f"sender disarmed ({reason}); nothing is sent", "WARN")
 
@@ -154,7 +193,10 @@ class GuidedSender:
         ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
         t = ls.get("t")
         reason = "law"
-        if t is None or now - t > self.p.law_max_age_s:
+        if stage == "stop":
+            vf = vr = vd = 0.0
+            reason = "stop: holding"
+        elif t is None or now - t > self.p.law_max_age_s:
             vf = vr = vd = 0.0
             reason = "law stale: brake"
         else:
@@ -171,8 +213,27 @@ class GuidedSender:
                     vd = 0.0
                     reason = "floor: pilot LAND (ch7)"
         self.mav.send_velocity_body(vf, vr, vd)
+        self._check_touchdown(stage, ls, reason == "law", now)
         with self._lock:
             self.sent_count += 1
             self.last = {"sent": True, "v_fwd": round(vf, 4), "v_right": round(vr, 4),
                          "v_down": round(vd, 4), "reason": reason, "t": now}
         return vf, vr, vd
+
+    def _check_touchdown(self, stage, ls, fresh, now):
+        """Motors off (normal, not forced disarm) only when really stopped on the ground."""
+        h = ls.get("h_m")
+        if not (fresh and stage == "land" and ls.get("phase") == "TOUCHDOWN"
+                and h is not None and h < self.p.disarm_h):
+            self._td_since = None
+            return
+        if self._td_since is None or max(self._td_max, h) - min(self._td_min, h) > self.p.disarm_band_m:
+            self._td_since, self._td_min, self._td_max = now, h, h
+            return
+        self._td_min, self._td_max = min(self._td_min, h), max(self._td_max, h)
+        if now - self._td_since < self.p.disarm_after_s:
+            return
+        if self._last_disarm_tx is None or now - self._last_disarm_tx >= 1.0:
+            self._last_disarm_tx = now
+            self._log(f"touchdown confirmed at h={h:.2f} m: disarming motors", "WARN")
+            self.mav.disarm()

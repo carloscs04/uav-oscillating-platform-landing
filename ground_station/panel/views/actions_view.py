@@ -4,22 +4,31 @@ import time
 import tkinter as tk
 from ground_station.utils.colors import BG_CARD, FG_CYAN
 from ground_station.receivers.nodes.master_rx import MasterReceiver
+from ground_station.receivers.nodes.vision_rx import VisionReceiver
 from ground_station.transmiters.main_command_tx import MainCommandTransmitter
 
 
 class ActionsView(tk.LabelFrame):
-    """Stateful action control buttons synchronized with live RPi MasterNode telemetry."""
+    """GUIDED landing mission. START enables the stages, STOP holds and disables them. These
+    buttons never change the flight mode: the pilot enters and leaves GUIDED with channel 5."""
+
+    COLOR_IDLE = "#37474f"
+    COLOR_WAITING = "#f9a825"
+    COLOR_ACTIVE = "#2e7d32"
+    COLOR_START = "#00695c"
+    COLOR_STOP = "#ef6c00"
+    LEVELS = ("align", "descend", "land")
 
     def __init__(self, parent, controller=None, **kwargs):
         super().__init__(
-            parent, text=" Operations & Action Controls ", font=("Helvetica", 10, "bold"),
+            parent, text=" Landing Controls (GUIDED) ", font=("Helvetica", 10, "bold"),
             fg=FG_CYAN, bg=BG_CARD, bd=2, relief="groove", pady=8, **kwargs
         )
         self.controller = controller
         self.cmd_tx = getattr(MainCommandTransmitter, "_active_instance", None) or MainCommandTransmitter()
 
-        self._live_armed: bool = False
-        self._live_fsm_state: str = "OFFLINE"
+        self._live_stage: str = ""
+        self._mission: bool = False
         self._last_hb_tx: float = 0.0
 
         btn_grid = tk.Frame(self, bg=BG_CARD)
@@ -27,29 +36,22 @@ class ActionsView(tk.LabelFrame):
 
         b_style = {"font": ("Helvetica", 9, "bold"), "bd": 0, "padx": 10, "pady": 6, "cursor": "hand2"}
 
-        self.btn_arm = tk.Button(
-            btn_grid, text="⚡ ARM DRONE", bg="#d84315", fg="white",
-            command=self.cmd_toggle_arm, **b_style
-        )
-        self.btn_arm.grid(row=0, column=0, padx=(0, 5))
-
         self.btn_mission = tk.Button(
-            btn_grid, text="▶ START MISSION", bg="#00897b", fg="white",
-            command=self.cmd_toggle_mission, **b_style
+            btn_grid, text="▶ START MISSION", bg=self.COLOR_START, fg="white",
+            command=self.cmd_mission, **b_style
         )
-        self.btn_mission.grid(row=0, column=1, padx=5)
+        self.btn_mission.grid(row=0, column=0, padx=(0, 5))
 
-        self.btn_hover = tk.Button(
-            btn_grid, text="🛸 HOVER", bg="#00695c", fg="white",
-            command=self.cmd_hover, **b_style
-        )
-        self.btn_hover.grid(row=0, column=2, padx=5)
-
-        self.btn_land = tk.Button(
-            btn_grid, text="🛬 LAND DRONE", bg="#0288d1", fg="white",
-            command=self.cmd_land_drone, **b_style
-        )
-        self.btn_land.grid(row=0, column=3, padx=5)
+        self.stage_buttons = {}
+        for col, (stage, label) in enumerate((
+            ("align", "🎯 ALIGN"),
+            ("descend", "⬇ APPROACH 35 cm"),
+            ("land", "🛬 TOUCHDOWN"),
+        ), start=1):
+            btn = tk.Button(btn_grid, text=label, bg=self.COLOR_IDLE, fg="white", state="disabled",
+                            disabledforeground="#90a4ae", command=lambda s=stage: self.cmd_stage(s), **b_style)
+            btn.grid(row=0, column=col, padx=5)
+            self.stage_buttons[stage] = btn
 
         self.btn_abort = tk.Button(
             btn_grid, text="⚠ ABORT", bg="#c62828", fg="white",
@@ -73,44 +75,43 @@ class ActionsView(tk.LabelFrame):
             self.cmd_tx.send_command("gcs_hb")
 
     def _sync_ui_loop(self):
-        """Polls MasterReceiver telemetry to update button labels and actions dynamically."""
+        """Polls live telemetry and lights up the stage the Pi really has selected."""
         self._send_silent_heartbeat()
 
         rx = getattr(MasterReceiver, "_active_instance", None)
         armed = False
         fsm_state = "OFFLINE"
+        online = False
 
         if rx:
             last_seen = getattr(rx, "last_seen", 0.0)
             if last_seen > 0.0 and (time.time() - last_seen) <= 2.5:
+                online = True
                 packets = rx.get_all_packets() if hasattr(rx, "get_all_packets") else {}
                 m_status = packets.get("master_status", {}) if isinstance(packets, dict) else {}
                 if isinstance(m_status, dict) and m_status:
                     armed = bool(m_status.get("armed", False))
                     fsm_state = str(m_status.get("system_state", "READY")).upper()
 
-        self._live_armed = armed
-        self._live_fsm_state = fsm_state
-
         if self.controller:
             self.controller.is_armed = armed
             self.controller.in_flight = (fsm_state == "MISSION_ACTIVE")
 
-        # 1. Dynamic ARM / DISARM button (locked visually while airborne)
-        if fsm_state in ("MISSION_ACTIVE", "LANDING"):
-            self.btn_arm.config(text="🔒 IN FLIGHT", bg="#37474f", state="disabled")
-        elif armed:
-            self.btn_arm.config(text="🔓 DISARM DRONE", bg="#455a64", state="normal")
-        else:
-            self.btn_arm.config(text="⚡ ARM DRONE", bg="#d84315", state="normal")
-
-        # 2. Dynamic START MISSION / STOP MISSION / RESET button
-        if fsm_state == "EMERGENCY_ABORT":
-            self.btn_mission.config(text="↻ RESET SYSTEM", bg="#f57c00")
-        elif fsm_state == "MISSION_ACTIVE":
-            self.btn_mission.config(text="⏹ STOP MISSION", bg="#e65100")
-        else:
-            self.btn_mission.config(text="▶ START MISSION", bg="#00897b")
+        vis_rx = getattr(VisionReceiver, "_active_instance", None)
+        shadow = (vis_rx.get_packet("landing_shadow", {}) or {}) if (vis_rx and online) else {}
+        state, _, stage = str(shadow.get("mode", "SHADOW")).partition("-")
+        self._live_stage = stage
+        self._mission = bool(shadow.get("mission"))
+        self.btn_mission.config(
+            text="■ STOP MISSION" if self._mission else "▶ START MISSION",
+            bg=self.COLOR_STOP if self._mission else self.COLOR_START,
+        )
+        level = self.LEVELS.index(stage) if self._mission and stage in self.LEVELS else -1
+        for i, name in enumerate(self.LEVELS):      # APPROACH and TOUCHDOWN include the stages before
+            color = self.COLOR_IDLE
+            if i <= level:
+                color = self.COLOR_ACTIVE if state == "ACTIVE" else self.COLOR_WAITING
+            self.stage_buttons[name].config(bg=color, state="normal" if self._mission else "disabled")
 
         self.after(200, self._sync_ui_loop)
 
@@ -128,25 +129,18 @@ class ActionsView(tk.LabelFrame):
                 self.controller._emit_log("[ERROR] RPi MasterNode OFFLINE. Command not sent.")
         return sent
 
-    def cmd_toggle_arm(self):
-        if self._live_armed:
-            self._dispatch_to_master("disarm", "[TX] 'disarm' sent to MasterNode.")
+    def cmd_mission(self):
+        if self._mission:
+            self._dispatch_to_master("landshadow stop", "[TX] STOP MISSION: holding, stages disabled.")
         else:
-            self._dispatch_to_master("arm", "[TX] 'arm' sent to MasterNode.")
+            self._dispatch_to_master("landshadow start", "[TX] START MISSION: holding, choose a stage.")
 
-    def cmd_toggle_mission(self):
-        if self._live_fsm_state == "EMERGENCY_ABORT":
-            self._dispatch_to_master("reset", "[TX] 'reset' sent to MasterNode.")
-        elif self._live_fsm_state == "MISSION_ACTIVE":
-            self._dispatch_to_master("mission stop", "[TX] 'mission stop' sent to MasterNode.")
-        else:
-            self._dispatch_to_master("mission start", "[TX] 'mission start' sent -> Confirm (y/n) in console.")
-
-    def cmd_hover(self):
-        self._dispatch_to_master("hover", "[TX] 'hover' sent to ControlManager.")
-
-    def cmd_land_drone(self):
-        self._dispatch_to_master("mission land", "[TX] 'mission land' sent to MasterNode.")
+    def cmd_stage(self, name: str):
+        """On = run up to this stage. Off = fall back to the previous one (ALIGN off = hold)."""
+        i = self.LEVELS.index(name)
+        current = self.LEVELS.index(self._live_stage) if self._live_stage in self.LEVELS else -1
+        target = self.LEVELS[i] if current < i else (self.LEVELS[i - 1] if i else "hold")
+        self._dispatch_to_master(f"landshadow arm {target}", f"[TX] Stage: {target}.")
 
     def cmd_abort(self):
         self._dispatch_to_master("abort", "[EMERGENCY] 'abort' sent to MasterNode!")
