@@ -52,6 +52,10 @@ class SenderParams:
     disarm_h: float = 0.14      # land stage: motors off only below this lidar height, m
     disarm_after_s: float = 1.5 # ... continuously for this long
     disarm_band_m: float = 0.03 # ... with the height moving less than this (not still descending)
+    hold_kp: float = 0.6        # height hold with the lidar (stop/align/approach floor): m/s per m
+    hold_v_max: float = 0.08    # ... at most this up or down, m/s
+    hold_deadband: float = 0.02 # ... no correction inside this band, m
+                                # (flight 2026-11-23: with v_down = 0 the drone sank 0.6 -> 0.15 m)
 
     @classmethod
     def from_dict(cls, d):
@@ -72,6 +76,7 @@ class GuidedSender:
         self._td_since = None           # touchdown confirmation window
         self._td_min = self._td_max = 0.0
         self._last_disarm_tx = None
+        self._hold_h, self._hold_stage = None, None   # height latched for stop/align
         self.in_guided = False
         self.last = {"sent": False, "v_fwd": 0.0, "v_right": 0.0, "v_down": 0.0,
                      "reason": "disarmed", "t": None}
@@ -244,12 +249,18 @@ class GuidedSender:
                 vf, vr = vf * self.p.v_xy_max / n, vr * self.p.v_xy_max / n
             vd = max(-self.p.v_up_max, min(self.p.v_down_max, vd))
             if stage == "align":
-                vd = 0.0
+                vd = self._hold(stage, ls.get("h_m"))
             elif stage == "descend":
                 h = ls.get("h_m")
-                if (h is None or h < self.approach_h) and vd > 0:
-                    vd = 0.0
+                if h is None:
+                    vd = min(vd, 0.0)
+                elif h < self.approach_h + self.p.hold_deadband and vd >= 0:
+                    vd = self._hold(stage, h, self.approach_h)
                     reason = "approach height: holding"
+        if stage == "stop" and t is not None and now - t <= self.p.law_max_age_s:
+            vd = self._hold(stage, ls.get("h_m"))
+        if stage not in ("stop", "align"):
+            self._hold_stage = None
         self.mav.send_velocity_body(vf, vr, vd)
         self._check_touchdown(stage, ls, reason == "law", now)
         with self._lock:
@@ -257,6 +268,20 @@ class GuidedSender:
             self.last = {"sent": True, "v_fwd": round(vf, 4), "v_right": round(vr, 4),
                          "v_down": round(vd, 4), "reason": reason, "t": now}
         return vf, vr, vd
+
+    def _hold(self, stage, h, target=None):
+        """v_down that keeps the lidar height at target (stop/align: the height when the stage
+        started). The Pixhawk alone, with v_down = 0, let the drone sink near the ground."""
+        if h is None:
+            return 0.0
+        if target is None:
+            if self._hold_stage != stage or self._hold_h is None:
+                self._hold_stage, self._hold_h = stage, float(h)
+            target = self._hold_h
+        err = float(h) - target
+        if abs(err) < self.p.hold_deadband:
+            return 0.0
+        return max(-self.p.hold_v_max, min(self.p.hold_v_max, self.p.hold_kp * err))
 
     def _check_touchdown(self, stage, ls, fresh, now):
         """Motors off (normal, not forced disarm) only when really stopped on the ground."""

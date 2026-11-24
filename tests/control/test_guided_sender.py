@@ -119,7 +119,7 @@ def test_stages_need_start_and_stop_blocks_them():
     assert not s.select("approach", 1.5)[0] and s.stage == "align"
     assert s.select("approach", 0.6)[0] and s.approach_h == 0.6
     vis.set(0.0, 0.0, 0.1, h=0.55)
-    assert s.tick()[2] == 0.0                                  # holds at the typed height
+    assert -0.08 <= s.tick()[2] < 0.0                          # below the typed height: climbs back
     assert s.select("approach")[0] and s.approach_h == 0.35
     s.mission_stop()
     assert s.stage == "stop" and not s.mission and not s.select("touchdown")[0]
@@ -128,6 +128,22 @@ def test_stages_need_start_and_stop_blocks_them():
     mav.state.set(LOITER)
     s.tick()
     assert s.stage is None and not s.mission
+
+
+def test_stop_and_align_hold_the_lidar_height():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=0.60)
+    s.arm("stop")
+    assert s.tick()[2] == 0.0                     # latches 0.60
+    vis.set(0.0, 0.0, 0.0, h=0.50)                # sinking with v_down = 0 (flight 2026-11-23)
+    assert -s.p.hold_v_max <= s.tick()[2] < 0.0   # climbs
+    vis.set(0.0, 0.0, 0.0, h=0.70)
+    assert 0.0 < s.tick()[2] <= s.p.hold_v_max    # comes down
+    s.arm("align")
+    vis.set(0.02, 0.0, 0.0, h=0.70)
+    assert s.tick()[2] == 0.0                     # new stage: latches its own height
 
 
 def _land_tick(mav, vis, s, t, h, phase="TOUCHDOWN"):
@@ -146,7 +162,7 @@ def test_can_step_back_from_touchdown_when_low():
     s.select("touchdown")
     vis.set(0.0, 0.0, 0.1, h=0.12)                # below min_flight_h
     assert s.select("approach")[0] and s.stage == "descend"
-    assert s.tick()[2] == 0.0
+    assert s.tick()[2] == -s.p.hold_v_max         # climbs back to the approach height
 
 
 def test_motors_off_only_when_stopped_on_ground():
@@ -190,7 +206,9 @@ def test_limits_stale_and_floor():
     vis.set(1.0, 1.0, 1.0, h=1.0)             # way over the limits
     f, r, d = s.tick()
     assert abs((f * f + r * r) ** 0.5 - s.p.v_xy_max) < 1e-6 and d == s.p.v_down_max
-    vis.set(0.0, 0.0, 0.10, h=s.p.floor_h - 0.05)   # below the floor: no more descent
+    vis.set(0.0, 0.0, 0.10, h=s.p.floor_h - 0.05)   # below the floor: climbs back slowly
+    assert -s.p.hold_v_max <= s.tick()[2] < 0.0
+    vis.set(0.0, 0.0, 0.10, h=s.p.floor_h + 0.01)   # at the floor: holds
     assert s.tick()[2] == 0.0
     vis.set(0.0, 0.0, -0.10, h=0.2)           # climbing is still allowed
     assert s.tick()[2] == -0.10
