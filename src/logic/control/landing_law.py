@@ -35,7 +35,8 @@ from dataclasses import dataclass, fields
 class LandingParams:
     kp: float = 0.25                # m/s per m of error (0.25 -> 10 cm error = 2.5 cm/s)
                                     # (flight 2026-11-22: Pixhawk velocity lags 2-3 s, 0.5 swung)
-    kd: float = 0.4                 # s: m/s per m/s of error rate (damps the drift)
+    kd: float = 0.6                 # s: m/s per m/s of error rate (damps the drift; 0.4 until 2026-11-24:
+                                    # flight swung +-13 cm low down, simulation with disturbances: 0.6 damps better)
     d_tau: float = 0.25             # low-pass time constant of the error rate, s
     v_max: float = 0.30             # horizontal speed limit, m/s
     deadband: float = 0.02          # error below this -> no horizontal command, m
