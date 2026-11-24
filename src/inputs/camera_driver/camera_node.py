@@ -14,6 +14,7 @@ import numpy as np
 from src.inputs.camera_driver.calib_params import CalibrationNotFound, load_calibration
 from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
+from src.logic.vision.height_check import plane_height
 from src.logic.vision.optical_flow import OpticalFlowEstimator
 from src.logic.vision.pixel_target import pad_touchdown, pixel_target, tilt_compensate
 from src.logic.control.landing_law import LandingLaw, LandingParams
@@ -97,6 +98,7 @@ class CameraNode:
         # Landing law in SHADOW mode: computed every frame, published, never sent to the Pixhawk.
         self.landing = LandingLaw(LandingParams.from_dict(self.config.get("landing_law")))
         self._known_seen = {}   # known label -> (centre px, side px, monotonic time last seen)
+        self.cam_heights = {}   # marker id -> (camera-only height to the marker plane m, monotonic t)
 
         self.fps = 0.0
         self.proc_ms = 0.0
@@ -294,6 +296,10 @@ class CameraNode:
         family = self.config["aruco"]["dictionary"].replace("DICT_", "")
         cands, seen = [], set()  # (label, corners, axes, last_seen)
         for m in measurements:  # configured pad IDs: real pose -> axes with the true size
+            try:  # camera-only height (no lidar): for the camlidar check and the logs
+                self.cam_heights[int(m.marker_id)] = (plane_height(m.rvec, m.tvec), now)
+            except Exception:  # noqa: BLE001
+                pass
             if m.corners is None:
                 continue
             seen.add(m.marker_id)
@@ -342,6 +348,31 @@ class CameraNode:
             out.append(cand)
         return out
 
+    def _cam_height(self, label, max_age_s=0.1):
+        """Camera-only height (m) of marker '<family> #<id>' from this frame's pose, else None."""
+        try:
+            mid = int(str(label).split("#")[1])
+        except (IndexError, ValueError):
+            return None
+        h, t = self.cam_heights.get(mid, (None, 0.0))
+        return round(h, 4) if h is not None and time.monotonic() - t <= max_age_s else None
+
+    def height_check_sample(self, max_age_s=0.1):
+        """camlidar test: ({marker id: camera height m} seen in the last max_age_s,
+        vertical lidar height m or None, attitude used). Lidar: range*cos(roll)*cos(pitch)
+        with a fresh ATTITUDE, else the raw range."""
+        now = time.monotonic()
+        cams = {mid: h for mid, (h, t) in list(self.cam_heights.items()) if now - t <= max_age_s}
+        lidar = self._lidar_height()
+        tilt = False
+        vs = self.vehicle_state
+        if lidar is not None and vs is not None and hasattr(vs, "get_packet_with_time"):
+            att, att_t = vs.get_packet_with_time("ATTITUDE")
+            if att and att_t is not None and time.time() - att_t < 0.3:
+                lidar *= float(np.cos(float(att.get("roll", 0.0))) * np.cos(float(att.get("pitch", 0.0))))
+                tilt = True
+        return cams, lidar, tilt
+
     def _lidar_height(self):
         st = self.height_state
         if st is None or getattr(st, "sensor_status", "OK") != "OK":
@@ -363,6 +394,7 @@ class CameraNode:
         lidar = self._lidar_height()
         t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, lidar)
         t.update(self._tilt_fields(t, lidar, corners, label))
+        t["h_cam_m"] = self._cam_height(label)
         t.update({"detected": True, "source": label, "known": bool(known),
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),

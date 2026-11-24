@@ -4,6 +4,7 @@ import threading
 import time
 from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
+from src.logic.vision.height_check import summarize
 
 
 # <repo>/experiments/vision/<date>/ (next to experiments/flights/, same layout)
@@ -38,6 +39,9 @@ class VisionCLI(BaseNodeCLI):
                           "Allow going to a marker NOT in known_markers.yaml <yes|no|ask>", aliases=["fu"])
         self.register_cmd("markers", self.cmd_markers,
                           "List registered markers (priority order) [reload]", aliases=["known"])
+        self.register_cmd("camlidar", self.cmd_camlidar,
+                          "Hand test (disarmed): camera height (ArUco only) vs lidar, per marker [seconds, default 60] | stop",
+                          aliases=["hcheck"])
         self.register_cmd("locked", self.cmd_locked, "Check whether target ArUco marker is locked", aliases=["is_target_locked"])
 
     def cmd_status(self, _args: List[str]) -> str:
@@ -317,3 +321,56 @@ class VisionCLI(BaseNodeCLI):
             self.log("    " + self._shadow_text(), "STATUS")
             time.sleep(0.5)
         self.log("arucowatch finished.", "OK")
+
+    def cmd_camlidar(self, args: List[str]) -> str:
+        """Records camera-only height and lidar height together (20 Hz) for every pad marker
+        in view, prints 1 line/s, and at the end the error per marker and height band.
+        Hand test: drone DISARMED, held level over the flat board, move slowly 10 cm -> 1.5 m
+        and back so that #20 (close) and #10 (far) are both covered. Nothing is sent or saved."""
+        if args and args[0].lower() == "stop":
+            self._hc_until = 0.0
+            return "CAMLIDAR_STOP"
+        drv = self.camera_driver
+        if drv is None or not hasattr(drv, "height_check_sample"):
+            self.log("No camera driver on this machine.", "ERROR")
+            return "CAMLIDAR_NO_CAMERA"
+        if getattr(self, "_hc_thread", None) and self._hc_thread.is_alive():
+            self.log("camlidar already running (camlidar stop).", "WARN")
+            return "CAMLIDAR_BUSY"
+        try:
+            seconds = max(5.0, min(300.0, float(args[0]) if args else 60.0))
+        except ValueError:
+            self.log("Usage: camlidar [seconds] | stop", "ERROR")
+            return "CAMLIDAR_USAGE"
+        self._hc_until = time.time() + seconds
+        self._hc_thread = threading.Thread(target=self._camlidar_loop, args=(drv,), name="CamLidar", daemon=True)
+        self._hc_thread.start()
+        self.log(f"camlidar {seconds:.0f} s: hold the drone level over the flat board and move it slowly "
+                 "from 10 cm up to 1.5 m and back (both markers in view).", "OK")
+        return "CAMLIDAR_STARTED"
+
+    def _camlidar_loop(self, drv):
+        samples, next_print, tilt_seen = [], 0.0, False
+        while time.time() < self._hc_until:
+            try:
+                cams, lidar, tilt = drv.height_check_sample()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"camlidar: {e}", "ERROR")
+                break
+            tilt_seen |= tilt
+            if lidar is not None:
+                samples += [(mid, h, lidar) for mid, h in cams.items()]
+            if time.time() >= next_print:
+                next_print = time.time() + 1.0
+                lid = f"lidar {lidar * 100:5.1f} cm" if lidar is not None else "lidar --"
+                cam = "  ".join(f"#{m} cam {h * 100:5.1f} ({(h - lidar) * 100:+.1f})" if lidar else f"#{m} cam {h * 100:5.1f}"
+                                for m, h in sorted(cams.items())) or "no marker"
+                self.log(f"camlidar  {lid} | {cam}", "STATUS")
+            time.sleep(0.05)
+        lines, _ = summarize(samples)
+        if not tilt_seen:
+            lines.append("   note: no Pixhawk ATTITUDE, lidar not tilt-corrected (keep the drone level).")
+        self.log("camlidar result (camera - lidar):", "OK")
+        for ln in lines:
+            self.log(ln, "STATUS")
+
