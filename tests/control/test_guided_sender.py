@@ -249,3 +249,17 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("OK", name)
+
+
+def test_descend_brakes_before_the_approach_floor():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    s.mission_start()
+    assert s.select("approach", 0.6)[0]
+    vis.set(0.0, 0.0, 0.15, h=1.0)               # far above: full law speed
+    assert abs(s.tick()[2] - 0.15) < 1e-9
+    vis.set(0.0, 0.0, 0.15, h=0.7)               # 10 cm above: slowed to kp * 0.10
+    assert abs(s.tick()[2] - s.p.hold_kp * 0.10) < 1e-6
+    assert s.last["reason"] == "approach height: slowing"

@@ -257,6 +257,13 @@ class GuidedSender:
                 elif h < self.approach_h + self.p.hold_deadband and vd >= 0:
                     vd = self._hold(stage, h, self.approach_h)
                     reason = "approach height: holding"
+                elif vd > 0:
+                    # brake before the floor (same gain as the hold) instead of arriving at
+                    # full descend speed: the last flight undershot 0.60 m down to 0.49 m
+                    cap = self.p.hold_kp * (h - self.approach_h)
+                    if cap < vd:
+                        vd = max(0.0, cap)
+                        reason = "approach height: slowing"
         if stage == "stop" and t is not None and now - t <= self.p.law_max_age_s:
             vd = self._hold(stage, ls.get("h_m"))
         if stage not in ("stop", "align"):
