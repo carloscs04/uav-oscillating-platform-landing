@@ -134,7 +134,8 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("rm_pkt", self.cmd_rm_pkt, "Unsubscribe from MAVLink packet <PKT>", aliases=["watch_remove"])
         self.register_cmd("pkt", self.cmd_get_pkt, "Read latest value of packet <PKT>", aliases=["get_packet"])
         self.register_cmd("prearm", self.cmd_prearm, "Why won't it arm? Runs the Pixhawk pre-arm checks and lists failing sensors", aliases=["why", "checks"])
-        self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro>", aliases=["cal"])
+        self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro|all> (all = gyro, level, baro in order)", aliases=["cal"])
+        self.register_cmd("baroflight", self.cmd_baroflight, "Baro flight prep, DISARMED only: heightsrc baro, then calibrate baro")
         self.register_cmd("heightsrc", self.cmd_heightsrc, "Height source: heightsrc [lidar|baro] (normal flights: lidar; over the platform: baro). Disarmed only", aliases=["hsrc"])
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
@@ -319,8 +320,18 @@ class MAVLinkCLI(BaseNodeCLI):
         "baro": "Drone on the take-off spot, still, props off (sets this height as 0 m).",
     }
 
+    CAL_ALL_ORDER = ("gyro", "level", "baro")
+
     def cmd_calibrate(self, args: List[str]) -> str:
         kind = args[0].lower() if args else ""
+        if kind == "all":
+            for k in self.CAL_ALL_ORDER:     # each waits for its ACK; stop at the first failure
+                res = self.cmd_calibrate([k])
+                if res != "CAL_OK":
+                    self.log(f"calibrate all stopped at {k.upper()} ({res}).", "ERROR")
+                    return res
+            self.log("calibrate all: GYRO, LEVEL and BARO done.", "OK")
+            return "CAL_OK"
         if kind not in self.CAL_HINTS:
             self.log("Usage: calibrate <gyro|level|baro>", "ERROR")
             return "CAL_USAGE"
@@ -385,6 +396,13 @@ class MAVLinkCLI(BaseNodeCLI):
         why = "no answer in 2 s" if result is None else self._enum_name("MAV_RESULT", result, "MAV_RESULT_")
         self.log(f"heightsrc {name} FAILED ({why}). Height source unchanged: {cur_name}.", "ERROR")
         return "HEIGHTSRC_FAILED"
+
+    def cmd_baroflight(self, _args: List[str]) -> str:
+        res = self.cmd_heightsrc(["baro"])
+        if res != "HEIGHTSRC_BARO":
+            self.log(f"baroflight stopped: height source not changed ({res}).", "ERROR")
+            return res
+        return self.cmd_calibrate(["baro"])
 
     def cmd_flowcheck(self, _args: List[str]) -> str:
         if not self.manager.is_healthy():

@@ -60,6 +60,18 @@ class ActionsView(tk.LabelFrame):
         )
         self.btn_abort.grid(row=0, column=4, padx=(5, 0))
 
+        self.btn_calibrate = tk.Button(
+            btn_grid, text="CALIBRATE", bg="#4527a0", fg="white",
+            command=self.cmd_calibrate, **b_style
+        )
+        self.btn_calibrate.grid(row=0, column=5, padx=(5, 0))
+
+        self.btn_baro = tk.Button(
+            btn_grid, text="BARO FLIGHT", bg="#1565c0", fg="white",
+            command=self.cmd_baro_flight, **b_style
+        )
+        self.btn_baro.grid(row=0, column=6, padx=(5, 0))
+
         self._sync_ui_loop()
 
     def _send_silent_heartbeat(self):
@@ -143,6 +155,20 @@ class ActionsView(tk.LabelFrame):
         current = self.LEVELS.index(self._live_stage) if self._live_stage in self.LEVELS else -1
         target = self.LEVELS[i] if current < i else (self.LEVELS[i - 1] if i else "hold")
         self._dispatch_to_master(f"landshadow arm {target}", f"[TX] Stage: {target}.")
+
+    def cmd_calibrate(self):
+        """Gyro, level and baro in that order, on the Pi (each waits for the Pixhawk ACK)."""
+        if self.controller and getattr(self.controller, "is_armed", False):
+            self.controller._emit_log("[BLOCKED] Calibrate only while DISARMED.")
+            return
+        self._dispatch_to_master("calibrate all", "[TX] CALIBRATE: gyro -> level -> baro. Keep the drone still and level.")
+
+    def cmd_baro_flight(self):
+        """Height source to baro, then baro calibration (sets this spot as 0 m)."""
+        if self.controller and getattr(self.controller, "is_armed", False):
+            self.controller._emit_log("[BLOCKED] Baro flight setup only while DISARMED.")
+            return
+        self._dispatch_to_master("baroflight", "[TX] BARO FLIGHT: heightsrc baro -> calibrate baro.")
 
     def cmd_abort(self):
         self._dispatch_to_master("abort", "[EMERGENCY] 'abort' sent to MasterNode!")
