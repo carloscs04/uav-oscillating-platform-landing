@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from src.inputs.distance_sensor.master_sensor import DistanceManager
 from src.interfaces.MAVLink.master_mavlink import MAVLinkManager
+from src.logic.control.auto_height_source import AutoHeightSource
 from src.logic.control.guided_sender import GuidedSender
 from src.logic.control.master_control import ControlManager, MissionPhase
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
@@ -113,6 +114,12 @@ class MasterNode:
             self._camera_driver.guided_sender = self.guided_sender
             self.guided_sender.on_activate = self._camera_driver.landing.reset
         self.mavlink_node.state.set_control_params_provider(self._control_params)
+        # Height source by flight mode: LOITER/GUIDED -> lidar (gated), other modes -> back to
+        # the take-off source (baro after BARO FLIGHT). Modes stay the pilot's. `autoheight off`.
+        self.auto_height = AutoHeightSource(
+            self.mavlink_node, self.distance_node.state,
+            log=lambda msg, level="INFO": self.state.append_cli_log(f"[AUTOHEIGHT] {msg}", level))
+        self.mavlink_node.auto_height = self.auto_height
         # Lidar spike gate: Pixhawk vertical speed for the prediction, camera height as referee
         if hasattr(self.distance_node.state, "set_gate_inputs"):
             self.distance_node.state.set_gate_inputs(
@@ -178,6 +185,8 @@ class MasterNode:
 
         self._sync_thread = threading.Thread(target=self._hardware_sync_loop, daemon=True)
         self._sync_thread.start()
+        if not self.auto_height.is_alive():
+            self.auto_height.start()
 
         if self.enable_local_stdin:
             self._stdin_thread = threading.Thread(target=self._local_cli_loop, daemon=True)

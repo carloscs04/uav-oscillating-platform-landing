@@ -137,6 +137,8 @@ class MAVLinkCLI(BaseNodeCLI):
         self.register_cmd("calibrate", self.cmd_calibrate, "Pixhawk calibration, DISARMED only: calibrate <gyro|level|baro|all> (all = gyro, level, baro in order)", aliases=["cal"])
         self.register_cmd("baroflight", self.cmd_baroflight, "Baro flight prep, DISARMED only: heightsrc baro, then calibrate baro")
         self.register_cmd("heightsrc", self.cmd_heightsrc, "Height source: heightsrc [lidar|baro] (normal flights: lidar; over the platform: baro). Disarmed only", aliases=["hsrc"])
+        self.register_cmd("autoheight", self.cmd_autoheight,
+                          "Auto height source by mode (LOITER/GUIDED -> lidar, others -> take-off source): status | on | off")
         self.register_cmd("flowcheck", self.cmd_flowcheck, "No-flight check: flow/rangefinder params, data and EKF state")
         self.register_cmd("flowtest", self.cmd_flowtest, "Rotation test [seconds]: rock the DISARMED drone, checks flow axes/scale/delay")
         self.register_cmd("flowwatch", self.cmd_flowwatch, "Live flow + EKF position, 1 line/s [seconds] (walk test)")
@@ -396,6 +398,18 @@ class MAVLinkCLI(BaseNodeCLI):
         why = "no answer in 2 s" if result is None else self._enum_name("MAV_RESULT", result, "MAV_RESULT_")
         self.log(f"heightsrc {name} FAILED ({why}). Height source unchanged: {cur_name}.", "ERROR")
         return "HEIGHTSRC_FAILED"
+
+    def cmd_autoheight(self, args: List[str]) -> str:
+        ah = getattr(self.manager, "auto_height", None)
+        if ah is None:
+            self.log("autoheight not available on this machine.", "ERROR")
+            return "AUTOHEIGHT_NONE"
+        if args and args[0].lower() in ("on", "off"):
+            ah.enabled = args[0].lower() == "on"
+            self.log(f"autoheight {'ON' if ah.enabled else 'OFF (height source only changes with heightsrc / BARO FLIGHT)'}", "OK")
+            return "AUTOHEIGHT_" + ("ON" if ah.enabled else "OFF")
+        self.log(ah.status_text(), "STATUS")
+        return "AUTOHEIGHT_STATUS"
 
     def cmd_baroflight(self, _args: List[str]) -> str:
         res = self.cmd_heightsrc(["baro"])
