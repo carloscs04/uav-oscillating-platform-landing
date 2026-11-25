@@ -1,0 +1,28 @@
+[21:41:49.317] (before arm) STATUSTEXT [sev=7]: RCInput: decoding PPM (IOMCU)
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Trim OK: roll=0.08 pitch=1.72 yaw=0.00
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[21:41:49.318] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[21:41:49.318] ARMED [KESTREL] | Initial mode=ALT_HOLD | Voltage=11.18V | Link=HEALTHY
+[21:41:49.318] PARAMS: AHRS_EKF_TYPE=3.0 AHRS_TRIM_X=0.001411 AHRS_TRIM_Y=0.030077 AHRS_TRIM_Z=0.0 ARMING_SKIPCHK=0.0 ATC_ANG_PIT_P=4.5 ATC_ANG_RLL_P=4.5 ATC_ANG_YAW_P=4.5 ATC_RAT_PIT_D=0.0036 ATC_RAT_PIT_I=0.135 ATC_RAT_PIT_IMAX=0.5 ATC_RAT_PIT_P=0.135 ATC_RAT_RLL_D=0.0036 ATC_RAT_RLL_I=0.135 ATC_RAT_RLL_IMAX=0.5 ATC_RAT_RLL_P=0.135 ATC_RAT_YAW_D=0.0 ATC_RAT_YAW_I=0.018 ATC_RAT_YAW_IMAX=0.5 ATC_RAT_YAW_P=0.18 BARO1_GND_PRESS=102011.304688 BRD_SAFETY_DEFLT=0.0 COMPASS_ENABLE=0.0 COMPASS_USE=0.0 COMPASS_USE2=0.0 COMPASS_USE3=0.0 DISARM_DELAY=10.0 EK3_ENABLE=1.0 EK3_FLOW_DELAY=50.0 EK3_FLOW_USE=1.0 EK3_RNG_USE_HGT=-1.0 EK3_SRC1_POSXY=0.0 EK3_SRC1_POSZ=2.0 EK3_SRC1_VELXY=5.0 EK3_SRC1_VELZ=0.0 EK3_SRC1_YAW=0.0 EK3_SRC2_POSXY=0.0 EK3_SRC2_POSZ=1.0 EK3_SRC2_VELXY=5.0 EK3_SRC2_VELZ=0.0 EK3_SRC2_YAW=0.0 FLOW_FXSCALER=0.0 FLOW_FYSCALER=0.0 FLOW_ORIENT_YAW=0.0 FLOW_TYPE=5.0 FS_THR_ENABLE=3.0 INS_GYR1_CALTEMP=43.225063 INS_GYR2OFFS_X=0.039245 INS_GYR2OFFS_Y=0.111845 INS_GYR2OFFS_Z=-0.034504 INS_GYR2_CALTEMP=44.654678 INS_GYR2_ID=2228490.0 INS_GYR3OFFS_X=0.0 INS_GYR3OFFS_Y=0.0 INS_GYR3OFFS_Z=0.0 INS_GYR3_ID=0.0 INS_GYROFFS_X=-0.000879 INS_GYROFFS_Y=0.098634 INS_GYROFFS_Z=0.046498 INS_GYR_ID=2163722.0 PSC_D_ACC_P=0.05 PSC_D_POS_P=1.0 PSC_D_VEL_P=5.0 PSC_NE_POS_P=1.0 PSC_NE_VEL_D=0.25 PSC_NE_VEL_I=0.25 PSC_NE_VEL_IMAX=3.0 PSC_NE_VEL_P=1.4 RNGFND1_GNDCLR=0.09 RNGFND1_MAX=4.0 RNGFND1_MIN=0.04 RNGFND1_ORIENT=25.0 RNGFND1_TYPE=10.0 STAT_RUNTIME=254389.0 SURFTRAK_MODE=0.0 VISO_TYPE=0.0
+[21:41:49.318] CONTROL_PARAMS: law.align_hold_s=2.0 law.align_timeout_s=30.0 law.align_tol=0.05 law.climb_speed=0.15 law.commit_h=0.3 law.d_tau=0.25 law.deadband=0.02 law.descend_speed=0.15 law.final_h=0.3 law.final_pause_err=0.05 law.final_pause_min_h=0.15 law.final_speed=0.1 law.kd=0.9 law.kp=0.35 law.lost_hold_s=0.5 law.lost_search_s=3.0 law.pause_err=0.1 law.rearm_dh=0.3 law.search_h=0.8 law.touchdown_h=0.13 law.v_max=0.3 lidargate.baro_tau_s=0.5 lidargate.cam_agree_m=0.07 lidargate.cam_c_m=-0.025 lidargate.cam_disagree_m=0.1 lidargate.cam_k=1.077 lidargate.disagree_n=3 lidargate.enabled=True lidargate.est_max_s=2.0 lidargate.jump_m=0.1 lidargate.reset_gap_s=0.5 lidargate.settle_band_m=0.03 lidargate.settle_s=3.0 lidargate.win_jump_m=0.15 lidargate.win_s=0.3 sender.disarm_after_s=1.5 sender.disarm_band_m=0.03 sender.disarm_h=0.14 sender.floor_h=0.35 sender.hb_max_age_s=1.5 sender.hold_deadband=0.02 sender.hold_kp=0.6 sender.hold_v_max=0.08 sender.law_max_age_s=0.3 sender.min_flight_h=0.15 sender.rate_hz=10.0 sender.v_down_max=0.15 sender.v_up_max=0.15 sender.v_xy_max=0.2
+[21:41:49.318] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[21:41:49.318] HEIGHT_SOURCE -> BARO at t+0.0s
+[21:42:08.831] PARAMS_UPDATE: STAT_FLTCNT=262.0 STAT_FLTTIME=5525.0 STAT_RUNTIME=254420.0
+[21:42:08.881] PARAMS_UPDATE: STAT_DISTFLWN=649.878601
+[21:42:09.392] MODE_CHANGE -> LOITER (5) at t+20.074s
+[21:42:09.545] HEIGHT_SOURCE -> LIDAR at t+20.227s
+[21:42:11.581] MODE_CHANGE -> GUIDED (4) at t+22.264s
+[21:42:13.006] MODE_CHANGE -> LOITER (5) at t+23.689s
+[21:42:14.949] LIDARGATE: lidar 115.9 cm REJECTED, no ArUco: BAROMETER holds 139.9 cm until the lidar fits again or the camera sees a marker
+[21:42:21.335] LIDARGATE: REAL step 121.8 -> 55.6 cm, confirmed by the CAMERA (57.5 cm): lidar accepted
+[21:42:22.665] LIDARGATE: lidar 49.6 cm REJECTED, no ArUco: BAROMETER holds 32.3 cm until the lidar fits again or the camera sees a marker
+[21:42:25.774] LIDARGATE: lidar gap: restart at 155.9 cm
+[21:42:26.079] LIDARGATE: lidar 140.6 cm REJECTED, no ArUco: BAROMETER holds 162.6 cm until the lidar fits again or the camera sees a marker
+[21:42:27.568] LIDARGATE: REAL step 142.5 -> 55.4 cm, confirmed by the CAMERA (57.5 cm): lidar accepted
+[21:42:28.283] LIDARGATE: lidar 11.4 cm REJECTED, no ArUco: BAROMETER holds -4.9 cm until the lidar fits again or the camera sees a marker
+[21:42:29.661] PARAMS_UPDATE: MOT_THST_HOVER=0.425837 STAT_DISTFLWN=651.900635 STAT_FLTTIME=5546.0 STAT_RUNTIME=254441.0
+[21:42:30.225] STATUSTEXT [sev=2]: EKF variance
+[21:42:30.326] DISARMED [KESTREL] | Duration=41.01s | Total_samples=803

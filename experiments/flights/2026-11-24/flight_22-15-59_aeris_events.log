@@ -1,0 +1,30 @@
+[22:15:59.978] (before arm) STATUSTEXT [sev=4]: EKF3 IMU1 stopped aiding
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: EKF3 IMU1 started relative aiding
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: EKF3 IMU1 fusing optical flow
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Initialising ArduPilot
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Trim OK: roll=-0.16 pitch=2.11 yaw=0.00
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Updating barometer calibration
+[22:15:59.978] (before arm) STATUSTEXT [sev=6]: Barometer calibration complete
+[22:15:59.978] ARMED [AERIS] | Initial mode=ALT_HOLD | Voltage=11.12V | Link=HEALTHY
+[22:15:59.979] PARAMS: AHRS_EKF_TYPE=3.0 AHRS_TRIM_X=-0.002819 AHRS_TRIM_Y=0.036815 AHRS_TRIM_Z=0.0 ARMING_SKIPCHK=0.0 ATC_ANG_PIT_P=4.5 ATC_ANG_RLL_P=4.5 ATC_ANG_YAW_P=4.5 ATC_RAT_PIT_D=0.0036 ATC_RAT_PIT_I=0.135 ATC_RAT_PIT_IMAX=0.5 ATC_RAT_PIT_P=0.135 ATC_RAT_RLL_D=0.0036 ATC_RAT_RLL_I=0.135 ATC_RAT_RLL_IMAX=0.5 ATC_RAT_RLL_P=0.135 ATC_RAT_YAW_D=0.0 ATC_RAT_YAW_I=0.018 ATC_RAT_YAW_IMAX=0.5 ATC_RAT_YAW_P=0.18 BARO1_GND_PRESS=101991.039062 BRD_SAFETY_DEFLT=0.0 COMPASS_ENABLE=0.0 COMPASS_USE=0.0 COMPASS_USE2=0.0 COMPASS_USE3=0.0 DISARM_DELAY=10.0 EK3_ENABLE=1.0 EK3_FLOW_DELAY=50.0 EK3_FLOW_USE=1.0 EK3_RNG_USE_HGT=-1.0 EK3_SRC1_POSXY=0.0 EK3_SRC1_POSZ=2.0 EK3_SRC1_VELXY=5.0 EK3_SRC1_VELZ=0.0 EK3_SRC1_YAW=0.0 EK3_SRC2_POSXY=0.0 EK3_SRC2_POSZ=1.0 EK3_SRC2_VELXY=5.0 EK3_SRC2_VELZ=0.0 EK3_SRC2_YAW=0.0 FLOW_FXSCALER=0.0 FLOW_FYSCALER=0.0 FLOW_ORIENT_YAW=0.0 FLOW_TYPE=5.0 FS_THR_ENABLE=3.0 INS_GYR1_CALTEMP=41.502014 INS_GYR2OFFS_X=0.037049 INS_GYR2OFFS_Y=0.110915 INS_GYR2OFFS_Z=-0.032369 INS_GYR2_CALTEMP=43.10746 INS_GYR2_ID=2228490.0 INS_GYR3OFFS_X=0.0 INS_GYR3OFFS_Y=0.0 INS_GYR3OFFS_Z=0.0 INS_GYR3_ID=0.0 INS_GYROFFS_X=-0.000354 INS_GYROFFS_Y=0.09571 INS_GYROFFS_Z=0.046836 INS_GYR_ID=2163722.0 MOT_THST_HOVER=0.45508 PSC_D_ACC_P=0.05 PSC_D_POS_P=1.0 PSC_D_VEL_P=5.0 PSC_NE_POS_P=1.0 PSC_NE_VEL_D=0.25 PSC_NE_VEL_I=0.25 PSC_NE_VEL_IMAX=3.0 PSC_NE_VEL_P=1.4 RNGFND1_GNDCLR=0.09 RNGFND1_MAX=4.0 RNGFND1_MIN=0.04 RNGFND1_ORIENT=25.0 RNGFND1_TYPE=10.0 STAT_DISTFLWN=761.758362 STAT_FLTCNT=267.0 STAT_FLTTIME=5735.0 STAT_RUNTIME=256373.0 SURFTRAK_MODE=0.0 VISO_TYPE=0.0
+[22:15:59.979] CONTROL_PARAMS: law.align_hold_s=2.0 law.align_timeout_s=30.0 law.align_tol=0.05 law.blind_err=0.035 law.climb_speed=0.15 law.commit_err=0.025 law.commit_h=0.3 law.commit_hold_s=0.5 law.d_tau=0.25 law.deadband=0.02 law.descend_speed=0.15 law.final_h=0.3 law.final_pause_err=0.05 law.final_pause_min_h=0.15 law.final_speed=0.1 law.kd=0.9 law.kd_final=0.3 law.kp=0.35 law.lost_hold_s=0.5 law.lost_search_s=3.0 law.pause_err=0.1 law.rearm_dh=0.3 law.search_h=0.8 law.touchdown_h=0.13 law.v_max=0.3 law.v_max_final=0.08 lidargate.baro_tau_s=0.5 lidargate.cam_agree_m=0.07 lidargate.cam_c_m=-0.025 lidargate.cam_disagree_m=0.1 lidargate.cam_k=1.077 lidargate.disagree_n=3 lidargate.enabled=False lidargate.est_max_s=2.0 lidargate.jump_m=0.1 lidargate.reset_gap_s=0.5 lidargate.settle_band_m=0.03 lidargate.settle_s=3.0 lidargate.win_jump_m=0.15 lidargate.win_s=0.3 sender.disarm_after_s=0.6 sender.disarm_band_m=0.05 sender.disarm_h=0.14 sender.floor_h=0.35 sender.hb_max_age_s=1.5 sender.hold_deadband=0.02 sender.hold_kp=0.6 sender.hold_v_max=0.08 sender.law_max_age_s=0.3 sender.min_flight_h=0.15 sender.rate_hz=10.0 sender.v_down_max=0.15 sender.v_up_max=0.15 sender.v_xy_max=0.2
+[22:15:59.979] MODE_CHANGE -> ALT_HOLD (2) at t+0.0s
+[22:15:59.979] HEIGHT_SOURCE -> BARO at t+0.0s
+[22:16:17.550] MODE_CHANGE -> LOITER (5) at t+17.571s
+[22:16:25.315] PARAMS_UPDATE: STAT_FLTTIME=5756.0 STAT_RUNTIME=256404.0
+[22:16:25.365] PARAMS_UPDATE: STAT_DISTFLWN=764.75592 STAT_FLTCNT=268.0
+[22:16:26.535] MODE_CHANGE -> GUIDED (4) at t+26.557s
+[22:16:51.000] MODE_CHANGE -> LOITER (5) at t+51.022s
+[22:16:56.321] PARAMS_UPDATE: STAT_FLTTIME=5787.0 STAT_RUNTIME=256435.0
+[22:16:57.612] MODE_CHANGE -> GUIDED (4) at t+57.634s
+[22:17:21.071] MODE_CHANGE -> LOITER (5) at t+81.092s
+[22:17:27.345] PARAMS_UPDATE: STAT_FLTTIME=5818.0 STAT_RUNTIME=256466.0
+[22:17:27.915] MODE_CHANGE -> GUIDED (4) at t+87.936s
+[22:17:49.784] MODE_CHANGE -> LOITER (5) at t+109.806s
+[22:17:57.505] MODE_CHANGE -> ALT_HOLD (2) at t+117.526s
+[22:17:58.319] PARAMS_UPDATE: STAT_FLTTIME=5849.0 STAT_RUNTIME=256497.0
+[22:18:05.399] PARAMS_UPDATE: STAT_FLTTIME=5856.0 STAT_RUNTIME=256504.0
+[22:18:05.444] PARAMS_UPDATE: MOT_THST_HOVER=0.452407 STAT_DISTFLWN=767.867249
+[22:18:05.952] DISARMED [AERIS] | Duration=125.97s | Total_samples=2458
