@@ -142,8 +142,31 @@ def test_strict_descent_needs_5cm():
     assert law.step((0.03, 0.0), 0.6, 0.3)["v_down"] > 0.0
     assert law.step((0.07, 0.0), 0.25, 0.4)["v_down"] == 0.0    # low, 7 cm: no commit
     assert not law.committed
-    assert law.step((0.03, 0.0), 0.25, 0.5)["v_down"] > 0.0
+    assert law.step((0.03, 0.0), 0.25, 0.5)["v_down"] == 0.0    # 3 cm: still centring
+    assert not law.committed
+    o = law.step((0.02, 0.0), 0.25, 0.6)
+    assert o["v_down"] == 0.0 and "centring" in o["note"]
+    assert law.step((0.02, 0.0), 0.25, 1.0)["v_down"] == 0.0    # 0.4 s centred: not yet
+    assert law.step((0.02, 0.0), 0.25, 1.15)["v_down"] > 0.0    # 0.55 s centred: commit
     assert law.committed
+
+
+def test_strict_no_blind_descent_when_lost_off_centre():
+    """Flight 2026-11-24 21:53: drifted to 4.3 cm and lost the marker at 0.22 m."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.phase, law.committed = "FINAL", True
+    law.step((0.043, 0.0), 0.22, 0.0)
+    o = law.step(None, 0.22, 0.05)
+    assert o["v_down"] == 0.0 and not law.committed            # brake, no blind descent
+    for i in range(80):                                         # then climbs to search again
+        o = law.step(None, 0.22, 0.1 + 0.05 * i)
+    assert o["v_down"] < 0
+    law2 = LandingLaw(LandingParams(align_hold_s=0.0))          # lost centred: blind descent ok
+    law2.strict_descent = True
+    law2.phase, law2.committed = "FINAL", True
+    law2.step((0.02, 0.0), 0.22, 0.0)
+    assert law2.step(None, 0.22, 0.05)["v_down"] > 0
 
 
 def test_params_from_config():

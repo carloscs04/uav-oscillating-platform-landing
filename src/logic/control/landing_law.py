@@ -53,6 +53,11 @@ class LandingParams:
     final_pause_min_h: float = 0.15 # ...but below this height keep descending (too close to hover), m
     commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
+    commit_err: float = 0.025       # TOUCHDOWN stage: commit only centred within this ...
+    commit_hold_s: float = 0.5      # ... for this long (flight 2026-11-24 21:53: committed at 1.9 cm,
+                                    # drifted to 4.3 cm, lost the marker at 0.22 m and went down blind)
+    blind_err: float = 0.035        # TOUCHDOWN stage: marker lost low -> blind descent only if the last
+                                    # error was below this; else brake, then climb and retry
     touchdown_h: float = 0.13       # TOUCHDOWN below this lidar height, m (on the ground it reads 0.09-0.10)
     lost_hold_s: float = 0.5        # brake (v = 0) while lost less than this
     lost_search_s: float = 3.0      # back to SEARCH after this
@@ -81,6 +86,8 @@ class LandingLaw:
         self.climb = False
         self.stop_h = None      # height where TOUCHDOWN/HOLD started
         self.committed = False  # FINAL below commit_h: descend even without target
+        self.centred_since = None   # strict commit: |err| <= commit_err since
+        self.last_err = None        # last valid |err|, m
         self._prev = None       # (t, f, r) for the error rate
         self.rate = (0.0, 0.0)  # filtered d(err)/dt, m/s
 
@@ -92,6 +99,7 @@ class LandingLaw:
                 self.stop_h = h
             if phase in ("SEARCH", "ALIGN", "HOLD"):
                 self.committed = False
+            self.centred_since = None
 
     def _lifted(self, h):
         return h is not None and self.stop_h is not None and h > self.stop_h + self.p.rearm_dh
@@ -135,6 +143,10 @@ class LandingLaw:
             self._prev, self.rate = None, (0.0, 0.0)
             lost = None if self.last_valid_t is None else now - self.last_valid_t
             out["lost_s"] = None if lost is None else round(lost, 2)
+            if (self.committed and self.strict_descent and self.phase == "FINAL"
+                    and self.last_err is not None and self.last_err > p.blind_err):
+                self.committed = False          # lost while off-centre: no blind descent
+                out["note"] = f"lost {self.last_err * 100:.1f} cm off-centre: no blind descent"
             if self.committed and self.phase in ("FINAL", "TOUCHDOWN"):
                 if h_m is None or h_m < p.commit_h + 0.10:
                     out["v_down"] = p.final_speed
@@ -163,6 +175,7 @@ class LandingLaw:
         f, r = target
         e = math.hypot(f, r)
         self.last_valid_t = now
+        self.last_err = e
         self.climb = False
         out["err_m"] = e
         self._update_rate(f, r, now)
@@ -200,10 +213,15 @@ class LandingLaw:
             if h_m < p.final_h:
                 self._set("FINAL", now)
         if self.phase == "FINAL":
-            if h_m < p.commit_h and (not self.strict_descent or e <= pause_err):
+            if self.strict_descent and not self.committed:
+                self.centred_since = (self.centred_since or now) if e <= p.commit_err else None
+            if h_m < p.commit_h and not self.committed and (
+                    not self.strict_descent
+                    or (self.centred_since is not None and now - self.centred_since >= p.commit_hold_s)):
                 self.committed = True
             pause = (e > pause_err and not self.committed) or \
-                    (e > p.final_pause_err and h_m >= p.final_pause_min_h)
+                    (e > p.final_pause_err and h_m >= p.final_pause_min_h) or \
+                    (self.strict_descent and not self.committed)
             out["v_down"] = 0.0 if pause else p.final_speed
             if h_m < p.touchdown_h and not pause:
                 self._set("TOUCHDOWN", now, h_m)
@@ -212,8 +230,12 @@ class LandingLaw:
         if self.phase == "DESCEND" and e > pause_err:
             out["note"] = "error > pause: holding height"
         elif self.phase == "FINAL" and out["v_down"] == 0.0:
-            lim = pause_err if (e > pause_err and not self.committed) else p.final_pause_err
-            out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.0f} cm, not descending"
+            if self.strict_descent and not self.committed and e <= pause_err:
+                out["note"] = (f"centring: error {e * 100:.1f} cm, need <= {p.commit_err * 100:.1f} cm "
+                               f"for {p.commit_hold_s:.1f} s")
+            else:
+                lim = pause_err if (e > pause_err and not self.committed) else p.final_pause_err
+                out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.0f} cm, not descending"
         out["phase"] = self.phase
         return self._round(out)
 
