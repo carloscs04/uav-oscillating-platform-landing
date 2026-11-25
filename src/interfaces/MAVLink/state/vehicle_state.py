@@ -176,6 +176,14 @@ class VehicleState:
                 "lidar_cam_m": snap.get("cam_m") if snap.get("cam_m") is not None else -1.0,
                 "lidar_rejected": snap.get("rejected_total", 0)}
 
+    def _export_lidargate_log(self) -> List[list]:
+        """Last lidar spike gate decisions [seq, text] (flight events log, like STATUSTEXT)."""
+        feed = self._sensor_feed
+        st = getattr(feed, "distance_state", None) if feed else None
+        if st is None or not hasattr(st, "gate_snapshot"):
+            return []
+        return st.gate_snapshot().get("event_log", [])[-10:]
+
     def _export_statustext_log(self, n: int = 10) -> List[list]:
         with self._lock:
             evs = [e for e in self._events if e[2] == "STATUSTEXT"][-n:]
@@ -372,6 +380,7 @@ class VehicleState:
             "height_src": {"set": self.get_height_source_set(),
                            "name": self.HEIGHT_SOURCE_NAMES.get(self.get_height_source_set(), "?")},
             "statustext_log": self._export_statustext_log(),
+            "lidargate_log": self._export_lidargate_log(),
             "rc_channels": {
                 "roll_ch1": rc.get("chan1_raw", 0),
                 "pitch_ch2": rc.get("chan2_raw", 0),

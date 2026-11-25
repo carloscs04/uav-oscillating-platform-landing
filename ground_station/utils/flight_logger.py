@@ -162,6 +162,7 @@ class FlightExperimentLogger:
         self._current_codename: str = ""
         self._last_statustext: str = ""
         self._last_statustext_seq: int = 0
+        self._last_gate_seq: int = 0
         self._last_mode: int = -1
         self._row_count: int = 0
         # Pre-arm/arming texts are logged even while DISARMED (that is when the arm fails)
@@ -176,6 +177,7 @@ class FlightExperimentLogger:
 
         with self._lock:
             self._collect_statustexts(packets)
+            self._collect_gate_events(packets)
             if armed and not self._is_recording:
                 self._start_session(hb, health_info)
             elif not armed and self._is_recording:
@@ -430,6 +432,27 @@ class FlightExperimentLogger:
                 self._pending_texts.append((time.time(), sev, text))
         self._last_statustext_seq = max(self._last_statustext_seq, newest)
         self._pending_texts = self._pending_texts[-30:]
+
+    def _collect_gate_events(self, packets: Dict[str, Any]):
+        """Lidar spike gate decisions from the Pi ('lidar 95 cm REJECTED, CAMERA corrects ...'),
+        written to the events log while recording (the gate only acts armed in LOITER/GUIDED)."""
+        log = packets.get("lidargate_log")
+        if not isinstance(log, list) or not log:
+            return
+        try:
+            newest = max(int(e[0]) for e in log)
+        except (TypeError, ValueError, IndexError):
+            return
+        if newest < self._last_gate_seq:            # Pi restarted
+            self._last_gate_seq = 0
+        for entry in log:
+            try:
+                seq, text = int(entry[0]), str(entry[1]).strip()
+            except (TypeError, ValueError, IndexError):
+                continue
+            if seq > self._last_gate_seq and text and self._is_recording:
+                self._log_event(f"LIDARGATE: {text}")
+        self._last_gate_seq = max(self._last_gate_seq, newest)
 
     def _log_event(self, message: str):
         if self._event_file:

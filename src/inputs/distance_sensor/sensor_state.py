@@ -67,6 +67,7 @@ class DistanceState:
             d = self.gate.snapshot()
             d["raw_m"] = self.raw_distance_m
             d["sensor_status"] = self.sensor_status
+            d["event_log"] = [list(e) for e in self.gate.event_log]
             return d
 
     def export_telemetry_data(self) -> Dict[str, Any]:

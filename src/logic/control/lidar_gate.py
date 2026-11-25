@@ -22,6 +22,7 @@ Gaps longer than reset_gap_s (sensor out of range, NO_TARGET) restart the gate: 
 sample after them is accepted as is. Camera vs lidar: the camera gives the vertical height,
 the lidar the slant range; under ~15 deg of tilt the difference is inside cam_agree_m."""
 
+from collections import deque
 from dataclasses import dataclass
 
 
@@ -49,6 +50,8 @@ class LidarGate:
         self.rejected_total = 0      # samples not used since start
         self.events = 0              # number of rejection episodes
         self.on_event = None         # fn(text): one line per decision change (CLI log)
+        self.event_seq = 0
+        self.event_log = deque(maxlen=20)   # (seq, text): the flight events log picks them up
 
     def reset(self):
         self.h = None                # current output estimate (m)
@@ -61,6 +64,8 @@ class LidarGate:
         self.cam = None              # last camera height converted to the lidar scale, m
 
     def _emit(self, text):
+        self.event_seq += 1
+        self.event_log.append((self.event_seq, text))
         if self.on_event is not None:
             try:
                 self.on_event(text)
