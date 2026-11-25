@@ -119,7 +119,7 @@ def test_gradual_slot_without_camera_caught_by_baro():
     out = [g.step(h, i * DT, 0.0, None, 100.0) for i, h in enumerate(seq)]
     assert max(o for o in out if o is not None) < 0.62, max(out)
     assert all(o is not None and abs(o - 0.45) < 0.03 for o in out[-25:]), out[-25:]
-    assert g.source == "ESTIMATE" and g.pred_src == "baro"
+    assert g.source == "BAROMETER" and g.pred_src == "baro"
 
 
 def test_real_descent_followed_by_baro_not_rejected():
@@ -130,11 +130,15 @@ def test_real_descent_followed_by_baro_not_rejected():
     assert g.rejected_total == 0 and out == seq
 
 
-def test_baro_estimate_lasts_longer():
-    seq = [0.45] * 20 + [0.95] * int(3.5 / DT)
+def test_baro_holds_without_time_limit():
+    """Over the table edge / an obstacle, no marker: the baro holds the height (never None),
+    and the lidar takes over again as soon as it fits."""
+    seq = [0.45] * 20 + [0.95] * int(20 / DT) + [0.46] * 10
     g = LidarGate()
     out = [g.step(h, i * DT, 0.0, None, 50.0) for i, h in enumerate(seq)]
-    assert out[-1] is not None and abs(out[-1] - 0.45) < 1e-6 and g.status == "REJECT_EST"
+    assert all(o is not None for o in out)
+    assert all(abs(o - 0.45) < 1e-6 for o in out[20:-10])
+    assert out[-1] == 0.46 and g.source == "LIDAR"
 
 
 def test_disabled_passes_raw():

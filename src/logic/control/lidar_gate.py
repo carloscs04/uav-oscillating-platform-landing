@@ -14,7 +14,10 @@ so a step larger than jump_m is suspect:
     change since then, and a WINDOW check: the lidar may not change more than win_jump_m in
     win_s beyond what the baro explains (catches a slot entering the lidar cone gradually).
     Replay of the 2026-11-23 platform flights: max 13 cm, so 15 cm never fires there.
-  * no camera: output = prediction (baro, else Pixhawk speed), at most est_max_baro_s / est_max_s.
+  * no camera: the BAROMETER holds the height (last good lidar + baro change) with no time
+    limit, so the height never disappears: the lidar stays the source, a table edge, slot or
+    obstacle is never followed. Only without baro (Pixhawk link lost): Pixhawk speed for
+    est_max_s, then UNRELIABLE (below).
   * after that: UNRELIABLE -> no height at all (the Pi stops sending the rangefinder, the law
     gets no height and does not descend). It ends when the lidar comes back near the
     prediction, the camera confirms, or the lidar stays steady for settle_s (a real new level
@@ -40,7 +43,6 @@ class LidarGateParams:
     disagree_n: int = 3           # ... for this many samples in a row -> camera corrects
                                   # (a slot entering the lidar cone gradually, 2026-11-24 bench)
     est_max_s: float = 2.0      # max time on the prediction alone (no camera), then UNRELIABLE
-    est_max_baro_s: float = 4.0 # ... with the barometer as the prediction
     baro_tau_s: float = 0.5     # barometer low-pass
     win_s: float = 0.3          # window check: lidar change over win_s ...
     win_jump_m: float = 0.15    # ... minus baro change over win_s above this = suspect
@@ -54,7 +56,7 @@ class LidarGateParams:
 
 class LidarGate:
     OK, CAM, EST, UNRELIABLE, IDLE = "OK", "REJECT_CAM", "REJECT_EST", "UNRELIABLE", "IDLE"
-    # who decided the height that is used: LIDAR | CAMERA | ESTIMATE | NONE | LIDAR_RAW (gate idle)
+    # who decided the height that is used: LIDAR | CAMERA | BAROMETER | ESTIMATE | NONE | LIDAR_RAW
 
     def __init__(self, params=None):
         self.p = params or LidarGateParams()
@@ -171,16 +173,23 @@ class LidarGate:
         self.h = pred
         if self.blind_since is None:
             self.blind_since = now
-        est_max = p.est_max_baro_s if self.pred_src == "baro" else p.est_max_s
+        if self.pred_src == "baro":
+            # Barometer referee: holds the height for as long as needed (never "no height").
+            # Ends when the lidar fits the baro prediction again or the camera confirms a level.
+            if self.status != self.EST or self.source != "BAROMETER":
+                self._emit(f"lidar {raw * 100:.1f} cm REJECTED, no ArUco: BAROMETER holds {pred * 100:.1f} cm "
+                           "until the lidar fits again or the camera sees a marker")
+            self.status, self.source = self.EST, "BAROMETER"
+            return pred
+        est_max = p.est_max_s          # no baro (Pixhawk link lost): Pixhawk speed, short
         if now - self.blind_since <= est_max:
             if self.status != self.EST:
-                by = "BAROMETER" if self.pred_src == "baro" else "Pixhawk speed"
-                self._emit(f"lidar {raw * 100:.1f} cm REJECTED, no ArUco: ESTIMATE {pred * 100:.1f} cm "
-                           f"from the {by} (max {est_max:.0f} s, waiting for the camera)")
+                self._emit(f"lidar {raw * 100:.1f} cm REJECTED, no ArUco, no baro: ESTIMATE {pred * 100:.1f} cm "
+                           f"from the Pixhawk speed (max {est_max:.0f} s)")
             self.status, self.source = self.EST, "ESTIMATE"
             return pred
         if self.status != self.UNRELIABLE:
-            self._emit(f"UNRELIABLE height: no ArUco for {est_max:.0f} s and lidar {raw * 100:.1f} cm "
+            self._emit(f"UNRELIABLE height: no ArUco and no baro for {est_max:.0f} s and lidar {raw * 100:.1f} cm "
                        "does not fit -> no height sent (no descent) until the camera sees a marker")
         self.status, self.source = self.UNRELIABLE, "NONE"
         if self._settle is None or abs(raw - self._settle[1]) > p.settle_band_m:
