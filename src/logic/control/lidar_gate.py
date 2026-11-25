@@ -6,7 +6,8 @@ Every OK lidar sample is compared with the PREDICTION = last good height + the P
 vertical speed x dt. Real relative height changes smoothly (even with the platform moving),
 so a step larger than jump_m is suspect:
 
-  * camera in view (ArUco height, corrected to the lidar scale): it is the referee.
+  * camera in view (ArUco height, corrected to the lidar scale): it is the referee. It also
+    catches a gradual drift: lidar > cam_disagree_m from the camera for disagree_n samples.
     lidar ~ camera  -> the step is real (e.g. flying onto the table), accepted at once.
     lidar != camera -> slot: rejected, the output is the camera height, for as long as needed.
   * no camera: output = prediction (dead reckoning on the Pixhawk speed), at most est_max_s.
@@ -31,6 +32,9 @@ class LidarGateParams:
     enabled: bool = True
     jump_m: float = 0.10        # |lidar - prediction| above this = suspect (99.9 % of flight samples < 9 cm)
     cam_agree_m: float = 0.07   # lidar within this of the camera -> the step is real
+    cam_disagree_m: float = 0.10  # no step, but lidar this far from the camera ...
+    disagree_n: int = 3           # ... for this many samples in a row -> camera corrects
+                                  # (a slot entering the lidar cone gradually, 2026-11-24 bench)
     est_max_s: float = 2.0      # max time on the prediction alone (no camera), then UNRELIABLE
     settle_s: float = 3.0       # UNRELIABLE: lidar steady this long -> accepted as the new level
                                 # (long: the camera should be the one that corrects)
@@ -59,6 +63,7 @@ class LidarGate:
         self.status = self.OK
         self.blind_since = None      # start of rejecting WITHOUT camera
         self._settle = None          # (t0, ref) lidar steadiness while UNRELIABLE
+        self._disagree = 0           # consecutive samples with lidar far from the camera
         self.source = "LIDAR"        # who decided the last output
         self.raw = None              # last raw lidar, m
         self.cam = None              # last camera height converted to the lidar scale, m
@@ -101,7 +106,9 @@ class LidarGate:
         dt = max(0.0, now - self.t)
         self.t = now
         pred = self.h + (vz_up or 0.0) * dt
-        if abs(raw - pred) <= p.jump_m:
+        far = cam is not None and abs(raw - cam) > p.cam_disagree_m
+        self._disagree = self._disagree + 1 if far else 0
+        if abs(raw - pred) <= p.jump_m and self._disagree < p.disagree_n:
             if self.status in (self.CAM, self.EST, self.UNRELIABLE):
                 self._emit(f"lidar back to normal: {raw * 100:.1f} cm (LIDAR)")
             return self._accept(raw)

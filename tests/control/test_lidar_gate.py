@@ -88,6 +88,22 @@ def test_recorded_flights_no_false_rejects():
     assert rej <= total * 0.001
 
 
+def test_gradual_drift_corrected_by_camera():
+    seq = [0.45] * 20 + [0.45 + 0.05 * i for i in range(1, 11)] + [0.95] * 30   # 5 cm/sample: no "jump"
+    g, out = run(seq, cam=[0.45] * len(seq))
+    assert all(o is not None and abs(o - 0.45) < 0.03 for o in out[24:]), out[20:30]
+    assert g.source == "CAMERA"
+
+
+def test_camera_noise_does_not_override_lidar():
+    import random
+    rnd = random.Random(2)
+    seq = [0.50] * 200
+    cam = [0.50 + rnd.gauss(0, 0.02) for _ in seq]
+    g, out = run(seq, cam=cam)
+    assert g.rejected_total == 0 and all(o == 0.50 for o in out)
+
+
 def test_disabled_passes_raw():
     g = LidarGate(LidarGateParams(enabled=False))
     assert [g.step(h, i * DT) for i, h in enumerate([0.4, 0.9, 0.4])] == [0.4, 0.9, 0.4]
