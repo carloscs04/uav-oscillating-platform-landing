@@ -204,7 +204,10 @@ class MasterNode:
         """Lidar gate acts only when armed in LOITER (5) or GUIDED (4); else the raw lidar passes."""
         st = self.mavlink_node.state
         hb = st.get_packet("HEARTBEAT") or {}
-        return bool(st.is_armed()) and int(hb.get("custom_mode", -1)) in (4, 5)
+        armed = bool(st.is_armed())
+        if not armed and getattr(self.distance_node.state, "test_until", 0.0) > time.time():
+            return True     # `lidargate test`: bench check, never while armed
+        return armed and int(hb.get("custom_mode", -1)) in (4, 5)
 
     def _cam_referee_h(self):
         drv = self._camera_driver

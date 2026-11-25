@@ -23,6 +23,7 @@ class DistanceState:
         self._vz_up_fn: Optional[Callable[[], Optional[float]]] = None
         self._cam_h_fn: Optional[Callable[[], Optional[float]]] = None
         self._active_fn: Optional[Callable[[], bool]] = None
+        self.test_until: float = 0.0   # `lidargate test`: gate active on the bench (disarmed only)
 
     def set_gate_inputs(self, vz_up_fn=None, cam_h_fn=None, active_fn=None, on_event=None):
         """vz_up_fn() -> Pixhawk vertical speed m/s (+ up) or None; cam_h_fn() -> camera-only
