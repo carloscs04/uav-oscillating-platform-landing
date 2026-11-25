@@ -40,6 +40,10 @@ class LandingParams:
                                     # 2026-11-24, raised with kp so the damping ratio grows)
     d_tau: float = 0.25             # low-pass time constant of the error rate, s
     v_max: float = 0.30             # horizontal speed limit, m/s
+    kd_final: float = 0.3           # FINAL (below final_h): softer damping ...
+    v_max_final: float = 0.08       # ... and slower sideways (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
+                                    # commanded 0.15-0.28 m/s for 3-5 cm errors, swung up to 16 cm
+                                    # and lost the marker 3 times)
     deadband: float = 0.02          # error below this -> no horizontal command, m
     align_tol: float = 0.05         # "aligned" when |err| below this, m
     align_hold_s: float = 2.0       # ...for this long before descending
@@ -119,16 +123,18 @@ class LandingLaw:
         rf, rr = (f - prev[1]) / dt, (r - prev[2]) / dt
         self.rate = (self.rate[0] + a * (rf - self.rate[0]), self.rate[1] + a * (rr - self.rate[1]))
 
-    def _horizontal(self, f, r):
+    def _horizontal(self, f, r, low=False):
         e = math.hypot(f, r)
         kp = 0.0 if e < self.p.deadband else self.p.kp
-        vf = kp * f + self.p.kd * self.rate[0]
-        vr = kp * r + self.p.kd * self.rate[1]
+        kd = self.p.kd_final if low else self.p.kd
+        vmax = self.p.v_max_final if low else self.p.v_max
+        vf = kp * f + kd * self.rate[0]
+        vr = kp * r + kd * self.rate[1]
         if math.hypot(vf, vr) < 0.005:
             return 0.0, 0.0
         n = math.hypot(vf, vr)
-        if n > self.p.v_max:
-            vf, vr = vf * self.p.v_max / n, vr * self.p.v_max / n
+        if n > vmax:
+            vf, vr = vf * vmax / n, vr * vmax / n
         return vf, vr
 
     def step(self, target, h_m, now):
@@ -194,7 +200,8 @@ class LandingLaw:
         if self.phase == "SEARCH":
             self._set("ALIGN", now)
 
-        out["v_fwd"], out["v_right"] = self._horizontal(f, r)
+        low = self.phase in ("FINAL", "TOUCHDOWN") or (h_m is not None and h_m < p.final_h)
+        out["v_fwd"], out["v_right"] = self._horizontal(f, r, low)
         # TOUCHDOWN stage: only descend (and commit) with the error inside align_tol
         pause_err = min(p.pause_err, p.align_tol) if self.strict_descent else p.pause_err
 
