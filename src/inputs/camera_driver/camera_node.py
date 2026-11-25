@@ -369,8 +369,20 @@ class CameraNode:
         markers seen in the last max_age_s, or None."""
         now = time.monotonic()
         hs = [h for mid, (h, t) in list(self.cam_heights.items())
-              if now - t <= max_age_s and (not self.pad_centers or mid in self.pad_centers)]
+              if now - t <= max_age_s and (not self.pad_centers or mid in self.pad_centers)
+              and self._in_referee_range(mid, h)]
         return sum(hs) / len(hs) if hs else None
+
+    # A marker's height is trusted only where it is big enough in the image and fully in view:
+    # flight 2026-11-24 20:50, #20 (25 mm) at 1.1 m read 0.93 m (-18 %); the pad table gives
+    # #20 0.09-0.6 m and #10 (100 mm) 0.33-2.5 m, i.e. about 3.3x to 24x the marker side.
+    REFEREE_MIN_SIDES, REFEREE_MAX_SIDES = 3.3, 24.0
+
+    def _in_referee_range(self, mid, h):
+        size = (getattr(self.tracker, "sizes_m", {}) or {}).get(mid) if self.tracker else None
+        if not size:
+            return False
+        return self.REFEREE_MIN_SIDES * size <= h <= self.REFEREE_MAX_SIDES * size
 
     def height_check_sample(self, max_age_s=0.1):
         """camlidar test: ({marker id: camera height m} seen in the last max_age_s,
