@@ -172,6 +172,8 @@ class VehicleState:
         st = getattr(feed, "distance_state", None) if feed else None
         snap = st.gate_snapshot() if st is not None and hasattr(st, "gate_snapshot") else {}
         return {"lidar_raw_m": snap.get("raw_m", -1.0), "lidar_gate": snap.get("status", ""),
+                "lidar_src": snap.get("source", ""),
+                "lidar_cam_m": snap.get("cam_m") if snap.get("cam_m") is not None else -1.0,
                 "lidar_rejected": snap.get("rejected_total", 0)}
 
     def _export_statustext_log(self, n: int = 10) -> List[list]:

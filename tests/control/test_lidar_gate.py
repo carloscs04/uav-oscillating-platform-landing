@@ -93,6 +93,26 @@ def test_disabled_passes_raw():
     assert [g.step(h, i * DT) for i, h in enumerate([0.4, 0.9, 0.4])] == [0.4, 0.9, 0.4]
 
 
+def test_idle_outside_loiter_guided_and_events():
+    from src.inputs.distance_sensor.sensor_state import DistanceState
+    st, mode, msgs = DistanceState(), {"on": False}, []
+    st.set_gate_inputs(vz_up_fn=lambda: 0.0, cam_h_fn=lambda: None,
+                       active_fn=lambda: mode["on"], on_event=msgs.append)
+    for h in [0.45, 0.95, 0.45]:                 # e.g. baro climb in another mode: raw passes
+        st.update_distance(h, "OK")
+        assert st.distance_m == h and st.gate.source == "LIDAR_RAW"
+    mode["on"] = True                            # LOITER/GUIDED armed: gate acts
+    for h in [0.45, 0.45, 0.95, 0.95, 0.45]:
+        st.update_distance(h, "OK")
+        assert st.distance_m == 0.45, st.distance_m
+    assert any("REJECTED" in m for m in msgs) and any("back to normal" in m for m in msgs), msgs
+    st.set_gate_inputs(vz_up_fn=lambda: 0.0, cam_h_fn=lambda: 1.077 * 0.45 - 0.025,
+                       active_fn=lambda: True, on_event=msgs.append)
+    st.update_distance(0.95, "OK")
+    assert abs(st.distance_m - 0.45) < 0.002 and st.gate.source == "CAMERA"
+    assert "CAMERA corrects" in msgs[-1], msgs[-1]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -125,6 +125,8 @@ class FlightExperimentLogger:
         "pi_lidar_raw_m",    # sensor before the spike gate (pi_lidar_m = gated, sent)
         "pi_lidar_gate",     # OK | REJECT_CAM | REJECT_EST | UNRELIABLE
         "pi_lidar_rejected", # samples rejected since the Pi started
+        "pi_lidar_src",      # who decided the used height: LIDAR | CAMERA | ESTIMATE | NONE | LIDAR_RAW
+        "pi_lidar_cam_m",    # camera (ArUco) height on the lidar scale, -1 = no marker
         "pi_flow_samples",
         "pi_flow_age_ms",
         "pi_flow_tx_hz",
@@ -383,6 +385,8 @@ class FlightExperimentLogger:
             pif.get("lidar_raw_m", -1.0),
             pif.get("lidar_gate", ""),
             pif.get("lidar_rejected", 0),
+            pif.get("lidar_src", ""),
+            pif.get("lidar_cam_m", -1.0),
             pif.get("samples", 0),
             pif.get("age_ms", -1),
             pif.get("tx_hz", 0.0),

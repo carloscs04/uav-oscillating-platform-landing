@@ -22,7 +22,8 @@ class VisionExperimentLogger:
 
     FIELDS = ("source", "approval", "du_px", "dv_px", "nx", "ny", "h_m", "x_m", "y_m",
               "fwd_raw_m", "right_raw_m", "fwd_m", "right_m", "h_vert_m", "roll_deg", "pitch_deg",
-              "att_age_s", "age_s", "pad_fwd_m", "pad_right_m", "h_cam_m")
+              "att_age_s", "age_s", "pad_fwd_m", "pad_right_m", "h_cam_m",
+              "z_src", "z_raw_m", "z_gate")
     SHADOW = ("phase", "v_fwd", "v_right", "v_down", "err_m", "target", "note",
               "mode", "sent", "sent_v_fwd", "sent_v_right", "sent_v_down", "sent_reason")
     HEADERS = (("gs_time_iso", "elapsed_s", "detected", "tracking_state") + FIELDS

@@ -1,5 +1,7 @@
 # File: src/logic/master/cmd_nodes/distance_cmd.py
 
+import threading
+import time
 from typing import List
 from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 
@@ -13,7 +15,7 @@ class DistanceCLI(BaseNodeCLI):
     def _register_commands(self):
         self.register_cmd("dist", self.cmd_read, "Read current downward distance in meters", aliases=["read", "get_distance_m"])
         self.register_cmd("lidargate", self.cmd_lidargate,
-                          "Lidar spike gate: status | on | off (off = raw lidar, as before)", aliases=["lgate"])
+                          "Lidar spike gate: status | on | off | watch [s] (who decides the height, 2 lines/s)", aliases=["lgate"])
         self.register_cmd("inject_dist", self.cmd_inject, "Inject manual distance reading <meters>", aliases=["inject_reading"])
 
     def cmd_status(self, _args: List[str]) -> str:
@@ -41,6 +43,10 @@ class DistanceCLI(BaseNodeCLI):
         if gate is None:
             self.log("No lidar gate on this machine.", "ERROR")
             return "LIDARGATE_NONE"
+        if args and args[0].lower() == "watch":
+            secs = max(1.0, min(300.0, float(args[1]) if len(args) > 1 else 30.0))
+            threading.Thread(target=self._gate_watch, args=(st, secs), daemon=True).start()
+            return "LIDARGATE_WATCH"
         if args and args[0].lower() in ("on", "off"):
             gate.p.enabled = args[0].lower() == "on"
             gate.reset()
@@ -55,4 +61,14 @@ class DistanceCLI(BaseNodeCLI):
                  f"{p.est_max_s:.1f} s, settle {p.settle_s:.1f} s, cam = {p.cam_k:.3f} x lidar {p.cam_c_m * 100:+.1f} cm",
                  "STATUS")
         return "LIDARGATE_STATUS"
+
+    def _gate_watch(self, st, secs):
+        end = time.time() + secs
+        while time.time() < end:
+            d = st.gate_snapshot()
+            cm = lambda v: "  --  " if v is None else f"{v * 100:5.1f}"
+            self.log(f"lidargate {d['status']:<10} decides: {d['source']:<9} | lidar {cm(d.get('raw_m'))} cm"
+                     f" | camera {cm(d.get('cam_m'))} cm | used {cm(d.get('used_m'))} cm", "STATUS")
+            time.sleep(0.5)
+        self.log("lidargate watch finished.", "OK")
 

@@ -304,7 +304,9 @@ class VisionCLI(BaseNodeCLI):
             if pt.get("detected"):
                 if pt.get("x_m") is not None:
                     metric = (f"x={pt['x_m'] * 100:+6.1f} y={pt['y_m'] * 100:+6.1f} cm "
-                              f"|{pt['err_m'] * 100:5.1f}| z={pt['h_m'] * 100:5.1f} cm(lidar)")
+                              f"|{pt['err_m'] * 100:5.1f}| z={pt['h_m'] * 100:5.1f} cm({pt.get('z_src') or 'lidar'}"
+                              + (f", raw {pt['z_raw_m'] * 100:.1f}" if pt.get('z_src') not in (None, 'LIDAR', 'LIDAR_RAW')
+                                 and pt.get('z_raw_m') is not None else "") + ")")
                     if pt.get("fwd_m") is not None:
                         metric += (f" || TILT-COMP fwd={pt['fwd_m'] * 100:+6.1f} right={pt['right_m'] * 100:+6.1f} cm"
                                    f" roll={pt['roll_deg']:+5.1f} pitch={pt['pitch_deg']:+5.1f}")

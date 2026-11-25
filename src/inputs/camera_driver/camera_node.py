@@ -357,6 +357,13 @@ class CameraNode:
         h, t = self.cam_heights.get(mid, (None, 0.0))
         return round(h, 4) if h is not None and time.monotonic() - t <= max_age_s else None
 
+    def _z_fields(self):
+        """Which height the controller uses (lidar spike gate): z_src = LIDAR | CAMERA |
+        ESTIMATE | NONE | LIDAR_RAW (gate idle: not armed in LOITER/GUIDED), z_raw_m = sensor."""
+        st = self.height_state
+        snap = st.gate_snapshot() if st is not None and hasattr(st, "gate_snapshot") else {}
+        return {"z_src": snap.get("source"), "z_raw_m": snap.get("raw_m"), "z_gate": snap.get("status")}
+
     def referee_height(self, max_age_s=0.15):
         """Camera-only height (m, as measured) for the lidar spike gate: mean over the pad
         markers seen in the last max_age_s, or None."""
@@ -403,6 +410,7 @@ class CameraNode:
         t = pixel_target(corners, self.model.camera_matrix, self.model.dist_coeffs, lidar)
         t.update(self._tilt_fields(t, lidar, corners, label))
         t["h_cam_m"] = self._cam_height(label)
+        t.update(self._z_fields())
         t.update({"detected": True, "source": label, "known": bool(known),
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),

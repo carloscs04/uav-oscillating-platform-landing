@@ -21,6 +21,14 @@ except ImportError:
     HAS_PIL = False
 
 
+
+def _z_tag(pt):
+    """Who decided z (lidar spike gate on the Pi): '(lidar)', or e.g. '(CAMERA, lidar 0.95)'."""
+    src, raw = pt.get("z_src"), pt.get("z_raw_m")
+    if src in (None, "LIDAR", "LIDAR_RAW"):
+        return "(lidar)"
+    return f"({src}, lidar {raw:.2f})" if isinstance(raw, (int, float)) else f"({src})"
+
 class CameraView(tk.LabelFrame):
     """Live Video Stream & ArUco Target Tracking View."""
 
@@ -93,7 +101,7 @@ class CameraView(tk.LabelFrame):
                                        fg=ACCENT_YELLOW)
             if pt.get("x_m") is not None:
                 self.lbl_coords.config(text=f"x: {pt['x_m'] * 100:+.1f} cm | y: {pt['y_m'] * 100:+.1f} cm | "
-                                            f"z: {pt['h_m']:.2f} m (lidar)")
+                                            f"z: {pt['h_m']:.2f} m {_z_tag(pt)}")
             else:
                 self.lbl_coords.config(text=f"dx: {pt.get('du_px', 0):+.0f} px | dy: {pt.get('dv_px', 0):+.0f} px | no lidar")
         elif pose.get("detected", False):
@@ -203,7 +211,7 @@ class CameraView(tk.LabelFrame):
                 ex, ey, err = pt["x_m"] * 100, pt["y_m"] * 100, pt["err_m"] * 100
                 color = ACCENT_GREEN if err <= 5 else (ACCENT_YELLOW if err <= 15 else ACCENT_RED)
                 txt = (f"{pt.get('source', '?')}  x={ex:+5.1f} cm  y={ey:+5.1f} cm  |{err:4.1f}| cm  "
-                       f"z={pt['h_m']:.2f} m (lidar)")
+                       f"z={pt['h_m']:.2f} m {_z_tag(pt)}")
             else:
                 color = ACCENT_YELLOW
                 txt = (f"{pt.get('source', '?')}  dx={pt.get('du_px', 0):+6.1f} px  "

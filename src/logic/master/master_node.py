@@ -115,7 +115,9 @@ class MasterNode:
         self.mavlink_node.state.set_control_params_provider(self._control_params)
         # Lidar spike gate: Pixhawk vertical speed for the prediction, camera height as referee
         if hasattr(self.distance_node.state, "set_gate_inputs"):
-            self.distance_node.state.set_gate_inputs(vz_up_fn=self._ekf_vz_up, cam_h_fn=self._cam_referee_h)
+            self.distance_node.state.set_gate_inputs(
+                vz_up_fn=self._ekf_vz_up, cam_h_fn=self._cam_referee_h, active_fn=self._gate_active,
+                on_event=lambda msg: self.state.append_cli_log(f"[LIDARGATE] {msg}", "WARN"))
 
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
@@ -197,6 +199,12 @@ class MasterNode:
         if not pkt or t is None or time.time() - t > max_age_s or pkt.get("vz") is None:
             return None
         return -float(pkt["vz"])
+
+    def _gate_active(self) -> bool:
+        """Lidar gate acts only when armed in LOITER (5) or GUIDED (4); else the raw lidar passes."""
+        st = self.mavlink_node.state
+        hb = st.get_packet("HEARTBEAT") or {}
+        return bool(st.is_armed()) and int(hb.get("custom_mode", -1)) in (4, 5)
 
     def _cam_referee_h(self):
         drv = self._camera_driver
