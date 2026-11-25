@@ -13,7 +13,7 @@ class ActionsView(tk.LabelFrame):
     keeps the current stage (TOUCHDOWN -> APPROACH 35 cm). ALIGN / APPROACH / TOUCHDOWN also work on their own (in GUIDED). These buttons never
     change the flight mode: the pilot enters and leaves GUIDED with channel 5."""
 
-    COLOR_IDLE = "#37474f"
+    COLOR_IDLE = "#0277bd"     # off but usable (gray looked disabled)
     COLOR_WAITING = "#f9a825"
     COLOR_ACTIVE = "#2e7d32"
     COLOR_START = "#00695c"
