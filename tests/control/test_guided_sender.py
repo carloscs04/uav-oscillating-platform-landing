@@ -173,13 +173,13 @@ def test_motors_off_only_when_stopped_on_ground():
     s.mission_start()
     s.select("touchdown")
     assert _land_tick(mav, vis, s, 100.0, 0.05, phase="FINAL") == 0     # low but not TOUCHDOWN
-    for i in range(10):                                                 # still descending
-        assert _land_tick(mav, vis, s, 101.0 + i * 0.2, 0.095 - i * 0.008) == 0
+    for i in range(5):                                  # still descending at final speed (0.1 m/s)
+        assert _land_tick(mav, vis, s, 101.0 + i * 0.2, 0.135 - i * 0.02) == 0
     assert _land_tick(mav, vis, s, 110.0, 0.05, phase="FINAL") == 0
     assert _land_tick(mav, vis, s, 111.0, 0.30) == 0                    # lidar jump restarts
     assert _land_tick(mav, vis, s, 112.0, 0.05) == 0
-    assert _land_tick(mav, vis, s, 113.0, 0.05) == 0
-    assert _land_tick(mav, vis, s, 113.6, 0.05) == 1
+    assert _land_tick(mav, vis, s, 112.3, 0.08) == 0                    # settling 3 cm: still counts
+    assert _land_tick(mav, vis, s, 112.7, 0.07) == 1                    # 0.7 s on the ground
 
 
 def test_align_sends_horizontal_only_and_leaving_guided_disarms():

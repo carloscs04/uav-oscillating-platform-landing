@@ -50,8 +50,10 @@ class SenderParams:
     floor_h: float = 0.35       # descend stage: no descent below this lidar height, m
     min_flight_h: float = 0.15  # START and stages refused below this lidar height, m
     disarm_h: float = 0.14      # land stage: motors off only below this lidar height, m
-    disarm_after_s: float = 1.5 # ... continuously for this long
-    disarm_band_m: float = 0.03 # ... with the height moving less than this (not still descending)
+    disarm_after_s: float = 0.6 # ... continuously for this long (2026-11-24 21:53: with 1.5 s /
+                                #     3 cm it sat 0.9 s on the pad, kept settling 9-12 cm and the
+                                #     Pixhawk tipped it over before the timer completed)
+    disarm_band_m: float = 0.05 # ... with the height moving less than this (not still descending)
     hold_kp: float = 0.6        # height hold with the lidar (stop/align/approach floor): m/s per m
     hold_v_max: float = 0.08    # ... at most this up or down, m/s
     hold_deadband: float = 0.02 # ... no correction inside this band, m
