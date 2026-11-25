@@ -47,6 +47,7 @@ class TargetTracker:
         self.sizes_m = sizes_m or {}
         self.max_reproj_err_px = max_reproj_err_px
         self.primary_ids = list(primary_ids or [])
+        self._rejected_log = {}
         self.alpha = float(min(max(smoothing, 0.01), 1.0))
         self.max_jump_m = max_jump_m
         self.hold_s = hold_s
@@ -59,6 +60,11 @@ class TargetTracker:
         found = self.detector.detect(gray)
         ms = estimate_all(found, self.sizes_m, self.camera, stamp, self.max_reproj_err_px)
         good = [m for m in ms if m.reliable]
+        for m in ms:  # say why a marker is seen but ignored (at most every 2 s per ID)
+            if not m.reliable and stamp - self._rejected_log.get(m.marker_id, -1e9) > 2.0:
+                self._rejected_log[m.marker_id] = stamp
+                print(f"[TRACKER] ID {m.marker_id} seen but rejected: reproj "
+                      f"{m.reproj_err_px:.1f} px, z {m.tvec[2]:.2f} m")
         for m in good:
             if m.marker_id in self.tracks:
                 self.tracks[m.marker_id].update(m, self.alpha, self.max_jump_m)

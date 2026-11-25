@@ -76,7 +76,10 @@ def estimate_pose(marker_id, corners, size_m, camera, stamp=0.0, max_reproj_err_
     pts = np.asarray(corners, float).reshape(4, 2)
     marker_px = float(np.mean(np.linalg.norm(pts - np.roll(pts, 1, axis=0), axis=1)))
 
-    reliable = bool(tvec[2] > 0 and err <= max_reproj_err_px)
+    # The pixel error grows with the marker's size in the image (paper curl, residual lens
+    # distortion), so a fixed 2 px rejected the big ID 10 while the 2.5 cm ID 20 passed
+    # (flight 2026-11-24 22:16). Allow 3 % of the side length, never less than the setting.
+    reliable = bool(tvec[2] > 0 and err <= max(max_reproj_err_px, 0.03 * marker_px))
     return MarkerMeasurement(
         marker_id=int(marker_id), stamp=stamp, tvec=tvec, rvec=rvec,
         distance=float(np.linalg.norm(tvec)), reproj_err_px=err, ambiguity=ambiguity,
