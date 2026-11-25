@@ -146,7 +146,9 @@ class LidarGate:
                     old = e
             if old is not None and old[2] is not None and abs(raw - (old[1] + bf - old[2])) > p.win_jump_m:
                 win_bad = True
-                self._anchor = old           # the samples after it were already drifting
+                self._anchor = old           # the samples after it were already drifting:
+                while self._hist and self._hist[-1] is not old:
+                    self._hist.pop()         # forget them, never anchor on them again
                 pred = old[1] + (bf - old[2])
         if abs(raw - pred) <= p.jump_m and self._disagree < p.disagree_n and not win_bad:
             if self.status in (self.CAM, self.EST, self.UNRELIABLE):
