@@ -74,7 +74,7 @@ Run with the onboard config so only ID 10 is accepted (the default `tests/camera
 accepts IDs 10, 25, 32 — the mat's ID 32 would be read as 100 mm):
 
 ```bash
-sudo systemctl stop drone   # or Ctrl+C main.py — only one program can open the camera
+sudo systemctl stop uav-opl   # the onboard main.py service — only one program can open the camera
 python3 tests/vision/aruco_live.py --config src/inputs/camera_driver/config.yaml
 ```
 
