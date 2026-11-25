@@ -184,8 +184,8 @@ class VisionCLI(BaseNodeCLI):
         if not ok:
             self.log(f"CANNOT RUN {str(stage).upper() or 'STAGE'}: {msg}.", "ERROR")
             return "LANDSHADOW_ARM_REFUSED"
-        if drv is not None and (not keep or gs.stage == "stop" or drv.landing.phase == "HOLD"):
-            drv.landing.reset()             # start from SEARCH
+        if drv is not None and (not keep or gs.stage == "stop" or drv.landing.phase in ("HOLD", "TOUCHDOWN")):
+            drv.landing.reset()             # start from SEARCH (TOUCHDOWN off: re-centre while climbing to 35 cm)
         if gs.stage == "descend":
             self.log(f"APPROACH: aligning and descending to {gs.approach_h * 100:.0f} cm.", "OK")
             h = (self.manager.state.get_landing_shadow() or {}).get("h_m")

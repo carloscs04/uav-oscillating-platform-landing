@@ -20,6 +20,11 @@ class ActionsView(tk.LabelFrame):
     COLOR_STOP = "#ef6c00"
     LEVELS = ("align", "descend", "land")
     LABELS = {"align": "ALIGN", "descend": "APPROACH", "land": "TOUCHDOWN"}
+    # buttons lit for each stage the Pi reports (TOUCHDOWN aligns too, it does not need APPROACH)
+    ACTIVE_WITH = {"align": ("align",), "descend": ("align", "descend"), "land": ("align", "land")}
+    # pressing an ACTIVE button: ALIGN off = hold, APPROACH off = align only,
+    # TOUCHDOWN off = APPROACH 35 cm (safety: climbs back to 35 cm if it is lower)
+    OFF_TO = {"align": "hold", "descend": "align", "land": "descend"}
 
     def __init__(self, parent, controller=None, **kwargs):
         super().__init__(
@@ -120,13 +125,12 @@ class ActionsView(tk.LabelFrame):
             text="STOP MISSION" if self._mission else "START MISSION",
             bg=self.COLOR_STOP if self._mission else self.COLOR_START,
         )
-        level = self.LEVELS.index(stage) if stage in self.LEVELS else -1
-        for i, name in enumerate(self.LEVELS):      # APPROACH and TOUCHDOWN include the stages before
-            color = self.COLOR_IDLE
-            if i <= level:
-                color = self.COLOR_ACTIVE if state == "ACTIVE" else self.COLOR_WAITING
+        on = self.ACTIVE_WITH.get(stage, ())       # APPROACH and TOUCHDOWN also light ALIGN
+        for name in self.LEVELS:
+            active = name in on
+            color = (self.COLOR_ACTIVE if state == "ACTIVE" else self.COLOR_WAITING) if active else self.COLOR_IDLE
             label = self.LABELS[name]
-            self.stage_buttons[name].config(bg=color, text=f"STOP {label}" if i <= level else label)
+            self.stage_buttons[name].config(bg=color, text=f"STOP {label}" if active else label)
 
         self.after(200, self._sync_ui_loop)
 
@@ -151,11 +155,10 @@ class ActionsView(tk.LabelFrame):
             self._dispatch_to_master("landshadow start", "[TX] START MISSION: align -> approach 70 -> 40 -> touchdown.")
 
     def cmd_stage(self, name: str):
-        """On = run up to this stage. Off = fall back to the previous one (ALIGN off = hold)."""
-        i = self.LEVELS.index(name)
-        current = self.LEVELS.index(self._live_stage) if self._live_stage in self.LEVELS else -1
-        target = self.LEVELS[i] if current < i else (self.LEVELS[i - 1] if i else "hold")
-        self._dispatch_to_master(f"landshadow arm {target}", f"[TX] Stage: {target}.")
+        """On/off. The Pi refuses (and says why in the log) unless armed, flying and in GUIDED."""
+        active = name in self.ACTIVE_WITH.get(self._live_stage, ())
+        target = self.OFF_TO[name] if active else name
+        self._dispatch_to_master(f"landshadow arm {target}", f"[TX] {self.LABELS[name]} {'OFF' if active else 'ON'} -> {target}.")
 
     def cmd_calibrate(self):
         """Gyro, level and baro in that order, on the Pi (each waits for the Pixhawk ACK)."""
