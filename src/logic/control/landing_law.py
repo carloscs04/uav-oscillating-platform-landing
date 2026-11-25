@@ -162,6 +162,16 @@ class LandingLaw:
                     out["phase"] = self.phase
                     return self._round(out)
                 self.committed = False          # lifted well above: normal rules again
+            # Already on the ground (lidar at landed height) but the marker is gone: that is a landing,
+            # not a loss. Flight 2026-11-24 22:27: lost #20 at 16 cm, sank onto the pad (lidar 0.09),
+            # sat 2.5 s with motors up, then "lost low: climbing" lifted off the ground and it went
+            # unstable. TOUCHDOWN lets the sender disarm once the height is steady.
+            if (self.phase in ("FINAL", "TOUCHDOWN") and h_m is not None and h_m < p.touchdown_h):
+                self._set("TOUCHDOWN", now, h_m)
+                self.climb = False
+                out.update(phase=self.phase, v_down=p.final_speed,
+                           note="on the ground, marker lost: touchdown")
+                return self._round(out)
             if self.phase in ("DESCEND", "FINAL") and lost is not None and lost >= p.lost_search_s:
                 self.climb = True
             if lost is None or lost >= p.lost_search_s:

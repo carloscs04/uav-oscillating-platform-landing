@@ -199,3 +199,18 @@ def test_final_waits_for_5cm_even_committed():
     assert o["v_down"] > 0
     o = law.step((0.07, 0.0), 0.14, t)                   # very low: keeps going down
     assert o["v_down"] > 0
+
+
+def test_lost_off_centre_but_on_ground_touches_down_not_climbs():
+    """Flight 2026-11-24 22:27: lost #20 3.6 cm off-centre, sank onto the pad (lidar 0.09),
+    then climbed off the ground after lost_search_s and went unstable."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.phase, law.committed = "FINAL", True
+    law.step((0.036, 0.0), 0.16, 0.0)
+    o = law.step(None, 0.16, 0.05)                         # still in the air: no blind descent
+    assert o["v_down"] == 0.0
+    for i in range(100):                                   # 5 s on the ground: never climbs
+        o = law.step(None, 0.09, 0.1 + 0.05 * i)
+        assert o["v_down"] >= 0.0, (i, o)
+    assert law.phase == "TOUCHDOWN"
