@@ -9,8 +9,9 @@ from ground_station.transmiters.main_command_tx import MainCommandTransmitter
 
 
 class ActionsView(tk.LabelFrame):
-    """GUIDED landing mission. START enables the stages, STOP holds and disables them. These
-    buttons never change the flight mode: the pilot enters and leaves GUIDED with channel 5."""
+    """GUIDED landing. START MISSION runs ALIGN -> 70 cm -> 40 cm -> TOUCHDOWN on its own; STOP
+    holds. ALIGN / APPROACH / TOUCHDOWN also work on their own (in GUIDED). These buttons never
+    change the flight mode: the pilot enters and leaves GUIDED with channel 5."""
 
     COLOR_IDLE = "#37474f"
     COLOR_WAITING = "#f9a825"
@@ -119,7 +120,7 @@ class ActionsView(tk.LabelFrame):
             text="STOP MISSION" if self._mission else "START MISSION",
             bg=self.COLOR_STOP if self._mission else self.COLOR_START,
         )
-        level = self.LEVELS.index(stage) if self._mission and stage in self.LEVELS else -1
+        level = self.LEVELS.index(stage) if stage in self.LEVELS else -1
         for i, name in enumerate(self.LEVELS):      # APPROACH and TOUCHDOWN include the stages before
             color = self.COLOR_IDLE
             if i <= level:
@@ -147,7 +148,7 @@ class ActionsView(tk.LabelFrame):
         if self._mission:
             self._dispatch_to_master("landshadow stop", "[TX] STOP MISSION: holding, stages disabled.")
         else:
-            self._dispatch_to_master("landshadow start", "[TX] START MISSION: holding, choose a stage.")
+            self._dispatch_to_master("landshadow start", "[TX] START MISSION: align -> approach 70 -> 40 -> touchdown.")
 
     def cmd_stage(self, name: str):
         """On = run up to this stage. Off = fall back to the previous one (ALIGN off = hold)."""

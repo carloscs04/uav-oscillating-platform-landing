@@ -133,8 +133,8 @@ class VisionCLI(BaseNodeCLI):
                 return "NO_SENDER"
             in_guided = gs._guided_now()[0]
             gs.mission_stop()
-            self.log("MISSION STOPPED: holding in GUIDED, stages disabled. Sticks return when you "
-                     "leave GUIDED with ch5." if in_guided else "MISSION STOPPED: nothing is sent.", "OK")
+            self.log("MISSION STOPPED: holding in GUIDED. Sticks return when you leave GUIDED with ch5."
+                     if in_guided else "MISSION STOPPED: nothing is sent.", "OK")
             return "LANDSHADOW_STOP"
         if args and args[0].lower() == "start":
             if gs is None:
@@ -146,7 +146,10 @@ class VisionCLI(BaseNodeCLI):
                 return "LANDSHADOW_START_REFUSED"
             if drv is not None:
                 drv.landing.reset()
-            self.log("MISSION STARTED: holding. Choose ALIGN, APPROACH or TOUCHDOWN.", "OK")
+            q = gs.p
+            self.log(f"MISSION STARTED: ALIGN -> {q.auto_h1 * 100:.0f} cm ({q.auto_hold1_s:.0f} s) -> "
+                     f"{q.auto_h2 * 100:.0f} cm ({q.auto_hold2_s:.0f} s) -> TOUCHDOWN with error <= "
+                     f"{q.auto_td_err * 100:.1f} cm. Any stage button or STOP ends it.", "OK")
             return "LANDSHADOW_START"
         if args and args[0].lower() in ("arm", "disarm"):
             if gs is None:
@@ -160,7 +163,7 @@ class VisionCLI(BaseNodeCLI):
         self.log(self._shadow_text(), "STATUS")
         if gs is not None:
             st = gs.status()
-            self.log(f"  sender: {gs.mode_word()}  in_guided={st['in_guided']}  sent={st['sent_count']}  "
+            self.log(f"  sender: {gs.mode_word()}  mission={st.get('auto_step') or 'off'}  in_guided={st['in_guided']}  sent={st['sent_count']}  "
                      f"last fwd={st['v_fwd'] * 100:+.1f} right={st['v_right'] * 100:+.1f} "
                      f"down={st['v_down'] * 100:+.1f} cm/s  ({st['reason']})  floor={gs.p.floor_h} m", "STATUS")
         if drv is not None:
@@ -199,8 +202,7 @@ class VisionCLI(BaseNodeCLI):
     def cmd_approach(self, args: List[str]) -> str:
         """approach [distance]: 0.35-1 m or 35-100 cm; default 35 cm."""
         if not args:
-            if self.guided_sender is not None and self.guided_sender.mission:
-                self.log("No distance given: using the default 35 cm.", "OK")
+            self.log("No distance given: using the default 35 cm.", "OK")
             return self._select_stage("approach")
         text = args[0].lower()
         try:

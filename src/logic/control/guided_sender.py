@@ -24,8 +24,15 @@ Stages (what the law is allowed to do):
     stop     holds in GUIDED with zero velocity; the sticks do nothing until the pilot leaves
              GUIDED with channel 5.
 
-Mission: START MISSION (mission_start) enables the stages and begins holding. STOP
-(mission_stop) holds again and refuses every stage until the next START. Leaving GUIDED ends it.
+Stage buttons work on their own (no START needed), only while armed, flying and in GUIDED.
+
+Mission: START MISSION (mission_start) runs the whole sequence with no more buttons:
+    1. ALIGN at the current height until the law is aligned (leaves ALIGN)
+    2. APPROACH to auto_h1 (70 cm), then stay there auto_hold1_s (25 s)
+    3. APPROACH to auto_h2 (40 cm), then stay there auto_hold2_s (30 s)
+    4. wait there until the xy error is <= auto_td_err (2.5 cm) for auto_td_hold_s
+    5. TOUCHDOWN (the same precise land stage) and motors off on the ground
+Any stage button or STOP MISSION ends the sequence (STOP holds). Leaving GUIDED ends it.
 """
 
 import math
@@ -58,6 +65,14 @@ class SenderParams:
     hold_v_max: float = 0.08    # ... at most this up or down, m/s
     hold_deadband: float = 0.02 # ... no correction inside this band, m
                                 # (flight 2026-11-23: with v_down = 0 the drone sank 0.6 -> 0.15 m)
+    # START MISSION sequence
+    auto_h1: float = 0.70       # first approach height, m
+    auto_hold1_s: float = 25.0  # ... time there once arrived, s
+    auto_h2: float = 0.40       # second approach height (0.35-0.50), m
+    auto_hold2_s: float = 30.0  # ... time there once arrived, s
+    auto_arrive_m: float = 0.03 # arrived = lidar within this of the approach height, m
+    auto_td_err: float = 0.025  # TOUCHDOWN starts only with the xy error at or below this, m
+    auto_td_hold_s: float = 0.5 # ... continuously for this long, s
 
     @classmethod
     def from_dict(cls, d):
@@ -73,7 +88,9 @@ class GuidedSender:
         self._log = log or (lambda msg, level="INFO": print(f"[GUIDED_SENDER] {msg}"))
         self._lock = threading.Lock()
         self.stage = None               # None = disarmed (shadow only)
-        self.mission = False            # START MISSION pressed: stages are allowed
+        self.mission = False            # START MISSION sequence running
+        self.auto_step = None           # sequence step name, or None
+        self._auto_since = None         # arrival / error-ok time for the current step
         self.approach_h = self.p.floor_h  # APPROACH target height, m
         self._td_since = None           # touchdown confirmation window
         self._td_min = self._td_max = 0.0
@@ -140,21 +157,25 @@ class GuidedSender:
             return False, why
         with self._lock:
             self.mission = True
-        return self.arm("stop")
+            self.auto_step, self._auto_since = "align", None
+        self._log("MISSION: 1/4 ALIGN at this height", "OK")
+        return self.arm("align")
+
+    def _cancel_auto(self):
+        with self._lock:
+            self.mission, self.auto_step, self._auto_since = False, None, None
 
     def mission_stop(self):
-        """Hold (in GUIDED) or cancel (outside it); every stage is refused until the next START."""
+        """Ends the sequence: holds (in GUIDED) or cancels (outside it)."""
+        self._cancel_auto()
         if self._guided_now()[0]:
             self.arm("stop")
-            with self._lock:
-                self.mission = False
         else:
             self.disarm("pilot")
 
     def select(self, stage, approach_h=None):
-        """A stage button: only works while the mission is started and the drone is flying."""
-        if not self.mission:
-            return False, "mission not started (press START MISSION)"
+        """A stage button, on its own (ends a running START MISSION sequence). Only while the
+        drone is armed, flying and in GUIDED."""
         name = STAGE_ALIASES.get((stage or "").lower(), (stage or "").lower())
         if name != "stop" and self.stage not in ("align", "descend", "land"):  # never block a step back
             ok, why = self.flight_check()
@@ -165,13 +186,14 @@ class GuidedSender:
             if not APPROACH_MIN_M <= target <= APPROACH_MAX_M:
                 return False, f"approach height must be {APPROACH_MIN_M:.2f}-{APPROACH_MAX_M:.2f} m"
             self.approach_h = target
+        self._cancel_auto()
         return self.arm(stage)
 
     def disarm(self, reason="pilot"):
         with self._lock:
             was = self.stage
             self.stage = None
-            self.mission = False
+            self.mission, self.auto_step, self._auto_since = False, None, None
             self.last.update(sent=False, v_fwd=0.0, v_right=0.0, v_down=0.0, reason=f"disarmed: {reason}")
         if was and reason == "pilot" and self._guided_now()[0]:
             self.mav.send_velocity_body(0.0, 0.0, 0.0)  # do not coast on the last setpoint
@@ -181,7 +203,8 @@ class GuidedSender:
     def status(self):
         with self._lock:
             d = dict(self.last)
-            d.update(stage=self.stage, in_guided=self.in_guided, sent_count=self.sent_count)
+            d.update(stage=self.stage, in_guided=self.in_guided, sent_count=self.sent_count,
+                     auto_step=self.auto_step)
         return d
 
     def mode_word(self):
@@ -237,6 +260,9 @@ class GuidedSender:
 
         ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
         t = ls.get("t")
+        if self.mission and t is not None and now - t <= self.p.law_max_age_s:
+            self._auto_tick(ls, now)
+            stage = self.stage
         reason = "law"
         if stage == "stop":
             vf = vr = vd = 0.0
@@ -283,6 +309,50 @@ class GuidedSender:
             self.last = {"sent": True, "v_fwd": round(vf, 4), "v_right": round(vr, 4),
                          "v_down": round(vd, 4), "reason": reason, "t": now}
         return vf, vr, vd
+
+    def _auto_tick(self, ls, now):
+        """START MISSION sequence: advance to the next step when this one is done."""
+        p, step = self.p, self.auto_step
+        h, err, phase = ls.get("h_m"), ls.get("err_m"), ls.get("phase")
+
+        def go(name, stage, msg, approach_h=None):
+            with self._lock:
+                self.auto_step, self._auto_since = name, None
+            if approach_h is not None:
+                self.approach_h = approach_h
+            self._log(f"MISSION: {msg}", "OK")
+            self.arm(stage)
+
+        def arrived_for(target, hold_s):
+            """True once the lidar height has been at target (or below it) for hold_s."""
+            if h is None or h > target + p.auto_arrive_m:
+                self._auto_since = None
+                return False
+            if self._auto_since is None:
+                self._auto_since = now
+                self._log(f"MISSION: at {target * 100:.0f} cm, staying {hold_s:.0f} s", "OK")
+            return now - self._auto_since >= hold_s
+
+        if step == "align":
+            if phase in ("DESCEND", "FINAL"):            # law aligned
+                if h is not None and h < p.auto_h1 - p.auto_arrive_m:
+                    go("approach2", "descend", f"2/4 already below {p.auto_h1 * 100:.0f} cm: "
+                       f"APPROACH {p.auto_h2 * 100:.0f} cm", p.auto_h2)
+                else:
+                    go("approach1", "descend", f"2/4 APPROACH {p.auto_h1 * 100:.0f} cm", p.auto_h1)
+        elif step == "approach1":
+            if arrived_for(p.auto_h1, p.auto_hold1_s):
+                go("approach2", "descend", f"3/4 APPROACH {p.auto_h2 * 100:.0f} cm", p.auto_h2)
+        elif step == "approach2":
+            if arrived_for(p.auto_h2, p.auto_hold2_s):
+                go("centring", "descend", f"waiting for xy error <= {p.auto_td_err * 100:.1f} cm")
+        elif step == "centring":
+            if err is None or err > p.auto_td_err:
+                self._auto_since = None
+            elif self._auto_since is None:
+                self._auto_since = now
+            elif now - self._auto_since >= p.auto_td_hold_s:
+                go("touchdown", "land", f"4/4 TOUCHDOWN (error {err * 100:.1f} cm)")
 
     def _hold(self, stage, h, target=None):
         """v_down that keeps the lidar height at target (stop/align: the height when the stage

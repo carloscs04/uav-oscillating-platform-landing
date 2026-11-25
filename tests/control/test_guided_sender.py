@@ -101,33 +101,77 @@ def test_pilot_disarm_in_guided_sends_one_zero():
     assert mav.sent == [(0.0, 0.0, 0.0)]
 
 
-def test_stages_need_start_and_stop_blocks_them():
+def test_stages_work_alone_only_in_guided_and_flying():
     mav, vis, s = make()
-    mav.state.set(GUIDED)
-    s.tick()
-    assert not s.select("align")[0] and s.stage is None
     vis.set(0.0, 0.0, 0.0, h=0.05)
-    assert not s.mission_start()[0] and not s.mission          # on the ground: error
-    mav.state.set(GUIDED, armed=False)
-    vis.set(0.0, 0.0, 0.0, h=1.0)
-    assert "not armed" in s.mission_start()[1]
-    mav.state.set(LOITER)
-    assert "GUIDED" in s.mission_start()[1] and not s.mission and s.stage is None
     mav.state.set(GUIDED)
-    assert s.mission_start()[0]
-    assert s.stage == "stop" and s.select("align")[0]
+    assert not s.select("align")[0] and s.stage is None        # on the ground
+    assert not s.mission_start()[0] and not s.mission
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    mav.state.set(LOITER)
+    assert "GUIDED" in s.select("align")[1] and s.stage is None
+    assert "GUIDED" in s.mission_start()[1] and not s.mission
+    mav.state.set(GUIDED, armed=False)
+    assert "not armed" in s.select("touchdown")[1]
+    mav.state.set(GUIDED)
+    assert s.select("align")[0] and s.stage == "align" and not s.mission   # no START needed
     assert not s.select("approach", 1.5)[0] and s.stage == "align"
-    assert s.select("approach", 0.6)[0] and s.approach_h == 0.6
-    vis.set(0.0, 0.0, 0.1, h=0.55)
+    assert s.select("approach", 0.45)[0] and s.approach_h == 0.45
+    vis.set(0.0, 0.0, 0.1, h=0.40)
     assert -0.08 <= s.tick()[2] < 0.0                          # below the typed height: climbs back
     assert s.select("approach")[0] and s.approach_h == 0.35
+    assert s.select("touchdown")[0] and s.stage == "land"
+    assert s.mission_start()[0] and s.mission and s.stage == "align"
     s.mission_stop()
-    assert s.stage == "stop" and not s.mission and not s.select("touchdown")[0]
-    vis.set(0.2, 0.0, 0.1)
-    assert s.tick() == (0.0, 0.0, 0.0)
+    assert s.stage == "stop" and not s.mission and s.select("touchdown")[0]
     mav.state.set(LOITER)
     s.tick()
     assert s.stage is None and not s.mission
+
+
+def test_start_mission_runs_the_whole_sequence():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    p = s.p
+    t = [time.monotonic()]
+
+    def law(phase, h, err=0.05, vd=0.1):
+        vis.ls = {"v_fwd": 0.0, "v_right": 0.0, "v_down": vd, "h_m": h, "t": t[0],
+                  "phase": phase, "err_m": err}
+
+    def run(seconds, *a, **k):
+        end = t[0] + seconds
+        while t[0] < end:
+            law(*a, **k)
+            s.tick(now=t[0])
+            t[0] += 0.1
+
+    law("ALIGN", 1.0)
+    assert s.mission_start()[0] and s.stage == "align" and s.auto_step == "align"
+    run(2.0, "ALIGN", 1.0)
+    assert s.auto_step == "align" and mav.sent[-1][2] == 0.0  # aligning: no descent
+    run(0.2, "DESCEND", 1.0)
+    assert s.auto_step == "approach1" and s.stage == "descend" and s.approach_h == p.auto_h1
+    run(p.auto_hold1_s - 1.0, "DESCEND", p.auto_h1)
+    assert s.auto_step == "approach1"                        # still waiting the 25 s
+    run(1.5, "DESCEND", p.auto_h1)
+    assert s.auto_step == "approach2" and s.approach_h == p.auto_h2
+    run(p.auto_hold2_s + 0.5, "DESCEND", p.auto_h2)
+    assert s.auto_step == "centring" and s.stage == "descend"
+    run(3.0, "DESCEND", p.auto_h2, err=0.04)                 # 4 cm: never touches down
+    assert s.stage == "descend"
+    run(0.3, "DESCEND", p.auto_h2, err=0.02)
+    run(0.1, "DESCEND", p.auto_h2, err=0.05)                 # broken: timer restarts
+    run(0.8, "DESCEND", p.auto_h2, err=0.02)
+    assert s.auto_step == "touchdown" and s.stage == "land" and s.mission
+
+
+def test_stage_button_ends_the_sequence():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    s.mission_start()
+    assert s.select("approach", 0.5)[0] and not s.mission and s.auto_step is None
 
 
 def test_stop_and_align_hold_the_lidar_height():
