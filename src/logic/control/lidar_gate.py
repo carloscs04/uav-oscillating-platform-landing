@@ -36,7 +36,7 @@ from dataclasses import dataclass
 
 @dataclass
 class LidarGateParams:
-    enabled: bool = True
+    enabled: bool = False       # OFF by default after the 2026-11-24 21:41 flight (lidargate on)
     jump_m: float = 0.10        # |lidar - prediction| above this = suspect (99.9 % of flight samples < 9 cm)
     cam_agree_m: float = 0.07   # lidar within this of the camera -> the step is real
     cam_disagree_m: float = 0.10  # no step, but lidar this far from the camera ...

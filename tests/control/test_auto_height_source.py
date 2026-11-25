@@ -64,6 +64,7 @@ def make():
     mav, logs = FakeMav(), []
     a = AutoHeightSource(mav, FakeDist(), log=lambda m, l="": logs.append(m))
     a.ACK_TIMEOUT_S = 0.2
+    a.enabled = True
     return a, mav.state, logs
 
 

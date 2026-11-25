@@ -10,7 +10,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.logic.control.lidar_gate import LidarGate, LidarGateParams  # noqa: E402
+from src.logic.control import lidar_gate as _lg  # noqa: E402
+from src.logic.control.lidar_gate import LidarGateParams  # noqa: E402
+
+
+def LidarGate(params=None):  # tests exercise the gate itself: enabled unless told otherwise
+    return _lg.LidarGate(params or LidarGateParams(enabled=True))
 
 DT = 0.033   # ~30 Hz
 
@@ -149,6 +154,7 @@ def test_disabled_passes_raw():
 def test_idle_outside_loiter_guided_and_events():
     from src.inputs.distance_sensor.sensor_state import DistanceState
     st, mode, msgs = DistanceState(), {"on": False}, []
+    st.gate.p.enabled = True
     st.set_gate_inputs(vz_up_fn=lambda: 0.0, cam_h_fn=lambda: None,
                        active_fn=lambda: mode["on"], on_event=msgs.append)
     for h in [0.45, 0.95, 0.45]:                 # e.g. baro climb in another mode: raw passes

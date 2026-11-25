@@ -34,7 +34,7 @@ class AutoHeightSource(threading.Thread):
         self.mav = mavlink_node
         self.dist = distance_state
         self.log = log
-        self.enabled = True
+        self.enabled = False         # OFF by default after the 2026-11-24 21:41 flight (autoheight on)
         self.running = False
         self._was_armed = False
         self.base = None            # height source set at arming
