@@ -117,6 +117,7 @@ class MasterNode:
         if hasattr(self.distance_node.state, "set_gate_inputs"):
             self.distance_node.state.set_gate_inputs(
                 vz_up_fn=self._ekf_vz_up, cam_h_fn=self._cam_referee_h, active_fn=self._gate_active,
+                baro_fn=self._baro_alt,
                 on_event=lambda msg: self.state.append_cli_log(f"[LIDARGATE] {msg}", "WARN"))
 
         # 2. Isolated Telemetry Simulator
@@ -199,6 +200,14 @@ class MasterNode:
         if not pkt or t is None or time.time() - t > max_age_s or pkt.get("vz") is None:
             return None
         return -float(pkt["vz"])
+
+    def _baro_alt(self, max_age_s: float = 0.5):
+        """Barometric altitude (m, standard atmosphere, any zero) from SCALED_PRESSURE, or None."""
+        pkt, t = self.mavlink_node.state.get_packet_with_time("SCALED_PRESSURE")
+        if not pkt or t is None or time.time() - t > max_age_s:
+            return None
+        p = float(pkt.get("press_abs") or 0.0)
+        return 44330.0 * (1.0 - (p / 1013.25) ** 0.1903) if p > 0 else None
 
     def _gate_active(self) -> bool:
         """Lidar gate acts only when armed in LOITER (5) or GUIDED (4); else the raw lidar passes."""

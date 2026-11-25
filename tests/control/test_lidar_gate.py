@@ -63,7 +63,7 @@ def test_prediction_follows_descent():
 
 
 def test_recorded_flights_no_false_rejects():
-    """Every armed flight from the platform day (2026-11-23): no jumps there -> nothing rejected."""
+    """Every LOITER/GUIDED sample of the platform day (2026-11-23), with baro: nothing rejected."""
     root = Path(__file__).resolve().parents[2] / "experiments" / "flights" / "2026-11-23"
     files = sorted(glob.glob(str(root / "*.csv")))
     if not files:
@@ -81,7 +81,15 @@ def test_recorded_flights_no_false_rejects():
                 continue
             if r.get("armed") != "1" or h < 0:
                 continue
-            g.step(h, t, -vz, None)
+            if r.get("custom_mode") not in ("4", "5"):     # the gate acts only in GUIDED/LOITER
+                g.idle(h, t)
+                continue
+            try:
+                pr = float(r["baro_press_hpa"])
+                baro = 44330.0 * (1.0 - (pr / 1013.25) ** 0.1903) if pr > 0 else None
+            except (KeyError, ValueError):
+                baro = None
+            g.step(h, t, -vz, None, baro)
             total += 1
         rej += g.rejected_total
     print(f"  recorded 2026-11-23: {total} samples, {rej} rejected")
@@ -102,6 +110,31 @@ def test_camera_noise_does_not_override_lidar():
     cam = [0.50 + rnd.gauss(0, 0.02) for _ in seq]
     g, out = run(seq, cam=cam)
     assert g.rejected_total == 0 and all(o == 0.50 for o in out)
+
+
+def test_gradual_slot_without_camera_caught_by_baro():
+    """Slot entering the lidar cone: +4 cm per sample (never a 10 cm 'jump'), drone still."""
+    seq = [0.45] * 30 + [0.45 + 0.04 * i for i in range(1, 13)] + [0.93] * 30
+    g = LidarGate()
+    out = [g.step(h, i * DT, 0.0, None, 100.0) for i, h in enumerate(seq)]
+    assert max(o for o in out if o is not None) < 0.62, max(out)
+    assert all(o is not None and abs(o - 0.45) < 0.03 for o in out[-25:]), out[-25:]
+    assert g.source == "ESTIMATE" and g.pred_src == "baro"
+
+
+def test_real_descent_followed_by_baro_not_rejected():
+    """Drone descends 0.3 m/s from 1.0 m: lidar and baro move together -> all accepted."""
+    seq = [1.0 - 0.3 * i * DT for i in range(80)]
+    g = LidarGate()
+    out = [g.step(h, i * DT, -0.3, None, 100.0 + (h - 1.0)) for i, h in enumerate(seq)]
+    assert g.rejected_total == 0 and out == seq
+
+
+def test_baro_estimate_lasts_longer():
+    seq = [0.45] * 20 + [0.95] * int(3.5 / DT)
+    g = LidarGate()
+    out = [g.step(h, i * DT, 0.0, None, 50.0) for i, h in enumerate(seq)]
+    assert out[-1] is not None and abs(out[-1] - 0.45) < 1e-6 and g.status == "REJECT_EST"
 
 
 def test_disabled_passes_raw():

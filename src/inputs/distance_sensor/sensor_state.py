@@ -23,13 +23,15 @@ class DistanceState:
         self._vz_up_fn: Optional[Callable[[], Optional[float]]] = None
         self._cam_h_fn: Optional[Callable[[], Optional[float]]] = None
         self._active_fn: Optional[Callable[[], bool]] = None
+        self._baro_fn: Optional[Callable[[], Optional[float]]] = None
         self.test_until: float = 0.0   # `lidargate test`: gate active on the bench (disarmed only)
 
-    def set_gate_inputs(self, vz_up_fn=None, cam_h_fn=None, active_fn=None, on_event=None):
+    def set_gate_inputs(self, vz_up_fn=None, cam_h_fn=None, active_fn=None, on_event=None, baro_fn=None):
         """vz_up_fn() -> Pixhawk vertical speed m/s (+ up) or None; cam_h_fn() -> camera-only
         ArUco height m or None; active_fn() -> True when the gate may act (armed in LOITER or
         GUIDED; None = always); on_event(text) -> one line per decision change."""
         self._vz_up_fn, self._cam_h_fn, self._active_fn = vz_up_fn, cam_h_fn, active_fn
+        self._baro_fn = baro_fn     # barometric altitude m (any zero) or None
         self.gate.on_event = on_event
 
     @staticmethod
@@ -40,10 +42,10 @@ class DistanceState:
             return None
 
     def update_distance(self, dist_m: float, status: str = "OK"):
-        vz = cam = None
+        vz = cam = baro = None
         active = True
         if status == "OK":   # providers read other states: call them outside our lock
-            vz, cam = self._safe(self._vz_up_fn), self._safe(self._cam_h_fn)
+            vz, cam, baro = self._safe(self._vz_up_fn), self._safe(self._cam_h_fn), self._safe(self._baro_fn)
             active = self._active_fn is None or bool(self._safe(self._active_fn))
         with self._lock:
             self.raw_distance_m = round(dist_m, 3)
@@ -52,7 +54,7 @@ class DistanceState:
                 return
             before = self.gate.status
             if active:
-                out = self.gate.step(float(dist_m), time.monotonic(), vz, cam)
+                out = self.gate.step(float(dist_m), time.monotonic(), vz, cam, baro)
             else:
                 out = self.gate.idle(float(dist_m), time.monotonic())
             if self.gate.status != before:
