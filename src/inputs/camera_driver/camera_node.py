@@ -357,6 +357,14 @@ class CameraNode:
         h, t = self.cam_heights.get(mid, (None, 0.0))
         return round(h, 4) if h is not None and time.monotonic() - t <= max_age_s else None
 
+    def referee_height(self, max_age_s=0.15):
+        """Camera-only height (m, as measured) for the lidar spike gate: mean over the pad
+        markers seen in the last max_age_s, or None."""
+        now = time.monotonic()
+        hs = [h for mid, (h, t) in list(self.cam_heights.items())
+              if now - t <= max_age_s and (not self.pad_centers or mid in self.pad_centers)]
+        return sum(hs) / len(hs) if hs else None
+
     def height_check_sample(self, max_age_s=0.1):
         """camlidar test: ({marker id: camera height m} seen in the last max_age_s,
         vertical lidar height m or None, attitude used). Lidar: range*cos(roll)*cos(pitch)

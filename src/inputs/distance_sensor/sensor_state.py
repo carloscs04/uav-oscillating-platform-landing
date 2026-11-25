@@ -1,7 +1,10 @@
 # File: src/inputs/distance_sensor/sensor_state.py
 
 import threading
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Callable, Dict, Optional
+
+from src.logic.control.lidar_gate import LidarGate
 
 
 class DistanceState:
@@ -13,11 +16,49 @@ class DistanceState:
         self.min_distance_m: float = 0.2
         self.max_distance_m: float = 4.0
         self.sensor_status: str = "OK"
+        # Spike gate (src/logic/control/lidar_gate.py): distance_m is the GATED height that
+        # the Pixhawk, the camera and the landing law use; raw_distance_m is the sensor.
+        self.raw_distance_m: float = 0.0
+        self.gate = LidarGate()
+        self._vz_up_fn: Optional[Callable[[], Optional[float]]] = None
+        self._cam_h_fn: Optional[Callable[[], Optional[float]]] = None
+
+    def set_gate_inputs(self, vz_up_fn=None, cam_h_fn=None):
+        """vz_up_fn() -> Pixhawk vertical speed m/s (+ up) or None; cam_h_fn() -> camera-only
+        ArUco height m or None. Both optional: without them the gate only dead-reckons."""
+        self._vz_up_fn, self._cam_h_fn = vz_up_fn, cam_h_fn
+
+    @staticmethod
+    def _safe(fn):
+        try:
+            return fn() if fn is not None else None
+        except Exception:
+            return None
 
     def update_distance(self, dist_m: float, status: str = "OK"):
+        vz = cam = None
+        if status == "OK":   # providers read other states: call them outside our lock
+            vz, cam = self._safe(self._vz_up_fn), self._safe(self._cam_h_fn)
         with self._lock:
-            self.distance_m = round(dist_m, 3)
-            self.sensor_status = status
+            self.raw_distance_m = round(dist_m, 3)
+            if status != "OK":
+                self.distance_m, self.sensor_status = round(dist_m, 3), status
+                return
+            before = self.gate.status
+            out = self.gate.step(float(dist_m), time.monotonic(), vz, cam)
+            if self.gate.status != before:
+                print(f"[LIDARGATE] {before} -> {self.gate.status} (raw {dist_m * 100:.1f} cm, "
+                      f"used {'none' if out is None else f'{out * 100:.1f} cm'})", flush=True)
+            if out is None:     # UNRELIABLE: consumers see "no lidar" (keep the last value)
+                self.sensor_status = "UNRELIABLE"
+            else:
+                self.distance_m, self.sensor_status = round(out, 3), "OK"
+
+    def gate_snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            d = self.gate.snapshot()
+            d["raw_m"] = self.raw_distance_m
+            return d
 
     def export_telemetry_data(self) -> Dict[str, Any]:
         with self._lock:
@@ -26,7 +67,10 @@ class DistanceState:
                     "distance_m": self.distance_m,
                     "min_distance_m": self.min_distance_m,
                     "max_distance_m": self.max_distance_m,
-                    "status": self.sensor_status
+                    "status": self.sensor_status,
+                    "raw_m": self.raw_distance_m,
+                    "gate": self.gate.status,
+                    "gate_rejected": self.gate.rejected_total,
                 }
             }
 

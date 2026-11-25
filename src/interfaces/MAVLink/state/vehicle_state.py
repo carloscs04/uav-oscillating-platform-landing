@@ -160,10 +160,19 @@ class VehicleState:
             "sent_quality": int(f.get("quality", 0)),
             "gated": int(bool(f.get("gated", False))),
             "lidar_m": round(float(h), 3) if h is not None else -1.0,
+            **self._export_lidar_gate(feed),
             "samples": int(f.get("samples", 0) or 0),
             "age_ms": int((time.time() - t) * 1000) if t else -1,
             "tx_hz": round(float(getattr(feed, "actual_rate_hz", 0.0) or 0.0), 1) if feed else 0.0,
         }
+
+    @staticmethod
+    def _export_lidar_gate(feed) -> Dict[str, Any]:
+        """Raw lidar and the spike gate status (DistanceState), for the flight CSV."""
+        st = getattr(feed, "distance_state", None) if feed else None
+        snap = st.gate_snapshot() if st is not None and hasattr(st, "gate_snapshot") else {}
+        return {"lidar_raw_m": snap.get("raw_m", -1.0), "lidar_gate": snap.get("status", ""),
+                "lidar_rejected": snap.get("rejected_total", 0)}
 
     def _export_statustext_log(self, n: int = 10) -> List[list]:
         with self._lock:

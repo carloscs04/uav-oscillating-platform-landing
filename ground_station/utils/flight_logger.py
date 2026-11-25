@@ -122,6 +122,9 @@ class FlightExperimentLogger:
         "pi_flow_sent_quality",
         "pi_flow_gated",
         "pi_lidar_m",
+        "pi_lidar_raw_m",    # sensor before the spike gate (pi_lidar_m = gated, sent)
+        "pi_lidar_gate",     # OK | REJECT_CAM | REJECT_EST | UNRELIABLE
+        "pi_lidar_rejected", # samples rejected since the Pi started
         "pi_flow_samples",
         "pi_flow_age_ms",
         "pi_flow_tx_hz",
@@ -377,6 +380,9 @@ class FlightExperimentLogger:
             pif.get("sent_quality", 0),
             pif.get("gated", 0),
             pif.get("lidar_m", -1.0),
+            pif.get("lidar_raw_m", -1.0),
+            pif.get("lidar_gate", ""),
+            pif.get("lidar_rejected", 0),
             pif.get("samples", 0),
             pif.get("age_ms", -1),
             pif.get("tx_hz", 0.0),

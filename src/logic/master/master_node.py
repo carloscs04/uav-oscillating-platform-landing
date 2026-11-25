@@ -113,6 +113,9 @@ class MasterNode:
             self._camera_driver.guided_sender = self.guided_sender
             self.guided_sender.on_activate = self._camera_driver.landing.reset
         self.mavlink_node.state.set_control_params_provider(self._control_params)
+        # Lidar spike gate: Pixhawk vertical speed for the prediction, camera height as referee
+        if hasattr(self.distance_node.state, "set_gate_inputs"):
+            self.distance_node.state.set_gate_inputs(vz_up_fn=self._ekf_vz_up, cam_h_fn=self._cam_referee_h)
 
         # 2. Isolated Telemetry Simulator
         self.simulator = DebugSimulator(self)
@@ -188,6 +191,17 @@ class MasterNode:
         self.stop_all_nodes(force=True)
         self.state.append_cli_log("MasterNode offline.", "SYSTEM")
 
+    def _ekf_vz_up(self, max_age_s: float = 0.3):
+        """Pixhawk vertical speed (m/s, + = climbing) from LOCAL_POSITION_NED, or None if stale."""
+        pkt, t = self.mavlink_node.state.get_packet_with_time("LOCAL_POSITION_NED")
+        if not pkt or t is None or time.time() - t > max_age_s or pkt.get("vz") is None:
+            return None
+        return -float(pkt["vz"])
+
+    def _cam_referee_h(self):
+        drv = self._camera_driver
+        return drv.referee_height() if drv is not None and hasattr(drv, "referee_height") else None
+
     def _control_params(self) -> Dict[str, Any]:
         """Landing law (law.*) and GUIDED sender (sender.*) params, for the events log."""
         from dataclasses import asdict
@@ -197,6 +211,9 @@ class MasterNode:
             out.update({f"law.{k}": v for k, v in asdict(drv.landing.p).items()})
         if self.guided_sender is not None:
             out.update({f"sender.{k}": v for k, v in asdict(self.guided_sender.p).items()})
+        gate = getattr(self.distance_node.state, "gate", None)
+        if gate is not None:
+            out.update({f"lidargate.{k}": v for k, v in asdict(gate.p).items()})
         return out
 
     def bind_wifi_bridge(self, bridge: Any):
