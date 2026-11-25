@@ -131,10 +131,17 @@ class VisionCLI(BaseNodeCLI):
             if gs is None:
                 self.log("No GUIDED sender on this machine.", "ERROR")
                 return "NO_SENDER"
-            in_guided = gs._guided_now()[0]
-            gs.mission_stop()
-            self.log("MISSION STOPPED: holding in GUIDED. Sticks return when you leave GUIDED with ch5."
-                     if in_guided else "MISSION STOPPED: nothing is sent.", "OK")
+            was = gs.stage
+            left = gs.mission_stop()
+            if left == "descend" and was == "land" and drv is not None:
+                drv.landing.reset()     # re-centre while climbing to 35 cm
+            msg = {"align": "MISSION STOPPED: staying in ALIGN at this height.",
+                   "descend": (f"MISSION STOPPED in TOUCHDOWN: back to APPROACH {gs.approach_h * 100:.0f} cm."
+                               if was == "land" else
+                               f"MISSION STOPPED: staying in APPROACH {gs.approach_h * 100:.0f} cm."),
+                   "stop": "MISSION STOPPED: holding in GUIDED. Sticks return when you leave GUIDED with ch5.",
+                   None: "MISSION STOPPED: nothing is sent."}.get(left, "MISSION STOPPED.")
+            self.log(msg, "OK")
             return "LANDSHADOW_STOP"
         if args and args[0].lower() == "start":
             if gs is None:

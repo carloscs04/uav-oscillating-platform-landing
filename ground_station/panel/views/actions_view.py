@@ -10,7 +10,7 @@ from ground_station.transmiters.main_command_tx import MainCommandTransmitter
 
 class ActionsView(tk.LabelFrame):
     """GUIDED landing. START MISSION runs ALIGN -> 70 cm -> 40 cm -> TOUCHDOWN on its own; STOP
-    holds. ALIGN / APPROACH / TOUCHDOWN also work on their own (in GUIDED). These buttons never
+    keeps the current stage (TOUCHDOWN -> APPROACH 35 cm). ALIGN / APPROACH / TOUCHDOWN also work on their own (in GUIDED). These buttons never
     change the flight mode: the pilot enters and leaves GUIDED with channel 5."""
 
     COLOR_IDLE = "#37474f"
@@ -150,7 +150,7 @@ class ActionsView(tk.LabelFrame):
 
     def cmd_mission(self):
         if self._mission:
-            self._dispatch_to_master("landshadow stop", "[TX] STOP MISSION: holding, stages disabled.")
+            self._dispatch_to_master("landshadow stop", "[TX] STOP MISSION: keeps the current stage (TOUCHDOWN -> APPROACH 35 cm).")
         else:
             self._dispatch_to_master("landshadow start", "[TX] START MISSION: align -> approach 70 -> 40 -> touchdown.")
 

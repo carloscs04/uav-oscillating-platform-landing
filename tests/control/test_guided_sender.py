@@ -122,8 +122,8 @@ def test_stages_work_alone_only_in_guided_and_flying():
     assert s.select("approach")[0] and s.approach_h == 0.35
     assert s.select("touchdown")[0] and s.stage == "land"
     assert s.mission_start()[0] and s.mission and s.stage == "align"
-    s.mission_stop()
-    assert s.stage == "stop" and not s.mission and s.select("touchdown")[0]
+    assert s.mission_stop() == "align" and not s.mission          # stopped in ALIGN: stays
+    assert s.select("touchdown")[0]
     mav.state.set(LOITER)
     s.tick()
     assert s.stage is None and not s.mission
@@ -322,3 +322,19 @@ def test_land_wait_holds_lidar_height():
     vis.set(0.0, 0.0, 0.0, h=0.20)
     vis.ls["phase"] = "FINAL"
     assert s.tick()[2] < 0                        # sank 5 cm while waiting -> climbs back
+
+
+def test_stop_mission_keeps_the_stage_touchdown_backs_off_to_35():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    s.mission_start()
+    s.arm("descend"); s.approach_h = 0.70; s.mission = True
+    assert s.mission_stop() == "descend" and s.approach_h == 0.70 and not s.mission
+    s.mission_start()
+    s.arm("land"); s.mission = True
+    assert s.mission_stop() == "descend" and s.approach_h == s.p.floor_h
+    vis.set(0.0, 0.0, 0.1, h=0.15)
+    assert s.tick()[2] < 0.0                                  # climbs back to 35 cm
+    mav.state.set(LOITER)
+    assert s.mission_stop() is None and s.stage is None

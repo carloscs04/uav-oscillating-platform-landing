@@ -32,7 +32,8 @@ Mission: START MISSION (mission_start) runs the whole sequence with no more butt
     3. APPROACH to auto_h2 (40 cm), then stay there auto_hold2_s (30 s)
     4. wait there until the xy error is <= auto_td_err (2.5 cm) for auto_td_hold_s
     5. TOUCHDOWN (the same precise land stage) and motors off on the ground
-Any stage button or STOP MISSION ends the sequence (STOP holds). Leaving GUIDED ends it.
+Any stage button or STOP MISSION ends the sequence (STOP keeps the current stage;
+from TOUCHDOWN it goes back to APPROACH 35 cm). Leaving GUIDED ends it.
 """
 
 import math
@@ -166,12 +167,19 @@ class GuidedSender:
             self.mission, self.auto_step, self._auto_since = False, None, None
 
     def mission_stop(self):
-        """Ends the sequence: holds (in GUIDED) or cancels (outside it)."""
+        """Ends the sequence and keeps the stage it was in: ALIGN stays aligning, APPROACH stays
+        at its height, TOUCHDOWN goes back to APPROACH floor_h (35 cm, climbs if lower) like
+        switching TOUCHDOWN off. Returns the stage left active. Outside GUIDED it cancels."""
         self._cancel_auto()
-        if self._guided_now()[0]:
-            self.arm("stop")
-        else:
+        if not self._guided_now()[0]:
             self.disarm("pilot")
+            return None
+        if self.stage == "land":
+            self.approach_h = self.p.floor_h
+            self.arm("descend")
+        elif self.stage not in ("align", "descend"):
+            self.arm("stop")
+        return self.stage
 
     def select(self, stage, approach_h=None):
         """A stage button, on its own (ends a running START MISSION sequence). Only while the
