@@ -123,6 +123,7 @@ class LandingParams:
                                     # ~2.5 s wobble is mostly filtered out; 0 = off
     ff_tau: float = 2.0             # s
     ff_max: float = 0.08            # m/s
+    ff_min: float = 0.01            # pad estimate below this = still table, no feed-forward, m/s
     ki: float = 0.15                # 1/s^2: integral of the error -> follows a moving pad without the P lag
                                     # (sim: pad at 3 cm/s, P only lagged ~9 cm and never descended)
     i_max: float = 0.06             # integral contribution limit, m/s
@@ -233,6 +234,8 @@ class LandingLaw:
         kd = self.p.kd_final if low else self.p.kd
         vmax = self.p.v_max_final if low else self.p.v_max
         g = self.p.ff_gain
+        pv = math.hypot(*self.pad_v)            # still table: the estimate is wobble noise, ignore it
+        g = 0.0 if pv <= self.p.ff_min or pv == 0 else g * (pv - self.p.ff_min) / pv
         vf = kp * f + kd * self.rate[0] + self.i_acc[0] + g * self.pad_v[0]
         vr = kp * r + kd * self.rate[1] + self.i_acc[1] + g * self.pad_v[1]
         if math.hypot(vf, vr) < (0.002 if low else 0.005):
