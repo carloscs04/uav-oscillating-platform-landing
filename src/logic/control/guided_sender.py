@@ -28,8 +28,8 @@ Stage buttons work on their own (no START needed), only while armed, flying and 
 
 Mission: START MISSION (mission_start) runs the whole sequence with no more buttons:
     1. ALIGN at the current height until the law is aligned (leaves ALIGN)
-    2. APPROACH to auto_h1 (70 cm), then stay there auto_hold1_s (25 s)
-    3. APPROACH to auto_h2 (40 cm), then stay there auto_hold2_s (30 s)
+    2. APPROACH to auto_h1 (70 cm), then stay there auto_hold1_s (15 s)
+    3. APPROACH to auto_h2 (40 cm), then stay there auto_hold2_s (15 s)
     4. wait there until the xy error is <= auto_td_err (2.5 cm) for auto_td_hold_s
     5. TOUCHDOWN (the same precise land stage) and motors off on the ground
 Any stage button or STOP MISSION ends the sequence (STOP keeps the current stage;
@@ -71,9 +71,9 @@ class SenderParams:
                                 # (flight 2026-11-23: with v_down = 0 the drone sank 0.6 -> 0.15 m)
     # START MISSION sequence
     auto_h1: float = 0.70       # first approach height, m
-    auto_hold1_s: float = 25.0  # ... time there once arrived, s
+    auto_hold1_s: float = 15.0  # (25 until 2026-11-25) ... time there once arrived, s
     auto_h2: float = 0.40       # second approach height (0.35-0.50), m
-    auto_hold2_s: float = 30.0  # ... time there once arrived, s
+    auto_hold2_s: float = 15.0  # (30 until 2026-11-25) ... time there once arrived, s
     auto_arrive_m: float = 0.03 # arrived = lidar within this of the approach height, m
     auto_td_err: float = 0.025  # TOUCHDOWN starts only with the xy error at or below this, m
     auto_td_hold_s: float = 0.5 # ... continuously for this long, s
