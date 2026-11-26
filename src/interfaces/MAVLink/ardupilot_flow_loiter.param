@@ -91,3 +91,14 @@ DISARM_DELAY,10
 # 2026-11-25 20:00: set to 0.5 (pre-4.7 default, assumed not rescaled): on takeoff the four
 # motors pumped together 1150 <-> 1940 every ~0.1 s, it bounced and flipped (pitch 32 deg).
 PSC_D_ACC_P,0.05
+
+# --- Horizontal velocity controller (LOITER / GUIDED velocity) ---
+# Flight 2026-11-25 22:24: with zero velocity asked the drone wobbled +-4 cm every ~2.5 s at
+# 0.45 m and drifted up to ~10 cm/s; it followed the commands ~1 s late. P 1.4 / I 0.25 / D 0.25
+# until then (ArduPilot defaults 2.0 / 1.0 / 0.5). flowtest 2026-11-26: flow scale ~1x and
+# delay 35-45 ms, so EK3_FLOW_DELAY / FLOW_F?SCALER stay; one change per flight:
+#   1) P 1.4 -> 1.8 (this file)   2) if better, I 0.25 -> 0.5   worse -> back to P 1.4
+# Keep D at 0.25 (it amplifies the camera-flow noise).
+PSC_NE_VEL_P,1.8
+PSC_NE_VEL_I,0.25
+PSC_NE_VEL_D,0.25
