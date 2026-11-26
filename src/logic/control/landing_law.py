@@ -325,7 +325,9 @@ class LandingLaw:
             # ~1 s late, so "centred but sliding" must not count as centred
             e_lead = max(e, math.hypot(f + self.rate[0] * p.lead_s, r + self.rate[1] * p.lead_s))
             if self.strict_descent and not self.committed:
-                self.centred_since = (self.centred_since or now) if e_lead <= p.commit_err else None
+                # glide (2026-11-25 23:32: 25 s at 0.65 m crossing the centre at 5-14 cm/s, never "still"):
+                # commit on the error now; the glide holds past glide_err and the touch gate aims the drop
+                self.centred_since = (self.centred_since or now) if (e if p.glide else e_lead) <= p.commit_err else None
             why = None
             if self.strict_descent and self.committed and not self.retry:
                 if e > p.abort_err:

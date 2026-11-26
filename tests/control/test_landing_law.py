@@ -274,7 +274,7 @@ def test_lost_low_climbs_early_to_see_it():
 def test_final_sliding_does_not_commit_or_resume():
     """Flight 2026-11-25 22:12: committed at 2.1 cm while sliding 4 cm/s; resumed at 2.0 cm closing
     at 7 cm/s and overshot to 6.9 cm. The predicted error (lead_s ahead) gates both."""
-    law2, t2, xs = LandingLaw(LandingParams(align_hold_s=0.0, commit_err=0.025, commit_hold_s=0.5)), 0.0, 0.0
+    law2, t2, xs = LandingLaw(LandingParams(align_hold_s=0.0, commit_err=0.025, commit_hold_s=0.5, glide=0.0)), 0.0, 0.0
     law2.strict_descent = True
     law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
     law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
