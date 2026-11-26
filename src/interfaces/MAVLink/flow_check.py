@@ -31,6 +31,7 @@ MAV_PARAM_TYPES = {
     "ARMING_CHECK": 6, "ARMING_SKIPCHK": 5,
     # AP_Float (metres) in ArduPilot 4.6+
     "RNGFND1_MIN": 9, "RNGFND1_MAX": 9, "RNGFND1_GNDCLR": 9,
+    "PSC_D_ACC_P": 9,
 }
 DEFAULT_MAV_PARAM_TYPE = 2   # every other parameter in the file is an 8-bit integer
 QGC_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter_qgc.params")

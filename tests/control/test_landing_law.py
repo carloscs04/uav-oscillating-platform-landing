@@ -226,3 +226,29 @@ def test_touchdown_stage_slows_before_final():
     law2 = LandingLaw(LandingParams(align_hold_s=0.0))       # APPROACH/normal: unchanged
     law2.step((0.0, 0.0), 0.38, 0.0)
     assert law2.step((0.0, 0.0), 0.38, 0.1)["v_down"] == law2.p.descend_speed
+
+
+def test_descend_waits_until_still_before_final():
+    """Flight 2026-11-25 19:38: reached 0.30 m crossing the centre at 8 cm/s and overshot."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.step((0.0, 0.0), 0.6, 0.0)
+    law.step((0.0, 0.0), 0.6, 0.1)                              # DESCEND
+    law.step((-0.02, 0.0), 0.36, 0.2)
+    out = law.step((0.02, 0.0), 0.36, 0.3)                      # 40 cm/s raw: still moving
+    assert out["phase"] == "DESCEND" and out["v_down"] == 0.0 and "settling" in out["note"]
+    for i in range(30):                                         # still: descends again
+        out = law.step((0.0, 0.0), 0.36, 0.4 + 0.1 * i)
+    assert out["v_down"] > 0
+
+
+def test_lost_low_climbs_early_to_see_it():
+    """Lost the marker at 0.28 m: climb after lost_hold_s instead of braking 3 s."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True                                   # TOUCHDOWN stage, not committed
+    law.step((0.0, 0.0), 0.6, 0.0)
+    law.step((0.0, 0.0), 0.6, 0.1)
+    law.step((0.0, 0.0), 0.28, 0.2)                             # FINAL
+    assert law.step(None, 0.28, 0.5)["v_down"] == 0.0           # brake first
+    out = law.step(None, 0.30, 0.9)
+    assert out["phase"] == "FINAL" and out["v_down"] == -law.p.reacquire_speed
+    assert law.step(None, 0.45, 1.5)["v_down"] == 0.0           # high enough: stop climbing

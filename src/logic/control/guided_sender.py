@@ -302,8 +302,8 @@ class GuidedSender:
                     if cap < vd:
                         vd = max(0.0, cap)
                         reason = "approach height: slowing"
-        if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") == "FINAL":
-            # FINAL waiting for the error: hold the lidar height (v_down = 0 alone sinks)
+        if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") in ("DESCEND", "FINAL"):
+            # DESCEND/FINAL waiting (error or settling): hold the lidar height (v_down = 0 alone sinks)
             vd = self._hold("land_wait", ls.get("h_m"))
             reason = "waiting for error: holding"
         elif stage == "land" and self._hold_stage == "land_wait":

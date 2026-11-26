@@ -42,10 +42,15 @@ class LandingParams:
     v_max: float = 0.30             # horizontal speed limit, m/s
     kp_final: float = 0.5           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
                                     # a 3-4 cm error asked only 1-2 cm/s and drifted 0.4 -> 4.4 cm in 1 s)
-    kd_final: float = 0.3           # FINAL (below final_h): softer damping ...
-    v_max_final: float = 0.08       # ... and slower sideways (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
-                                    # commanded 0.15-0.28 m/s for 3-5 cm errors, swung up to 16 cm
-                                    # and lost the marker 3 times)
+    kd_final: float = 0.6           # FINAL (below final_h): damping ...
+    v_max_final: float = 0.12       # ... and sideways limit (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
+                                    # with v_max 0.3 commanded 0.15-0.28 m/s, swung up to 16 cm;
+                                    # 2026-11-25 19:38: kd 0.3 / 0.08 m/s could not stop an 8 cm/s
+                                    # drift, overshot to 12 cm and lost the marker 4 times)
+    settle_rate: float = 0.03       # DESCEND: below final_h + slow_band descend only while the error
+                                    # moves slower than this (enter FINAL still, not passing through), m/s
+    reacquire_dh: float = 0.10      # DESCEND/FINAL lost below final_h + this: after lost_hold_s climb at
+    reacquire_speed: float = 0.10   # this until it is seen again (camera sees only +-7 cm at 0.28 m), m/s
     deadband: float = 0.02          # error below this -> no horizontal command, m
     align_tol: float = 0.05         # "aligned" when |err| below this, m
     align_hold_s: float = 2.0       # ...for this long before descending
@@ -179,6 +184,11 @@ class LandingLaw:
                 return self._round(out)
             if self.phase in ("DESCEND", "FINAL") and lost is not None and lost >= p.lost_search_s:
                 self.climb = True
+            elif (self.phase in ("DESCEND", "FINAL") and lost is not None and lost >= p.lost_hold_s
+                    and h_m is not None and h_m < p.final_h + p.reacquire_dh):
+                out.update(phase=self.phase, v_down=-p.reacquire_speed,
+                           note="lost low: climbing to see it again")
+                return self._round(out)
             if lost is None or lost >= p.lost_search_s:
                 self._set("SEARCH", now)            # also re-arms HOLD / TOUCHDOWN
             if self.phase == "SEARCH" and self.climb and h_m is not None and h_m < p.search_h:
@@ -234,7 +244,11 @@ class LandingLaw:
             speed = p.descend_speed
             if self.strict_descent and h_m is not None and h_m < p.final_h + p.slow_band:
                 speed = p.final_speed
-            out["v_down"] = speed if e <= pause_err else 0.0
+            moving = math.hypot(*self.rate)
+            settling = h_m is not None and h_m < p.final_h + p.slow_band and moving > p.settle_rate
+            out["v_down"] = speed if (e <= pause_err and not settling) else 0.0
+            if settling and e <= pause_err:
+                out["note"] = f"settling: moving {moving * 100:.1f} cm/s, holding height"
             if h_m < p.final_h:
                 self._set("FINAL", now)
         if self.phase == "FINAL":
@@ -252,7 +266,9 @@ class LandingLaw:
                 self._set("TOUCHDOWN", now, h_m)
                 out["v_fwd"] = out["v_right"] = 0.0
                 out["v_down"] = p.final_speed
-        if self.phase == "DESCEND" and e > pause_err:
+        if self.phase == "DESCEND" and out["note"]:
+            pass
+        elif self.phase == "DESCEND" and e > pause_err:
             out["note"] = "error > pause: holding height"
         elif self.phase == "FINAL" and out["v_down"] == 0.0:
             if self.strict_descent and not self.committed and e <= pause_err:
