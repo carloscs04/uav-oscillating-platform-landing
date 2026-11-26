@@ -42,7 +42,9 @@ class LandingParams:
     v_max: float = 0.30             # horizontal speed limit, m/s
     kp_final: float = 0.3           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
                                     # a 3-4 cm error asked only 1-2 cm/s and drifted 0.4 -> 4.4 cm in 1 s)
-    kd_final: float = 0.6           # FINAL (below final_h): damping ...
+    kd_final: float = 0.3           # FINAL (below final_h): damping ... (0.6 until 2026-11-25 23:09: with the
+                                    # ~0.9 s Pixhawk delay the rate term pushes WITH the ~3 s wobble; FINAL
+                                    # swung +-5-12 cm, sim of that loop: rms 5.3 cm at 0.6, 4.2 at 0.3, 3.6 at 0.15)
     v_max_final: float = 0.08       # ... and sideways limit (0.06 until 2026-11-25 21:50: could not brake an
                                     # 8 cm/s drift, 2 -> 8 cm in 1.5 s at 0.30 m; kd 0.6 now, not 0.3 as 19:38) (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
                                     # with v_max 0.3 commanded 0.15-0.28 m/s, swung up to 16 cm;
