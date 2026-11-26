@@ -15,6 +15,11 @@ Phases:
     DESCEND   keep aligning, descend at descend_speed; pause (v_down = 0) if |err| > pause_err
     FINAL     below final_h: slower descent, same pause rule; below commit_h no more pauses
               and a lost target no longer stops it (the pad fills the view): blind, straight down
+              Land stage (strict, glide): hold and centre at ~final_h until centred and still
+              (commit), then GLIDE down without stopping for every swing (hold only past
+              glide_err, climb and retry past abort_err) to ready_h; there the TOUCH GATE waits
+              for the moment the error predicted at the pad is <= touch_err, then drops at
+              touch_speed (still correcting) to the pad
     TOUCHDOWN below touchdown_h: no horizontal command, keep pushing down at final_speed so the
               Pixhawk's land detector spools the motors down; the pilot disarms (ch6)
     HOLD      ALIGN took longer than align_timeout_s: v = 0 until reset / lifted
@@ -68,7 +73,9 @@ class LandingParams:
     align_timeout_s: float = 30.0   # ALIGN longer than this -> HOLD
     descend_speed: float = 0.15     # m/s
     pause_err: float = 0.10         # stop descending while |err| above this, m
-    final_h: float = 0.45           # FINAL below this height, m (0.30 until 2026-11-25 22:18: hovering at
+    final_h: float = 0.65           # FINAL below this height, m (0.45 until 2026-11-25 23:09: 26 s hovering in
+                                    # the table's recirculating air at 0.40-0.50 m, +-5-12 cm, never landed;
+                                    # at 1.2 m it centred to 1.6 cm calmly. Centre up here, glide through) (0.30 until 2026-11-25 22:18: hovering at
                                     # 0.30-0.40 m the Pixhawk drifted 15-20 cm/s on its own and lost the marker)
     final_speed: float = 0.10       # m/s (0.07 until 2026-11-25 22:18: less time hovering near the ground)
     slow_band: float = 0.10         # TOUCHDOWN stage: already final_speed this far above final_h
@@ -81,7 +88,7 @@ class LandingParams:
     final_pause_min_h: float = 0.20 # ...but below this height keep descending if within blind_err, m
                                     # (0.15 until 2026-11-25 22:00: paused at 0.17 m with 2.6 cm, drifted to
                                     # 5.9 cm in 0.3 s in ground effect, lost the marker; better to finish)
-    commit_h: float = 0.50          # commit (centred and still) below this, m (0.45 until 2026-11-25 23:02:
+    commit_h: float = 0.70          # (0.50 until 2026-11-25 23:09, the FINAL band moved up) commit (centred and still) below this, m (0.45 until 2026-11-25 23:02:
                                     # FINAL bobbed 0.38-0.50 m and the drone was centred within 1 cm for
                                     # ~1 s at 0.46-0.47 m without committing; 0.50 = the whole FINAL band)
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
@@ -91,12 +98,26 @@ class LandingParams:
                                     # ... for this long (flight 2026-11-24 21:53: committed at 1.9 cm,
                                     # drifted to 4.3 cm, lost the marker at 0.22 m and went down blind)
     blind_h: float = 0.20           # committed and marker lost: blind descent only below this, m
-    abort_err: float = 0.05         # land stage FINAL, committed: error above this -> climb above final_h and
+    abort_err: float = 0.08         # (0.05 until 2026-11-25 23:09: the air near the table swings it 5 cm
+                                    # anyway; glide holds above glide_err and only gives up past this)
+                                    # land stage FINAL, committed: error above this -> climb above final_h and
                                     # retry. Uncommitted it only holds height and centres (2026-11-25 22:24:
                                     # climbing on every 5 cm swing at 0.45 m looped up/down for 100 s)
-    final_hold_max_s: float = 1.5   # committed below hold_retry_h, holding longer than this -> climb, retry
+    final_hold_max_s: float = 3.0   # (1.5 until 2026-11-25 23:09, the touch gate waits for a centred moment) committed below hold_retry_h, holding longer than this -> climb, retry
     hold_retry_h: float = 0.35      # above this a committed hold just waits (hovering 0.35-0.45 m was fine)
                                     # (2026-11-25 22:18: each hold low ended drifting off and losing it)
+    glide: float = 1.0              # land stage, committed: GLIDE (1) or the old stop-on-every-swing rule (0):
+                                    # down at final_speed while |err| <= glide_err (else hold, centring) to
+                                    # ready_h, then the touch gate: wait there until the error predicted
+                                    # lead_s ahead is <= touch_err, then down at touch_speed to the pad
+                                    # (still correcting; past blind_err -> climb and retry)
+    glide_err: float = 0.05         # glide: hold height (not climb) while the error is above this, m
+    ready_h: float = 0.25           # glide: touch gate height (camera still sees #20 well), m
+    touch_err: float = 0.025        # touch gate: go when the error predicted at the pad (drop time at
+                                    # touch_speed, current drift) is within this and now within blind_err, m
+    touch_speed: float = 0.30       # touch gate -> pad: ~0.4 s from 0.25 m, so the ~3 s wobble cannot move it
+                                    # far (sim: 0.15 m/s landed 0/30 with 3 cm wobble, 0.30 m/s 27/30; ArduPilot
+                                    # LAND touches at 0.5 m/s), m/s
     lead_s: float = 0.7             # FINAL commit / resume use the error predicted this far ahead
                                     # (2026-11-25 22:12: committed at 2.1 cm sliding 4 cm/s -> 5.4 cm; resumed
                                     # at 2.0 cm closing at 7 cm/s -> overshot to 6.9 cm, lost at 0.19 m;
@@ -134,6 +155,7 @@ class LandingLaw:
         self.centred_since = None   # strict commit: |err| <= commit_err since
         self.retry = False          # FINAL: climbing back above final_h to try again
         self.hold_since = None      # committed FINAL: holding height since
+        self.touch_go = False       # glide: touch gate passed, going to the pad
         self.last_err = None        # last valid |err|, m
         self._prev = None       # (t, f, r) for the error rate
         self.rate = (0.0, 0.0)  # filtered d(err)/dt, m/s
@@ -148,6 +170,7 @@ class LandingLaw:
                 self.committed = False
             self.centred_since = None
             self.retry, self.hold_since = False, None
+            self.touch_go = False
 
     def _lifted(self, h):
         return h is not None and self.stop_h is not None and h > self.stop_h + self.p.rearm_dh
@@ -315,6 +338,7 @@ class LandingLaw:
                 if why:
                     self.retry, self.committed = True, False
                     self.centred_since = self.hold_since = None
+                    self.touch_go = False
             if self.retry:
                 # never hover low off-centre: go back up where the Pixhawk and the camera work
                 out["v_down"] = -p.reacquire_speed
@@ -324,11 +348,32 @@ class LandingLaw:
                     not self.strict_descent
                     or (self.centred_since is not None and now - self.centred_since >= p.commit_hold_s)):
                 self.committed = True
-            pause = (e > pause_err and not self.committed) or \
-                    (e_lead > p.final_pause_err and h_m >= p.final_pause_min_h) or \
-                    (e > p.blind_err and h_m < p.final_pause_min_h) or \
-                    (self.strict_descent and not self.committed)
-            out["v_down"] = 0.0 if pause else p.final_speed
+            speed = p.final_speed
+            glide = bool(p.glide) and self.strict_descent and self.committed
+            if glide and h_m >= p.ready_h and not self.touch_go:
+                pause = e > p.glide_err
+                if pause:
+                    out["note"] = f"glide: error {e * 100:.1f} cm > {p.glide_err * 100:.1f} cm, holding height"
+                else:
+                    out["note"] = f"glide: down, error {e * 100:.1f} cm"
+            elif glide:
+                # where it will be when it reaches the pad (drop time at touch_speed): the drone never
+                # stops in this air, so aim the drop at the moment it slides back over the centre
+                t_drop = max(0.0, h_m - p.touchdown_h) / p.touch_speed
+                e_land = math.hypot(f + self.rate[0] * t_drop, r + self.rate[1] * t_drop)
+                if not self.touch_go and e_land <= p.touch_err and e <= p.blind_err:
+                    self.touch_go = True
+                pause = not self.touch_go
+                speed = p.touch_speed
+                out["note"] = (f"touch: down, error {e * 100:.1f} cm" if self.touch_go else
+                               f"touch gate: error {e * 100:.1f} cm (at the pad {e_land * 100:.1f} cm) "
+                               f"> {p.touch_err * 100:.1f} cm, waiting")
+            else:
+                pause = (e > pause_err and not self.committed) or \
+                        (e_lead > p.final_pause_err and h_m >= p.final_pause_min_h) or \
+                        (e > p.blind_err and h_m < p.final_pause_min_h) or \
+                        (self.strict_descent and not self.committed)
+            out["v_down"] = 0.0 if pause else speed
             self.hold_since = (self.hold_since or now) if (pause and self.committed) else None
             if h_m < p.touchdown_h and not pause:
                 self._set("TOUCHDOWN", now, h_m)
@@ -338,6 +383,8 @@ class LandingLaw:
             pass
         elif self.phase == "DESCEND" and e > pause_err:
             out["note"] = "error > pause: holding height"
+        elif self.phase == "FINAL" and out["note"].startswith(("glide", "touch")):
+            pass
         elif self.phase == "FINAL" and out["v_down"] == 0.0:
             if self.strict_descent and not self.committed and e <= pause_err:
                 out["note"] = (f"centring: error {e * 100:.1f} cm, need <= {p.commit_err * 100:.1f} cm "

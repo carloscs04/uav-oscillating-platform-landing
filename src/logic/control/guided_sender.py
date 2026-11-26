@@ -51,7 +51,8 @@ STAGE_ALIASES = {"acercar": "descend", "approach": "descend", "touchdown": "land
 class SenderParams:
     rate_hz: float = 10.0
     v_xy_max: float = 0.20      # m/s, on top of the law's own v_max
-    v_down_max: float = 0.15    # m/s
+    v_down_max: float = 0.30    # m/s (0.15 until 2026-11-25 23:09: the land law's touch drop is 0.30 m/s,
+                                # 0.25 -> 0.13 m; the other phases still ask <= 0.15)
     v_up_max: float = 0.15      # m/s
     law_max_age_s: float = 0.30
     hb_max_age_s: float = 1.5

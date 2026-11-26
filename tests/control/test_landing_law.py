@@ -54,11 +54,11 @@ def test_pause_when_error_grows():
 def test_lost_target():
     law = LandingLaw()
     for i in range(50):
-        law.step((0.0, 0.0), 0.5, i * 0.05)
+        law.step((0.0, 0.0), 0.77, i * 0.05)             # DESCEND band (FINAL below 0.65 m)
     assert law.phase == "DESCEND"
-    o = law.step(None, 0.5, 2.7)                        # just lost -> brake, keep phase
+    o = law.step(None, 0.77, 2.7)                        # just lost -> brake, keep phase
     assert o["phase"] == "DESCEND" and o["v_down"] == 0 and o["v_fwd"] == 0
-    o = law.step(None, 0.5, 6.0)                        # lost > 3 s low -> SEARCH and climb
+    o = law.step(None, 0.77, 6.0)                       # lost > 3 s low -> SEARCH and climb
     assert o["phase"] == "SEARCH" and o["v_down"] < 0
     o = law.step(None, 0.9, 7.0)                        # high enough -> stop climbing
     assert o["v_down"] == 0
@@ -327,9 +327,9 @@ def test_final_off_centre_committed_climbs_to_retry():
     law = _strict_final()
     t = _commit(law, 0.3)
     h = 0.40
-    o = law.step((0.07, 0.0), h, t)
+    o = law.step((0.09, 0.0), h, t)                             # past abort_err (8 cm)
     assert o["v_down"] == -law.p.reacquire_speed and "retry" in o["note"] and not law.committed
-    for _ in range(40):                                         # even centred again: keeps climbing ...
+    for _ in range(80):                                         # even centred again: keeps climbing ...
         t += 0.05
         h += 0.005
         o = law.step((0.0, 0.0), h, t)
@@ -356,11 +356,11 @@ def test_commit_inside_3cm_after_short_hold():
 def test_committed_hold_too_long_climbs_to_retry_only_low():
     law = _strict_final()
     t = _commit(law, 0.3)
-    for _ in range(60):                                         # 4 cm at 0.40 m: just waits
-        o = law.step((0.04, 0.0), 0.40, t); t += 0.05
+    for _ in range(60):                                         # 6 cm at 0.40 m (> glide_err): just waits
+        o = law.step((0.06, 0.0), 0.40, t); t += 0.05
     assert o["v_down"] == 0.0 and law.committed
-    for _ in range(40):                                         # 4 cm at 0.30 m: holds, gives up, climbs
-        o = law.step((0.04, 0.0), 0.30, t); t += 0.05
+    for _ in range(50):                                         # 6 cm at 0.30 m: holds, gives up, climbs
+        o = law.step((0.06, 0.0), 0.30, t); t += 0.05
     assert o["v_down"] < 0 and not law.committed
 
 
@@ -373,6 +373,47 @@ def test_blind_only_below_blind_h():
         law2.step((0.005, 0.0), 0.40, t); t += 0.05
     law2.step((0.005, 0.0), 0.18, t)
     assert law2.step(None, 0.18, t + 0.05)["v_down"] > 0        # lost at 0.18 m, centred: blind ok
+
+def test_glide_descends_through_swings_then_touch_gate():
+    """Flight 2026-11-25 23:09: 26 s at 0.40-0.50 m swinging +-5 cm, never landed. Glide goes down
+    through 3-4 cm swings, waits at ready_h for a centred moment, then goes to the pad."""
+    law, t = _strict_final(0.60), 0.3
+    t = _commit(law, t, 0.60)
+    h = 0.60
+    o = law.step((0.035, 0.0), h, t)
+    assert o["v_down"] == law.p.final_speed and "glide" in o["note"]      # 3.5 cm: keeps going down
+    o = law.step((0.06, 0.0), h, t + 0.05)
+    assert o["v_down"] == 0.0 and law.committed                           # 6 cm: holds, no climb
+    t += 0.1
+    o = law.step((0.03, 0.0), 0.24, t)                                    # at the touch gate, 3 cm: waits
+    assert o["v_down"] == 0.0 and "touch gate" in o["note"] and law.committed
+    for _ in range(10):                                                   # centred and still: goes
+        t += 0.05
+        o = law.step((0.005, 0.0), 0.24, t)
+    assert o["v_down"] == law.p.touch_speed and "touch: down" in o["note"]
+    o = law.step((0.025, 0.0), 0.22, t + 0.05)                            # small swing after go: continues
+    assert o["v_down"] == law.p.touch_speed
+    o = law.step((0.005, 0.0), 0.12, t + 0.1)
+    assert o["phase"] == "TOUCHDOWN"
+
+
+def test_glide_touch_gate_gives_up_and_retries():
+    law, t = _strict_final(0.60), 0.3
+    t = _commit(law, t, 0.60)
+    for _ in range(70):                                                   # never centred at 0.24 m: 3.5 s
+        o = law.step((0.03, 0.0), 0.24, t); t += 0.05
+    assert o["v_down"] < 0 and not law.committed and "retry" in o["note"]
+
+
+def test_glide_past_blind_err_after_go_retries():
+    law, t = _strict_final(0.60), 0.3
+    t = _commit(law, t, 0.60)
+    for _ in range(10):
+        law.step((0.005, 0.0), 0.24, t); t += 0.05
+    assert law.touch_go
+    o = law.step((0.04, 0.0), 0.18, t)                                    # 4 cm at 0.18 m: climb, retry
+    assert o["v_down"] < 0 and not law.committed and not law.touch_go
+
 
 if __name__ == "__main__":
     failed = 0
