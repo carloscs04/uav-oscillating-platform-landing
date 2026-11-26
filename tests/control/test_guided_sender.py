@@ -324,6 +324,22 @@ def test_land_wait_holds_lidar_height():
     assert s.tick()[2] < 0                        # sank 5 cm while waiting -> climbs back
 
 
+def test_land_align_holds_lidar_height():
+    """2026-11-25 22:50 (BARO): in ALIGN with v_down = 0 it sank 1.29 -> 0.29 m in 8 s."""
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=1.0)
+    s.mission_start()
+    s.select("touchdown")
+    vis.ls["phase"], vis.ls["err_m"] = "ALIGN", 0.15
+    s.tick()                                      # latches 1.0 m
+    assert s.last["reason"] == "waiting for error: holding"
+    vis.set(0.0, 0.0, 0.0, h=0.9)
+    vis.ls["phase"], vis.ls["err_m"] = "ALIGN", 0.15
+    assert s.tick()[2] < 0                        # sank 10 cm while aligning -> climbs back
+
+
 def test_land_wait_without_marker_never_descends():
     mav, vis, s = make()
     mav.state.set(GUIDED)

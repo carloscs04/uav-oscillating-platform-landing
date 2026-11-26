@@ -302,8 +302,9 @@ class GuidedSender:
                     if cap < vd:
                         vd = max(0.0, cap)
                         reason = "approach height: slowing"
-        if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") in ("DESCEND", "FINAL"):
-            # DESCEND/FINAL waiting (error or settling): hold the lidar height (v_down = 0 alone sinks)
+        if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") in ("ALIGN", "DESCEND", "FINAL"):
+            # ALIGN/DESCEND/FINAL waiting (error or settling): hold the lidar height (v_down = 0 alone
+            # sinks; 2026-11-25 22:50 on BARO it sank 1.29 -> 0.29 m in ALIGN in 8 s, the EKF saw 0.2 m)
             if ls.get("err_m") is None:
                 # no marker: hold where it is now, never pull back down to an old height
                 # (2026-11-25 20:09:11 descended 0.15 m/s blind after the reacquire climb)
