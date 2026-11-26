@@ -79,7 +79,9 @@ class LandingParams:
     final_pause_min_h: float = 0.20 # ...but below this height keep descending if within blind_err, m
                                     # (0.15 until 2026-11-25 22:00: paused at 0.17 m with 2.6 cm, drifted to
                                     # 5.9 cm in 0.3 s in ground effect, lost the marker; better to finish)
-    commit_h: float = 0.45          # commit (centred and still) below this, m
+    commit_h: float = 0.50          # commit (centred and still) below this, m (0.45 until 2026-11-25 23:02:
+                                    # FINAL bobbed 0.38-0.50 m and the drone was centred within 1 cm for
+                                    # ~1 s at 0.46-0.47 m without committing; 0.50 = the whole FINAL band)
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
     commit_err: float = 0.03        # (0.025 until 2026-11-25 22:24, see final_pause_err)
                                     # TOUCHDOWN stage: commit only centred within this ...

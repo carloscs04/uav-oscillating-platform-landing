@@ -338,6 +338,14 @@ def test_final_off_centre_committed_climbs_to_retry():
     assert o["phase"] == "DESCEND" and h >= law.p.final_h + 0.05   # ... until above final_h
 
 
+def test_commits_when_centred_just_above_final_h():
+    """Flight 2026-11-25 23:02: centred within 1 cm for ~1 s at 0.46-0.47 m in FINAL, no commit."""
+    law, t = _strict_final(), 0.3
+    for _ in range(30):
+        law.step((0.005, 0.0), 0.47, t); t += 0.05
+    assert law.committed and law.phase == "FINAL"
+
+
 def test_commit_inside_3cm_after_short_hold():
     law, t = _strict_final(), 0.3
     for _ in range(30):                                         # 2.8 cm, still once the rate settles: commits
