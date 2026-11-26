@@ -118,6 +118,21 @@ class LandingParams:
     touch_speed: float = 0.30       # touch gate -> pad: ~0.4 s from 0.25 m, so the ~3 s wobble cannot move it
                                     # far (sim: 0.15 m/s landed 0/30 with 3 cm wobble, 0.30 m/s 27/30; ArduPilot
                                     # LAND touches at 0.5 m/s), m/s
+    ff_gain: float = 1.0            # pad-velocity feed-forward: pad v ~= error rate + what the drone is doing
+                                    # (smith_gain x the command smith_tau ago), low-passed over ff_tau so the
+                                    # ~2.5 s wobble is mostly filtered out; 0 = off
+    ff_tau: float = 2.0             # s
+    ff_max: float = 0.08            # m/s
+    ki: float = 0.15                # 1/s^2: integral of the error -> follows a moving pad without the P lag
+                                    # (sim: pad at 3 cm/s, P only lagged ~9 cm and never descended)
+    i_max: float = 0.06             # integral contribution limit, m/s
+    abort_hold_s: float = 0.5       # glide: abort only when above abort_err this long (one swing is not a
+                                    # reason to climb; sim with 5 cm air: 0/30 landed, ~40 retries each)
+    smith_tau: float = 0.9          # Smith predictor: the Pixhawk moves ~this long after a command (0.8-1.0 s
+                                    # measured every flight 2026-11-25), s
+    smith_gain: float = 0.8         # ... at this fraction of it (fc gain 0.55-1.07). The PD acts on the error
+                                    # MINUS what the commands already sent will still move it, so it stops
+                                    # pushing a swing the Pixhawk is already correcting (0 = off)
     lead_s: float = 0.7             # FINAL commit / resume use the error predicted this far ahead
                                     # (2026-11-25 22:12: committed at 2.1 cm sliding 4 cm/s -> 5.4 cm; resumed
                                     # at 2.0 cm closing at 7 cm/s -> overshot to 6.9 cm, lost at 0.19 m;
@@ -159,6 +174,11 @@ class LandingLaw:
         self.last_err = None        # last valid |err|, m
         self._prev = None       # (t, f, r) for the error rate
         self.rate = (0.0, 0.0)  # filtered d(err)/dt, m/s
+        self._cmds = []         # (t, v_fwd, v_right) sent, for the Smith predictor
+        self.i_acc = (0.0, 0.0) # integral term, m/s
+        self.pad_v = (0.0, 0.0) # estimated pad velocity (drone frame), m/s
+        self._i_t = None
+        self.abort_since = None
 
     def _set(self, phase, now, h=None):
         if phase != self.phase:
@@ -190,14 +210,31 @@ class LandingLaw:
         rf, rr = (f - prev[1]) / dt, (r - prev[2]) / dt
         self.rate = (self.rate[0] + a * (rf - self.rate[0]), self.rate[1] + a * (rr - self.rate[1]))
 
-    def _horizontal(self, f, r, low=False):
+    def _pending(self, now):
+        """Distance (fwd, right) the commands of the last smith_tau will still move the drone."""
+        p = self.p
+        if p.smith_gain <= 0 or not self._cmds:
+            return 0.0, 0.0
+        self._cmds = [c for c in self._cmds if now - c[0] < p.smith_tau]
+        df = dr = 0.0
+        for i, (t, vf, vr) in enumerate(self._cmds):
+            t2 = self._cmds[i + 1][0] if i + 1 < len(self._cmds) else now
+            dt = min(max(0.0, t2 - t), 0.3)
+            df, dr = df + vf * dt, dr + vr * dt
+        return p.smith_gain * df, p.smith_gain * dr
+
+    def _horizontal(self, f, r, low=False, now=None):
+        if now is not None:
+            pf, pr = self._pending(now)
+            f, r = f - pf, r - pr               # error once the commands in flight have acted
         e = math.hypot(f, r)
         db = self.p.deadband_final if low else self.p.deadband
         kp = 0.0 if e < db else (self.p.kp_final if low else self.p.kp)
         kd = self.p.kd_final if low else self.p.kd
         vmax = self.p.v_max_final if low else self.p.v_max
-        vf = kp * f + kd * self.rate[0]
-        vr = kp * r + kd * self.rate[1]
+        g = self.p.ff_gain
+        vf = kp * f + kd * self.rate[0] + self.i_acc[0] + g * self.pad_v[0]
+        vr = kp * r + kd * self.rate[1] + self.i_acc[1] + g * self.pad_v[1]
         if math.hypot(vf, vr) < (0.002 if low else 0.005):
             return 0.0, 0.0
         n = math.hypot(vf, vr)
@@ -216,6 +253,7 @@ class LandingLaw:
 
         if not valid:
             self._prev, self.rate = None, (0.0, 0.0)
+            self._i_t = None                        # keep the integral (pad motion), stop adding
             lost = None if self.last_valid_t is None else now - self.last_valid_t
             out["lost_s"] = None if lost is None else round(lost, 2)
             if (self.committed and self.strict_descent and self.phase == "FINAL"
@@ -268,7 +306,20 @@ class LandingLaw:
         self.last_err = e
         self.climb = False
         out["err_m"] = e
+        out["_now"] = now
         self._update_rate(f, r, now)
+        if self.p.ki > 0 and self._i_t is not None and 0 < now - self._i_t < 0.3:
+            dt, m = now - self._i_t, self.p.i_max
+            self.i_acc = tuple(max(-m, min(m, a + self.p.ki * v * dt)) for a, v in zip(self.i_acc, (f, r)))
+        if self.p.ff_gain > 0 and self._cmds and self._i_t is not None:
+            old = self._cmds[0]                     # ~smith_tau ago: what the drone does now
+            if now - old[0] >= 0.5 * self.p.smith_tau:
+                gd = self.p.smith_gain or 0.8
+                est = (self.rate[0] + gd * old[1], self.rate[1] + gd * old[2])
+                a = min(1.0, (now - self._i_t) / self.p.ff_tau)
+                m = self.p.ff_max
+                self.pad_v = tuple(max(-m, min(m, pv + a * (ev - pv))) for pv, ev in zip(self.pad_v, est))
+        self._i_t = now
 
         if self.phase in ("HOLD", "TOUCHDOWN"):
             if self._lifted(h_m):
@@ -289,7 +340,7 @@ class LandingLaw:
         # still drifting 8 cm/s, which the 6 cm/s limit could not stop)
         low = self.phase in ("FINAL", "TOUCHDOWN") or (h_m is not None and h_m < p.final_h + p.slow_band)
         self._low = low
-        out["v_fwd"], out["v_right"] = self._horizontal(f, r, low)
+        out["v_fwd"], out["v_right"] = self._horizontal(f, r, low, now)
         # TOUCHDOWN stage: only descend (and commit) with the error inside align_tol
         pause_err = min(p.pause_err, p.align_tol) if self.strict_descent else p.pause_err
 
@@ -330,7 +381,8 @@ class LandingLaw:
                 self.centred_since = (self.centred_since or now) if (e if p.glide else e_lead) <= p.commit_err else None
             why = None
             if self.strict_descent and self.committed and not self.retry:
-                if e > p.abort_err:
+                self.abort_since = (self.abort_since or now) if e > p.abort_err else None
+                if e > p.abort_err and (not p.glide or now - self.abort_since >= p.abort_hold_s):
                     why = f"error {e * 100:.1f} cm > {p.abort_err * 100:.0f} cm"
                 elif self.committed and h_m < p.final_pause_min_h and e > p.blind_err:
                     why = f"error {e * 100:.1f} cm at {h_m:.2f} m"
@@ -401,6 +453,11 @@ class LandingLaw:
         return self._round(out)
 
     def _round(self, out):
+        if out.get("err_m") is not None and out.get("_now") is not None:
+            self._cmds.append((out["_now"], out["v_fwd"], out["v_right"]))
+        elif out.get("err_m") is None:
+            self._cmds = []                     # lost / braking: nothing in flight we model
+        out.pop("_now", None)
         # extra fields for the tuning log: error rate (D input), gain set in use, commit state
         out["rate_fwd"], out["rate_right"] = round(self.rate[0], 4), round(self.rate[1], 4)
         out["gains"] = "low" if getattr(self, "_low", False) else "high"

@@ -17,7 +17,7 @@ OLD = dict(final_h=0.30, commit_h=0.30, blind_h=0.40, final_speed=0.07, abort_er
 
 
 def test_signs_and_limit():
-    law = LandingLaw(LandingParams(kd=0.0))             # P only: these jumps are not real motion
+    law = LandingLaw(LandingParams(kd=0.0, ki=0.0, ff_gain=0.0, smith_gain=0.0))  # P only: these jumps are not real motion
     o = law.step((0.10, 0.0), 1.0, 0.0)          # target 10 cm in FRONT -> go forward
     assert o["phase"] == "ALIGN" and o["v_fwd"] > 0 and o["v_right"] == 0 and o["v_down"] == 0
     o = law.step((0.0, -0.10), 1.0, 0.1)         # target to the LEFT -> negative right
@@ -93,7 +93,7 @@ def test_hold_rearms_when_target_gone():
 
 
 def test_d_term_opposes_drift():
-    law = LandingLaw(LandingParams(kp=0.0, deadband=0.0))
+    law = LandingLaw(LandingParams(kp=0.0, deadband=0.0, ki=0.0, ff_gain=0.0, smith_gain=0.0))
     o = None
     for i in range(20):                                  # target sliding right at 0.1 m/s
         o = law.step((0.0, 0.05 + 0.1 * i * 0.033), 1.0, i * 0.033)
@@ -327,7 +327,8 @@ def test_final_off_centre_committed_climbs_to_retry():
     law = _strict_final()
     t = _commit(law, 0.3)
     h = 0.40
-    o = law.step((0.09, 0.0), h, t)                             # past abort_err (8 cm)
+    for _ in range(12):                                         # past abort_err (8 cm) for 0.6 s
+        o = law.step((0.09, 0.0), h, t); t += 0.05
     assert o["v_down"] == -law.p.reacquire_speed and "retry" in o["note"] and not law.committed
     for _ in range(80):                                         # even centred again: keeps climbing ...
         t += 0.05
@@ -413,6 +414,13 @@ def test_glide_past_blind_err_after_go_retries():
     assert law.touch_go
     o = law.step((0.04, 0.0), 0.18, t)                                    # 4 cm at 0.18 m: climb, retry
     assert o["v_down"] < 0 and not law.committed and not law.touch_go
+
+
+def test_integral_and_feedforward_follow_sliding_pad():
+    """Moving table: P alone lags v/kp behind; the integral + pad feed-forward close the gap."""
+    import tools.landing_sim as S
+    assert S.run(0, wobble=0.0, pad_v=0.02, slide=True, T=90)[2] == "TOUCHDOWN"
+    assert S.run(0, wobble=0.0, pad_v=0.02, slide=True, T=90, ki=0.0, ff_gain=0.0)[2] != "TOUCHDOWN"
 
 
 if __name__ == "__main__":

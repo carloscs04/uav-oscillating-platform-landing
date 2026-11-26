@@ -100,5 +100,7 @@ PSC_D_ACC_P,0.05
 #   1) P 1.4 -> 1.8 (this file)   2) if better, I 0.25 -> 0.5   worse -> back to P 1.4
 # Keep D at 0.25 (it amplifies the camera-flow noise).
 PSC_NE_VEL_P,1.8
-PSC_NE_VEL_I,0.25
+# 2026-11-25 23:32: P 1.8 helped (tracking corr 0.51 -> 0.62); I 0.25 -> 0.5 so the Pixhawk itself resists the
+# steady push of the table air (the Pi answers ~1 s late, only the Pixhawk can reject a gust). Worse -> back to 0.25
+PSC_NE_VEL_I,0.5
 PSC_NE_VEL_D,0.25
