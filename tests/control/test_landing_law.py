@@ -174,6 +174,21 @@ def test_params_from_config():
     assert p.kp == 0.8 and p.v_max == 0.2
 
 
+def test_final_lifted_back_above_goes_descend():
+    """Flight 2026-11-25 20:18: reacquire climb left it at 0.40 m in FINAL, centred but never descending."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.step((0.0, 0.0), 0.6, 0.0)
+    law.step((0.0, 0.0), 0.6, 0.1)
+    assert law.step((0.0, 0.0), 0.28, 0.2)["phase"] == "FINAL"
+    assert law.step((0.0, 0.0), 0.33, 0.3)["phase"] == "FINAL"   # small bump: stays
+    out = law.step((0.0, 0.0), 0.40, 0.4)
+    assert out["phase"] == "DESCEND"
+    for i in range(30):                                          # still, centred: comes back down
+        out = law.step((0.0, 0.0), 0.40, 0.5 + 0.1 * i)
+    assert out["phase"] == "DESCEND" and out["v_down"] > 0
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:

@@ -253,6 +253,12 @@ class LandingLaw:
                 out["note"] = f"settling: moving {moving * 100:.1f} cm/s, holding height"
             if h_m < p.final_h:
                 self._set("FINAL", now)
+        if (self.phase == "FINAL" and self.strict_descent and not self.committed
+                and h_m is not None and h_m >= p.final_h + 0.05):
+            # lifted back above final_h (reacquire climb): FINAL never descends uncommitted and
+            # cannot commit up here, so go back to DESCEND (2026-11-25 20:18: stuck at 0.40 m 50 s)
+            self._set("DESCEND", now)
+            out["v_down"] = 0.0
         if self.phase == "FINAL":
             if self.strict_descent and not self.committed:
                 self.centred_since = (self.centred_since or now) if e <= p.commit_err else None
