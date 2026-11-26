@@ -288,11 +288,6 @@ def test_entering_guided_resets_law_once():
     assert calls == [1]
 
 
-if __name__ == "__main__":
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print("OK", name)
 
 
 def test_descend_brakes_before_the_approach_floor():
@@ -371,3 +366,10 @@ def test_stop_mission_keeps_the_stage_touchdown_backs_off_to_35():
     assert s.tick()[2] < 0.0                                  # climbs back to 35 cm
     mav.state.set(LOITER)
     assert s.mission_stop() is None and s.stage is None
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print("OK", name)
