@@ -5,6 +5,7 @@ test_landing_law.py - landing law phases and signs (no hardware).
     python3 -m pytest tests/control/test_landing_law.py
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -197,28 +198,15 @@ def test_final_corrects_small_errors():
     assert law._horizontal(0.015, 0.0, low=False) == (0.0, 0.0)  # higher up: deadband as before
 
 
-if __name__ == "__main__":
-    failed = 0
-    for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:
-        try:
-            fn()
-            print("PASS", name)
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            print("FAIL", name, repr(e))
-    print("\nPASS" if not failed else f"\nFAIL ({failed})")
-    sys.exit(1 if failed else 0)
-
-
-def test_final_waits_for_3cm_even_committed():
+def test_final_waits_for_pause_err_even_committed():
     law, t = LandingLaw(), 0.0
     for _ in range(60):                                  # align, then descend into FINAL
         law.step((0.0, 0.0), 0.35, t); t += 0.05
     o = law.step((0.0, 0.0), 0.25, t); t += 0.05         # below commit_h, centred -> committed
     assert o["phase"] == "FINAL" and law.committed and o["v_down"] > 0
     o = law.step((0.04, 0.0), 0.24, t); t += 0.05        # 4 cm off: wait, with a message
-    assert o["v_down"] == 0.0 and "4.0 cm > 3 cm" in o["note"]
-    o = law.step((0.025, 0.0), 0.24, t); t += 0.05       # back inside 3 cm -> descends again
+    assert o["v_down"] == 0.0 and "4.0 cm > 2.5 cm" in o["note"]
+    o = law.step((0.02, 0.0), 0.24, t); t += 0.05        # back inside 2.5 cm -> descends again
     assert o["v_down"] > 0
     o = law.step((0.07, 0.0), 0.14, t)                   # very low: keeps going down
     assert o["v_down"] > 0
@@ -275,3 +263,27 @@ def test_lost_low_climbs_early_to_see_it():
     out = law.step(None, 0.30, 0.9)
     assert out["phase"] == "FINAL" and out["v_down"] == -law.p.reacquire_speed
     assert law.step(None, 0.45, 1.5)["v_down"] == 0.0           # high enough: stop climbing
+
+
+def test_slow_band_uses_calm_gains():
+    """Flight 2026-11-25 21:50: at 0.30-0.40 m (DESCEND) the high gains asked 13 cm/s and swung +-8 cm."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.step((0.0, 0.0), 0.6, 0.0)
+    law.step((0.0, 0.0), 0.6, 0.1)                              # DESCEND
+    law.step((0.0, 0.0), 0.36, 0.2)
+    out = law.step((0.08, 0.0), 0.36, 0.25)                     # 8 cm jump: big P + D
+    assert out["phase"] == "DESCEND"
+    assert math.hypot(out["v_fwd"], out["v_right"]) <= law.p.v_max_final + 1e-9
+
+
+if __name__ == "__main__":
+    failed = 0
+    for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:
+        try:
+            fn()
+            print("PASS", name)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print("FAIL", name, repr(e))
+    print("\nPASS" if not failed else f"\nFAIL ({failed})")
+    sys.exit(1 if failed else 0)

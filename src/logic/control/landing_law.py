@@ -43,7 +43,8 @@ class LandingParams:
     kp_final: float = 0.3           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
                                     # a 3-4 cm error asked only 1-2 cm/s and drifted 0.4 -> 4.4 cm in 1 s)
     kd_final: float = 0.6           # FINAL (below final_h): damping ...
-    v_max_final: float = 0.06       # ... and sideways limit (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
+    v_max_final: float = 0.08       # ... and sideways limit (0.06 until 2026-11-25 21:50: could not brake an
+                                    # 8 cm/s drift, 2 -> 8 cm in 1.5 s at 0.30 m; kd 0.6 now, not 0.3 as 19:38) (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
                                     # with v_max 0.3 commanded 0.15-0.28 m/s, swung up to 16 cm;
                                     # 2026-11-25 19:38: kd 0.3 / 0.08 m/s could not stop an 8 cm/s
                                     # drift, overshot to 12 cm and lost the marker 4 times;
@@ -231,7 +232,10 @@ class LandingLaw:
         if self.phase == "SEARCH":
             self._set("ALIGN", now)
 
-        low = self.phase in ("FINAL", "TOUCHDOWN") or (h_m is not None and h_m < p.final_h)
+        # calm FINAL gains already in the slow band above final_h (2026-11-25 21:50: at 0.30-0.40 m
+        # the DESCEND gains asked up to 13 cm/s, swung +-8 cm with a ~2 s period and entered FINAL
+        # still drifting 8 cm/s, which the 6 cm/s limit could not stop)
+        low = self.phase in ("FINAL", "TOUCHDOWN") or (h_m is not None and h_m < p.final_h + p.slow_band)
         out["v_fwd"], out["v_right"] = self._horizontal(f, r, low)
         # TOUCHDOWN stage: only descend (and commit) with the error inside align_tol
         pause_err = min(p.pause_err, p.align_tol) if self.strict_descent else p.pause_err
@@ -288,7 +292,7 @@ class LandingLaw:
                                f"for {p.commit_hold_s:.1f} s")
             else:
                 lim = pause_err if (e > pause_err and not self.committed) else p.final_pause_err
-                out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.0f} cm, not descending"
+                out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.1f} cm, not descending"
         out["phase"] = self.phase
         return self._round(out)
 
