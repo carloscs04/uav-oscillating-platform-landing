@@ -87,8 +87,7 @@ FS_THR_ENABLE,3
 DISARM_DELAY,10
 
 # --- Vertical position controller ---
-# Throttle per unit of vertical-acceleration error. ArduPilot default 0.5 (PSC_ACCZ_P before
-# 4.7, renamed without rescaling). It was 0.05 on every log: the height followed the Pi's
-# v_down seconds late and even moved the wrong way (2026-11-25 19:38: asked 0.15 m/s down
-# for 8 s and climbed 0.28 -> 0.51 m). If the height buzzes/oscillates after this, try 0.3.
-PSC_D_ACC_P,0.5
+# Throttle per unit of vertical-acceleration error. KEEP 0.05 (4.7 value on every vehicle).
+# 2026-11-25 20:00: set to 0.5 (pre-4.7 default, assumed not rescaled): on takeoff the four
+# motors pumped together 1150 <-> 1940 every ~0.1 s, it bounced and flipped (pitch 32 deg).
+PSC_D_ACC_P,0.05
