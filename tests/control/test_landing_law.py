@@ -214,3 +214,15 @@ def test_lost_off_centre_but_on_ground_touches_down_not_climbs():
         o = law.step(None, 0.09, 0.1 + 0.05 * i)
         assert o["v_down"] >= 0.0, (i, o)
     assert law.phase == "TOUCHDOWN"
+
+
+def test_touchdown_stage_slows_before_final():
+    """Flight 2026-11-25 19:22: TOUCHDOWN from 0.39 m reached FINAL at 15 cm/s and sank to 0.17."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.step((0.0, 0.0), 0.6, 0.0)
+    assert law.step((0.0, 0.0), 0.6, 0.1)["v_down"] == law.p.descend_speed
+    assert law.step((0.0, 0.0), 0.38, 0.2)["v_down"] == law.p.final_speed
+    law2 = LandingLaw(LandingParams(align_hold_s=0.0))       # APPROACH/normal: unchanged
+    law2.step((0.0, 0.0), 0.38, 0.0)
+    assert law2.step((0.0, 0.0), 0.38, 0.1)["v_down"] == law2.p.descend_speed

@@ -65,6 +65,8 @@ class SenderParams:
     hold_kp: float = 0.6        # height hold with the lidar (stop/align/approach floor): m/s per m
     hold_v_max: float = 0.08    # ... at most this up or down, m/s
     hold_deadband: float = 0.02 # ... no correction inside this band, m
+    land_hold_kp: float = 1.2   # FINAL waiting for the error: stiffer hold (19:22 flight sank
+    land_hold_v_max: float = 0.15  # 0.29 -> 0.17 m while the soft hold asked only -2..-8 cm/s)
                                 # (flight 2026-11-23: with v_down = 0 the drone sank 0.6 -> 0.15 m)
     # START MISSION sequence
     auto_h1: float = 0.70       # first approach height, m
@@ -374,7 +376,9 @@ class GuidedSender:
         err = float(h) - target
         if abs(err) < self.p.hold_deadband:
             return 0.0
-        return max(-self.p.hold_v_max, min(self.p.hold_v_max, self.p.hold_kp * err))
+        kp, vmax = ((self.p.land_hold_kp, self.p.land_hold_v_max) if stage == "land_wait"
+                    else (self.p.hold_kp, self.p.hold_v_max))
+        return max(-vmax, min(vmax, kp * err))
 
     def _check_touchdown(self, stage, ls, fresh, now):
         """Motors off (normal, not forced disarm) only when really stopped on the ground."""

@@ -54,6 +54,8 @@ class LandingParams:
     pause_err: float = 0.10         # stop descending while |err| above this, m
     final_h: float = 0.30           # FINAL below this height, m
     final_speed: float = 0.07       # m/s (was 0.10: more time to correct per cm of descent)
+    slow_band: float = 0.10         # TOUCHDOWN stage: already final_speed this far above final_h
+                                    # (2026-11-25 19:22: arrived at 0.30 m at 15 cm/s, sank to 0.17)
     final_pause_err: float = 0.03   # FINAL (even committed): wait, no descent, while |err| above this, m
                                     # (was 0.05: on 2026-11-25 it reached 4.4 cm without ever pausing)
                                     # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
@@ -229,7 +231,10 @@ class LandingLaw:
                     self._set("HOLD", now, h_m)
                     out["v_fwd"] = out["v_right"] = 0.0
         if self.phase == "DESCEND":
-            out["v_down"] = p.descend_speed if e <= pause_err else 0.0
+            speed = p.descend_speed
+            if self.strict_descent and h_m is not None and h_m < p.final_h + p.slow_band:
+                speed = p.final_speed
+            out["v_down"] = speed if e <= pause_err else 0.0
             if h_m < p.final_h:
                 self._set("FINAL", now)
         if self.phase == "FINAL":
