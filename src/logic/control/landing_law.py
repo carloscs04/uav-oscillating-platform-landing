@@ -40,6 +40,8 @@ class LandingParams:
                                     # 2026-11-24, raised with kp so the damping ratio grows)
     d_tau: float = 0.25             # low-pass time constant of the error rate, s
     v_max: float = 0.30             # horizontal speed limit, m/s
+    kp_final: float = 0.5           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
+                                    # a 3-4 cm error asked only 1-2 cm/s and drifted 0.4 -> 4.4 cm in 1 s)
     kd_final: float = 0.3           # FINAL (below final_h): softer damping ...
     v_max_final: float = 0.08       # ... and slower sideways (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
                                     # commanded 0.15-0.28 m/s for 3-5 cm errors, swung up to 16 cm
@@ -51,8 +53,9 @@ class LandingParams:
     descend_speed: float = 0.15     # m/s
     pause_err: float = 0.10         # stop descending while |err| above this, m
     final_h: float = 0.30           # FINAL below this height, m
-    final_speed: float = 0.10       # m/s
-    final_pause_err: float = 0.05   # FINAL (even committed): wait, no descent, while |err| above this, m
+    final_speed: float = 0.07       # m/s (was 0.10: more time to correct per cm of descent)
+    final_pause_err: float = 0.03   # FINAL (even committed): wait, no descent, while |err| above this, m
+                                    # (was 0.05: on 2026-11-25 it reached 4.4 cm without ever pausing)
                                     # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
     final_pause_min_h: float = 0.15 # ...but below this height keep descending (too close to hover), m
     commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
@@ -125,7 +128,7 @@ class LandingLaw:
 
     def _horizontal(self, f, r, low=False):
         e = math.hypot(f, r)
-        kp = 0.0 if e < self.p.deadband else self.p.kp
+        kp = 0.0 if e < self.p.deadband else (self.p.kp_final if low else self.p.kp)
         kd = self.p.kd_final if low else self.p.kd
         vmax = self.p.v_max_final if low else self.p.v_max
         vf = kp * f + kd * self.rate[0]

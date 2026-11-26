@@ -187,15 +187,15 @@ if __name__ == "__main__":
     sys.exit(1 if failed else 0)
 
 
-def test_final_waits_for_5cm_even_committed():
+def test_final_waits_for_3cm_even_committed():
     law, t = LandingLaw(), 0.0
     for _ in range(60):                                  # align, then descend into FINAL
         law.step((0.0, 0.0), 0.35, t); t += 0.05
     o = law.step((0.0, 0.0), 0.25, t); t += 0.05         # below commit_h, centred -> committed
     assert o["phase"] == "FINAL" and law.committed and o["v_down"] > 0
-    o = law.step((0.07, 0.0), 0.24, t); t += 0.05        # 7 cm off: wait, with a message
-    assert o["v_down"] == 0.0 and "7.0 cm > 5 cm" in o["note"]
-    o = law.step((0.03, 0.0), 0.24, t); t += 0.05        # back inside 5 cm -> descends again
+    o = law.step((0.04, 0.0), 0.24, t); t += 0.05        # 4 cm off: wait, with a message
+    assert o["v_down"] == 0.0 and "4.0 cm > 3 cm" in o["note"]
+    o = law.step((0.025, 0.0), 0.24, t); t += 0.05       # back inside 3 cm -> descends again
     assert o["v_down"] > 0
     o = law.step((0.07, 0.0), 0.14, t)                   # very low: keeps going down
     assert o["v_down"] > 0
