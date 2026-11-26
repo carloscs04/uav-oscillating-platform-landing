@@ -40,13 +40,15 @@ class LandingParams:
                                     # 2026-11-24, raised with kp so the damping ratio grows)
     d_tau: float = 0.25             # low-pass time constant of the error rate, s
     v_max: float = 0.30             # horizontal speed limit, m/s
-    kp_final: float = 0.5           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
+    kp_final: float = 0.3           # FINAL: stronger pull to the centre (flight 2026-11-25 19:10: with kp 0.35
                                     # a 3-4 cm error asked only 1-2 cm/s and drifted 0.4 -> 4.4 cm in 1 s)
     kd_final: float = 0.6           # FINAL (below final_h): damping ...
-    v_max_final: float = 0.12       # ... and sideways limit (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
+    v_max_final: float = 0.06       # ... and sideways limit (flight 2026-11-24 22:03: at 0.2-0.3 m kd 0.9
                                     # with v_max 0.3 commanded 0.15-0.28 m/s, swung up to 16 cm;
                                     # 2026-11-25 19:38: kd 0.3 / 0.08 m/s could not stop an 8 cm/s
-                                    # drift, overshot to 12 cm and lost the marker 4 times)
+                                    # drift, overshot to 12 cm and lost the marker 4 times;
+                                    # 2026-11-25 20:08: kp 0.5 / 0.12 m/s swung +-10 cm with a 2.5 s
+                                    # period (drone answers ~0.5 s late), now kp 0.3 / 0.06 m/s)
     settle_rate: float = 0.03       # DESCEND: below final_h + slow_band descend only while the error
                                     # moves slower than this (enter FINAL still, not passing through), m/s
     reacquire_dh: float = 0.10      # DESCEND/FINAL lost below final_h + this: after lost_hold_s climb at

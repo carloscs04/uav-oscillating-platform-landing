@@ -316,12 +316,29 @@ def test_land_wait_holds_lidar_height():
     vis.set(0.0, 0.0, 0.0, h=0.25)
     s.mission_start()
     s.select("touchdown")
-    vis.ls["phase"] = "FINAL"
+    vis.ls["phase"], vis.ls["err_m"] = "FINAL", 0.06
     s.tick()                                      # latches 0.25 m
     assert s.last["reason"] == "waiting for error: holding"
     vis.set(0.0, 0.0, 0.0, h=0.20)
-    vis.ls["phase"] = "FINAL"
+    vis.ls["phase"], vis.ls["err_m"] = "FINAL", 0.06
     assert s.tick()[2] < 0                        # sank 5 cm while waiting -> climbs back
+
+
+def test_land_wait_without_marker_never_descends():
+    mav, vis, s = make()
+    mav.state.set(GUIDED)
+    s.tick()
+    vis.set(0.0, 0.0, 0.0, h=0.25)
+    s.mission_start()
+    s.select("touchdown")
+    vis.ls["phase"], vis.ls["err_m"] = "FINAL", 0.06
+    s.tick()                                      # latches 0.25 m
+    vis.set(0.0, 0.0, 0.0, h=0.45)                # climbed to look again, marker not seen
+    vis.ls["phase"], vis.ls["err_m"] = "FINAL", None
+    assert s.tick()[2] <= 0                       # 20:09:11: pulled back down 0.15 m/s blind
+    vis.set(0.0, 0.0, 0.0, h=0.45)
+    vis.ls["phase"], vis.ls["err_m"] = "FINAL", 0.06
+    assert s.tick()[2] == 0.0                     # marker back: holds 0.45, not the old 0.25
 
 
 def test_stop_mission_keeps_the_stage_touchdown_backs_off_to_35():

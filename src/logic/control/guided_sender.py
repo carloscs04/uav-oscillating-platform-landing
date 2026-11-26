@@ -304,7 +304,13 @@ class GuidedSender:
                         reason = "approach height: slowing"
         if stage == "land" and reason == "law" and vd == 0.0 and ls.get("phase") in ("DESCEND", "FINAL"):
             # DESCEND/FINAL waiting (error or settling): hold the lidar height (v_down = 0 alone sinks)
+            if ls.get("err_m") is None:
+                # no marker: hold where it is now, never pull back down to an old height
+                # (2026-11-25 20:09:11 descended 0.15 m/s blind after the reacquire climb)
+                self._hold_stage, self._hold_h = "land_wait", ls.get("h_m")
             vd = self._hold("land_wait", ls.get("h_m"))
+            if ls.get("err_m") is None:
+                vd = min(vd, 0.0)
             reason = "waiting for error: holding"
         elif stage == "land" and self._hold_stage == "land_wait":
             self._hold_stage = None
