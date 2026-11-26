@@ -66,8 +66,9 @@ class LandingParams:
     align_timeout_s: float = 30.0   # ALIGN longer than this -> HOLD
     descend_speed: float = 0.15     # m/s
     pause_err: float = 0.10         # stop descending while |err| above this, m
-    final_h: float = 0.30           # FINAL below this height, m
-    final_speed: float = 0.07       # m/s (was 0.10: more time to correct per cm of descent)
+    final_h: float = 0.45           # FINAL below this height, m (0.30 until 2026-11-25 22:18: hovering at
+                                    # 0.30-0.40 m the Pixhawk drifted 15-20 cm/s on its own and lost the marker)
+    final_speed: float = 0.10       # m/s (0.07 until 2026-11-25 22:18: less time hovering near the ground)
     slow_band: float = 0.10         # TOUCHDOWN stage: already final_speed this far above final_h
                                     # (2026-11-25 19:22: arrived at 0.30 m at 15 cm/s, sank to 0.17)
     final_pause_err: float = 0.025  # (0.03 until 2026-11-25 20:28: drifted to 3.4 cm before stopping) FINAL (even committed): wait, no descent, while |err| above this, m
@@ -76,11 +77,15 @@ class LandingParams:
     final_pause_min_h: float = 0.20 # ...but below this height keep descending if within blind_err, m
                                     # (0.15 until 2026-11-25 22:00: paused at 0.17 m with 2.6 cm, drifted to
                                     # 5.9 cm in 0.3 s in ground effect, lost the marker; better to finish)
-    commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
+    commit_h: float = 0.45          # commit (centred and still) below this, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
     commit_err: float = 0.025       # TOUCHDOWN stage: commit only centred within this ...
     commit_hold_s: float = 0.5      # ... for this long (flight 2026-11-24 21:53: committed at 1.9 cm,
                                     # drifted to 4.3 cm, lost the marker at 0.22 m and went down blind)
+    blind_h: float = 0.20           # committed and marker lost: blind descent only below this, m
+    abort_err: float = 0.05         # land stage FINAL: error above this -> climb above final_h and retry
+    final_hold_max_s: float = 1.5   # committed, holding height longer than this -> climb and retry
+                                    # (2026-11-25 22:18: each hold low ended drifting off and losing it)
     lead_s: float = 0.7             # FINAL commit / resume use the error predicted this far ahead
                                     # (2026-11-25 22:12: committed at 2.1 cm sliding 4 cm/s -> 5.4 cm; resumed
                                     # at 2.0 cm closing at 7 cm/s -> overshot to 6.9 cm, lost at 0.19 m;
@@ -116,6 +121,8 @@ class LandingLaw:
         self.stop_h = None      # height where TOUCHDOWN/HOLD started
         self.committed = False  # FINAL below commit_h: descend even without target
         self.centred_since = None   # strict commit: |err| <= commit_err since
+        self.retry = False          # FINAL: climbing back above final_h to try again
+        self.hold_since = None      # committed FINAL: holding height since
         self.last_err = None        # last valid |err|, m
         self._prev = None       # (t, f, r) for the error rate
         self.rate = (0.0, 0.0)  # filtered d(err)/dt, m/s
@@ -129,6 +136,7 @@ class LandingLaw:
             if phase in ("SEARCH", "ALIGN", "HOLD"):
                 self.committed = False
             self.centred_since = None
+            self.retry, self.hold_since = False, None
 
     def _lifted(self, h):
         return h is not None and self.stop_h is not None and h > self.stop_h + self.p.rearm_dh
@@ -181,7 +189,7 @@ class LandingLaw:
                 self.committed = False          # lost while off-centre: no blind descent
                 out["note"] = f"lost {self.last_err * 100:.1f} cm off-centre: no blind descent"
             if self.committed and self.phase in ("FINAL", "TOUCHDOWN"):
-                if h_m is None or h_m < p.commit_h + 0.10:
+                if h_m is None or h_m < p.blind_h:
                     out["v_down"] = p.final_speed
                     out["note"] = "committed: blind descent"
                     if self.phase == "FINAL" and h_m is not None and h_m < p.touchdown_h:
@@ -284,6 +292,23 @@ class LandingLaw:
             e_lead = max(e, math.hypot(f + self.rate[0] * p.lead_s, r + self.rate[1] * p.lead_s))
             if self.strict_descent and not self.committed:
                 self.centred_since = (self.centred_since or now) if e_lead <= p.commit_err else None
+            why = None
+            if self.strict_descent and not self.retry:
+                if e > p.abort_err:
+                    why = f"error {e * 100:.1f} cm > {p.abort_err * 100:.0f} cm"
+                elif self.committed and h_m < p.final_pause_min_h and e > p.blind_err:
+                    why = f"error {e * 100:.1f} cm at {h_m:.2f} m"
+                elif (self.committed and self.hold_since is not None
+                        and now - self.hold_since > p.final_hold_max_s):
+                    why = f"held {now - self.hold_since:.1f} s low"
+                if why:
+                    self.retry, self.committed = True, False
+                    self.centred_since = self.hold_since = None
+            if self.retry:
+                # never hover low off-centre: go back up where the Pixhawk and the camera work
+                out["v_down"] = -p.reacquire_speed
+                out["note"] = (why + ": " if why else "") + "climbing to retry"
+        if self.phase == "FINAL" and not self.retry:
             if h_m < p.commit_h and not self.committed and (
                     not self.strict_descent
                     or (self.centred_since is not None and now - self.centred_since >= p.commit_hold_s)):
@@ -293,6 +318,7 @@ class LandingLaw:
                     (e > p.blind_err and h_m < p.final_pause_min_h) or \
                     (self.strict_descent and not self.committed)
             out["v_down"] = 0.0 if pause else p.final_speed
+            self.hold_since = (self.hold_since or now) if (pause and self.committed) else None
             if h_m < p.touchdown_h and not pause:
                 self._set("TOUCHDOWN", now, h_m)
                 out["v_fwd"] = out["v_right"] = 0.0

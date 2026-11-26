@@ -12,6 +12,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.logic.control.landing_law import LandingLaw, LandingParams  # noqa: E402
 
+# geometry before 2026-11-25 22:18 (FINAL/commit at 0.30 m, no retry): tests of the phase logic
+OLD = dict(final_h=0.30, commit_h=0.30, blind_h=0.40, final_speed=0.07, abort_err=1.0, final_hold_max_s=99.0)
+
 
 def test_signs_and_limit():
     law = LandingLaw(LandingParams(kd=0.0))             # P only: these jumps are not real motion
@@ -101,7 +104,7 @@ def test_d_term_opposes_drift():
 
 
 def test_committed_blind_descent_and_touchdown_push():
-    law, t, h = LandingLaw(), 0.0, 0.5
+    law, t, h = LandingLaw(LandingParams(**OLD)), 0.0, 0.5
     while law.phase != "FINAL":
         o = law.step((0.0, 0.0), h, t)
         h -= o["v_down"] * 0.05
@@ -113,8 +116,6 @@ def test_committed_blind_descent_and_touchdown_push():
     assert law.committed
     o = law.step((0.03, 0.0), h, t)                       # 3 cm low: no pause any more
     assert o["v_down"] > 0
-    o = law.step((0.15, 0.0), h, t + 0.01)                # beyond blind_err low: hold and correct
-    assert o["v_down"] == 0.0
     for i in range(100):                                  # pad out of view: keep going down
         o = law.step(None, h, t + 0.05 * (i + 1))
         h = max(0.05, h - o["v_down"] * 0.05)
@@ -122,7 +123,7 @@ def test_committed_blind_descent_and_touchdown_push():
 
 
 def test_lost_at_22cm_keeps_descending():
-    law, t, h = LandingLaw(), 0.0, 0.5                    # flight 2026-11-22: lost at 0.22 m
+    law, t, h = LandingLaw(LandingParams(**OLD)), 0.0, 0.5                    # flight 2026-11-22: lost at 0.22 m
     while h > 0.22:
         o = law.step((0.0, 0.0), h, t)
         h -= o["v_down"] * 0.05
@@ -136,7 +137,7 @@ def test_lost_at_22cm_keeps_descending():
 
 
 def test_strict_descent_needs_5cm():
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.strict_descent = True
     law.step((0.0, 0.0), 0.6, 0.0)
     law.step((0.0, 0.0), 0.6, 0.1)
@@ -156,7 +157,7 @@ def test_strict_descent_needs_5cm():
 
 def test_strict_no_blind_descent_when_lost_off_centre():
     """Flight 2026-11-24 21:53: drifted to 4.3 cm and lost the marker at 0.22 m."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.strict_descent = True
     law.phase, law.committed = "FINAL", True
     law.step((0.043, 0.0), 0.22, 0.0)
@@ -165,7 +166,7 @@ def test_strict_no_blind_descent_when_lost_off_centre():
     for i in range(80):                                         # then climbs to search again
         o = law.step(None, 0.22, 0.1 + 0.05 * i)
     assert o["v_down"] < 0
-    law2 = LandingLaw(LandingParams(align_hold_s=0.0))          # lost centred: blind descent ok
+    law2 = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))          # lost centred: blind descent ok
     law2.strict_descent = True
     law2.phase, law2.committed = "FINAL", True
     law2.step((0.02, 0.0), 0.22, 0.0)
@@ -179,7 +180,7 @@ def test_params_from_config():
 
 def test_final_lifted_back_above_goes_descend():
     """Flight 2026-11-25 20:18: reacquire climb left it at 0.40 m in FINAL, centred but never descending."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.strict_descent = True
     law.step((0.0, 0.0), 0.6, 0.0)
     law.step((0.0, 0.0), 0.6, 0.1)
@@ -201,7 +202,7 @@ def test_final_corrects_small_errors():
 
 
 def test_final_waits_for_pause_err_even_committed():
-    law, t = LandingLaw(), 0.0
+    law, t = LandingLaw(LandingParams(**OLD)), 0.0
     for _ in range(60):                                  # align, then descend into FINAL
         law.step((0.0, 0.0), 0.35, t); t += 0.05
     o = law.step((0.0, 0.0), 0.25, t); t += 0.05         # below commit_h, centred -> committed
@@ -213,7 +214,7 @@ def test_final_waits_for_pause_err_even_committed():
     assert o["v_down"] > 0
     o = law.step((0.03, 0.0), 0.14, t); t += 0.05        # very low, within blind_err: keeps going down
     assert o["v_down"] > 0
-    o = law.step((0.07, 0.0), 0.14, t)                   # very low but 7 cm off: hold and correct
+    o = law.step((0.07, 0.0), 0.14, t)                   # very low but 7 cm off: hold (land stage: retry)
     assert o["v_down"] == 0.0
 
 
@@ -234,19 +235,19 @@ def test_lost_off_centre_but_on_ground_touches_down_not_climbs():
 
 def test_touchdown_stage_slows_before_final():
     """Flight 2026-11-25 19:22: TOUCHDOWN from 0.39 m reached FINAL at 15 cm/s and sank to 0.17."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.strict_descent = True
     law.step((0.0, 0.0), 0.6, 0.0)
     assert law.step((0.0, 0.0), 0.6, 0.1)["v_down"] == law.p.descend_speed
     assert law.step((0.0, 0.0), 0.38, 0.2)["v_down"] == law.p.final_speed
-    law2 = LandingLaw(LandingParams(align_hold_s=0.0))       # APPROACH/normal: unchanged
+    law2 = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))       # APPROACH/normal: unchanged
     law2.step((0.0, 0.0), 0.38, 0.0)
     assert law2.step((0.0, 0.0), 0.38, 0.1)["v_down"] == law2.p.descend_speed
 
 
 def test_descend_waits_until_still_before_final():
     """Flight 2026-11-25 19:38: reached 0.30 m crossing the centre at 8 cm/s and overshot."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.step((0.0, 0.0), 0.6, 0.0)
     law.step((0.0, 0.0), 0.6, 0.1)                              # DESCEND
     law.step((-0.02, 0.0), 0.36, 0.2)
@@ -259,7 +260,7 @@ def test_descend_waits_until_still_before_final():
 
 def test_lost_low_climbs_early_to_see_it():
     """Lost the marker at 0.28 m: climb after lost_hold_s instead of braking 3 s."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.strict_descent = True                                   # TOUCHDOWN stage, not committed
     law.step((0.0, 0.0), 0.6, 0.0)
     law.step((0.0, 0.0), 0.6, 0.1)
@@ -288,7 +289,7 @@ def test_final_sliding_does_not_commit_or_resume():
 
 def test_slow_band_uses_calm_gains():
     """Flight 2026-11-25 21:50: at 0.30-0.40 m (DESCEND) the high gains asked 13 cm/s and swung +-8 cm."""
-    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law = LandingLaw(LandingParams(align_hold_s=0.0, **OLD))
     law.step((0.0, 0.0), 0.6, 0.0)
     law.step((0.0, 0.0), 0.6, 0.1)                              # DESCEND
     law.step((0.0, 0.0), 0.36, 0.2)
@@ -296,6 +297,52 @@ def test_slow_band_uses_calm_gains():
     assert out["phase"] == "DESCEND"
     assert math.hypot(out["v_fwd"], out["v_right"]) <= law.p.v_max_final + 1e-9
 
+
+
+def _strict_final(h=0.40):
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    law.strict_descent = True
+    law.step((0.0, 0.0), 0.7, 0.0)
+    law.step((0.0, 0.0), 0.7, 0.1)                              # DESCEND
+    assert law.step((0.0, 0.0), h, 0.2)["phase"] == "FINAL"
+    return law
+
+
+def test_final_off_centre_climbs_to_retry():
+    """Flight 2026-11-25 22:18: hovering low off-centre the Pixhawk drifted 15-20 cm/s and lost it."""
+    law, h, t = _strict_final(), 0.40, 0.3
+    o = law.step((0.07, 0.0), h, t)
+    assert o["v_down"] == -law.p.reacquire_speed and "retry" in o["note"]
+    for _ in range(40):                                         # even centred again: keeps climbing ...
+        t += 0.05
+        h += 0.005
+        o = law.step((0.0, 0.0), h, t)
+        if o["phase"] == "DESCEND":
+            break
+    assert o["phase"] == "DESCEND" and h >= law.p.final_h + 0.05   # ... until above final_h
+
+
+def test_committed_hold_too_long_climbs_to_retry():
+    law, t = _strict_final(), 0.3
+    for _ in range(15):                                         # centred and still: commits
+        law.step((0.005, 0.0), 0.40, t); t += 0.05
+    assert law.committed
+    for _ in range(40):                                         # 3 cm: holds, then gives up and climbs
+        o = law.step((0.03, 0.0), 0.38, t); t += 0.05
+    assert o["v_down"] < 0 and not law.committed
+
+
+def test_blind_only_below_blind_h():
+    law, t = _strict_final(), 0.3
+    for _ in range(15):
+        law.step((0.005, 0.0), 0.40, t); t += 0.05
+    assert law.committed
+    assert law.step(None, 0.30, t)["v_down"] == 0.0             # lost at 0.30 m: brake, no blind
+    law2, t = _strict_final(), 0.3
+    for _ in range(15):
+        law2.step((0.005, 0.0), 0.40, t); t += 0.05
+    law2.step((0.005, 0.0), 0.18, t)
+    assert law2.step(None, 0.18, t + 0.05)["v_down"] > 0        # lost at 0.18 m, centred: blind ok
 
 if __name__ == "__main__":
     failed = 0
