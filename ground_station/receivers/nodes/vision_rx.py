@@ -37,7 +37,7 @@ class VisionReceiver(threading.Thread):
             "voltage_v": 0.0
         }
 
-        # CSV of the vision packets while the Pi's `visionlog` runs -> experiments/vision/<date>/
+        # CSV of the vision packets while the Pi's `visionlog` runs -> experiments/vision/visionlog/<date>/
         self.vision_logger = VisionExperimentLogger()
         atexit.register(self.vision_logger.close)
         # compact GUIDED-only control log for tuning -> experiments/vision/pid/<date>/

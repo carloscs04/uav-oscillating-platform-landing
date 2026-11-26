@@ -7,7 +7,7 @@ from src.logic.master.cmd_nodes.base_cmd import BaseNodeCLI
 from src.logic.vision.height_check import summarize
 
 
-# <repo>/experiments/vision/<date>/ (next to experiments/flights/, same layout)
+# <repo>/experiments/vision/visionlog/<date>/ (next to experiments/flights/, same layout)
 class VisionCLI(BaseNodeCLI):
     """All VisionManager CLI commands and aliases."""
 
@@ -88,7 +88,7 @@ class VisionCLI(BaseNodeCLI):
 
     def cmd_visionlog(self, args: List[str]) -> str:
         """Ask the ground station to record the vision packets (pixel target, lidar, tilt-
-        compensated offset, roll/pitch) to experiments/vision/<date>/ ON THE LAPTOP. Nothing is
+        compensated offset, roll/pitch) to experiments/vision/visionlog/<date>/ ON THE LAPTOP. Nothing is
         written on the Pi: it only raises a flag in the vision telemetry."""
         state = self.manager.state
         if args and args[0].lower() == "stop":
@@ -106,7 +106,7 @@ class VisionCLI(BaseNodeCLI):
         self._log_thread = threading.Thread(target=self._log_loop, args=(name,), name="VisionLog", daemon=True)
         self._log_thread.start()
         # The folder date is the LAPTOP's local date (the Pi runs on UTC, so it can differ)
-        self.log(f"visionlog {seconds:.0f} s: the ground station records experiments/vision/"
+        self.log(f"visionlog {seconds:.0f} s: the ground station records experiments/vision/visionlog/"
                  f"<laptop date>/{name}.csv (keep the panel open); "
                  "landing law reset to SEARCH", "OK")
         return "VISIONLOG_STARTED"

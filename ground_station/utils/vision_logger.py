@@ -14,7 +14,7 @@ class VisionExperimentLogger:
     (read from the ground station's MAVLink receiver). Any other mode, disarm or a lost MAVLink
     link closes it after CLOSE_GRACE_S. The Pi's `visionlog` command only gives the file a name;
     it never records outside LOITER/GUIDED. Nothing is written on the Pi. One row per received
-    vision packet (~30 Hz) -> experiments/vision/<YYYY-MM-DD>/<name>.csv."""
+    vision packet (~30 Hz) -> experiments/vision/visionlog/<YYYY-MM-DD>/<name>.csv."""
 
     RECORD_MODES = {4: "GUIDED", 5: "LOITER"}   # ArduCopter custom_mode
     CLOSE_GRACE_S = 1.5                          # so a brief mode flicker does not split files
@@ -33,7 +33,7 @@ class VisionExperimentLogger:
                  mode_source: Optional[Callable[[], Optional[Tuple[bool, int]]]] = None):
         if base_dir is None:
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            base_dir = os.path.join(repo_root, "experiments", "vision")
+            base_dir = os.path.join(repo_root, "experiments", "vision", "visionlog")
         self.base_dir = base_dir
         self.mode_source = mode_source or self._mavlink_mode
         self._lock = threading.Lock()

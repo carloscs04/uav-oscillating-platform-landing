@@ -50,7 +50,9 @@ class LandingParams:
                                     # drift, overshot to 12 cm and lost the marker 4 times;
                                     # 2026-11-25 20:08: kp 0.5 / 0.12 m/s swung +-10 cm with a 2.5 s
                                     # period (drone answers ~0.5 s late), now kp 0.3 / 0.06 m/s)
-    settle_rate: float = 0.03       # DESCEND: below final_h + slow_band descend only while the error
+    settle_rate: float = 0.05       # (0.03 until 2026-11-25 22:00: the drone almost never moves slower, it
+                                    # waited 22 s in 0.30-0.40 m; FINAL still has to centre 0.5 s to commit)
+                                    # DESCEND: below final_h + slow_band descend only while the error
                                     # moves slower than this (enter FINAL still, not passing through), m/s
     reacquire_dh: float = 0.10      # DESCEND/FINAL lost below final_h + this: after lost_hold_s climb at
     reacquire_speed: float = 0.10   # this until it is seen again (camera sees only +-7 cm at 0.28 m), m/s
@@ -70,7 +72,9 @@ class LandingParams:
     final_pause_err: float = 0.025  # (0.03 until 2026-11-25 20:28: drifted to 3.4 cm before stopping) FINAL (even committed): wait, no descent, while |err| above this, m
                                     # (was 0.05: on 2026-11-25 it reached 4.4 cm without ever pausing)
                                     # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
-    final_pause_min_h: float = 0.15 # ...but below this height keep descending (too close to hover), m
+    final_pause_min_h: float = 0.20 # ...but below this height keep descending (too close to hover), m
+                                    # (0.15 until 2026-11-25 22:00: paused at 0.17 m with 2.6 cm, drifted to
+                                    # 5.9 cm in 0.3 s in ground effect, lost the marker; better to finish)
     commit_h: float = 0.30          # below this: no pauses, lost target -> keep descending, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
     commit_err: float = 0.025       # TOUCHDOWN stage: commit only centred within this ...
@@ -156,6 +160,7 @@ class LandingLaw:
 
     def step(self, target, h_m, now):
         p = self.p
+        self._low = False
         if self.phase_t is None:
             self.phase_t = now
         valid = target is not None and h_m is not None
@@ -236,6 +241,7 @@ class LandingLaw:
         # the DESCEND gains asked up to 13 cm/s, swung +-8 cm with a ~2 s period and entered FINAL
         # still drifting 8 cm/s, which the 6 cm/s limit could not stop)
         low = self.phase in ("FINAL", "TOUCHDOWN") or (h_m is not None and h_m < p.final_h + p.slow_band)
+        self._low = low
         out["v_fwd"], out["v_right"] = self._horizontal(f, r, low)
         # TOUCHDOWN stage: only descend (and commit) with the error inside align_tol
         pause_err = min(p.pause_err, p.align_tol) if self.strict_descent else p.pause_err
@@ -296,8 +302,11 @@ class LandingLaw:
         out["phase"] = self.phase
         return self._round(out)
 
-    @staticmethod
-    def _round(out):
+    def _round(self, out):
+        # extra fields for the tuning log: error rate (D input), gain set in use, commit state
+        out["rate_fwd"], out["rate_right"] = round(self.rate[0], 4), round(self.rate[1], 4)
+        out["gains"] = "low" if getattr(self, "_low", False) else "high"
+        out["committed"] = int(bool(self.committed))
         for k in ("v_fwd", "v_right", "v_down", "err_m", "h_m"):
             if out.get(k) is not None:
                 out[k] = round(float(out[k]), 4)

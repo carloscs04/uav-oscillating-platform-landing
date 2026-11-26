@@ -457,6 +457,7 @@ class CameraNode:
             out["sent_v_fwd"], out["sent_v_right"], out["sent_v_down"] = (
                 last.get("v_fwd"), last.get("v_right"), last.get("v_down"))
             out["sent_reason"] = last.get("reason")
+            out["stage"] = sender.stage or ""
         if hasattr(self.vision_state, "update_landing_shadow"):
             self.vision_state.update_landing_shadow(out)
 
