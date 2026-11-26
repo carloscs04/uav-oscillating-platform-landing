@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.logic.control.landing_law import LandingLaw, LandingParams  # noqa: E402
 
 # geometry before 2026-11-25 22:18 (FINAL/commit at 0.30 m, no retry): tests of the phase logic
-OLD = dict(final_h=0.30, commit_h=0.30, blind_h=0.40, final_speed=0.07, abort_err=1.0, final_hold_max_s=99.0)
+OLD = dict(final_h=0.30, commit_h=0.30, blind_h=0.40, final_speed=0.07, abort_err=1.0, final_hold_max_s=99.0, commit_err=0.025, commit_hold_s=0.5, final_pause_err=0.025)
 
 
 def test_signs_and_limit():
@@ -208,7 +208,7 @@ def test_final_waits_for_pause_err_even_committed():
     o = law.step((0.0, 0.0), 0.25, t); t += 0.05         # below commit_h, centred -> committed
     assert o["phase"] == "FINAL" and law.committed and o["v_down"] > 0
     o = law.step((0.04, 0.0), 0.24, t); t += 0.05        # 4 cm off: wait, with a message
-    assert o["v_down"] == 0.0 and "4.0 cm > 2.5 cm" in o["note"]
+    assert o["v_down"] == 0.0 and "error 4.0 cm" in o["note"] and "> 2.5 cm" in o["note"]
     for _ in range(20):                                  # back inside 2.5 cm and still -> descends again
         o = law.step((0.02, 0.0), 0.24, t); t += 0.05
     assert o["v_down"] > 0
@@ -274,7 +274,7 @@ def test_lost_low_climbs_early_to_see_it():
 def test_final_sliding_does_not_commit_or_resume():
     """Flight 2026-11-25 22:12: committed at 2.1 cm while sliding 4 cm/s; resumed at 2.0 cm closing
     at 7 cm/s and overshot to 6.9 cm. The predicted error (lead_s ahead) gates both."""
-    law2, t2, xs = LandingLaw(LandingParams(align_hold_s=0.0)), 0.0, 0.0
+    law2, t2, xs = LandingLaw(LandingParams(align_hold_s=0.0, commit_err=0.025, commit_hold_s=0.5)), 0.0, 0.0
     law2.strict_descent = True
     law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
     law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
@@ -308,11 +308,27 @@ def _strict_final(h=0.40):
     return law
 
 
-def test_final_off_centre_climbs_to_retry():
+def test_final_off_centre_uncommitted_holds_not_climbs():
+    """Flight 2026-11-25 22:24: climbing on every 5 cm swing at 0.45 m looped up/down for 100 s."""
+    law, t = _strict_final(), 0.3
+    o = law.step((0.07, 0.0), 0.40, t)
+    assert o["v_down"] == 0.0 and "retry" not in o["note"] and o["phase"] == "FINAL"
+
+
+def _commit(law, t, h=0.40):
+    for _ in range(15):                                         # centred and still: commits
+        law.step((0.005, 0.0), h, t); t += 0.05
+    assert law.committed
+    return t
+
+
+def test_final_off_centre_committed_climbs_to_retry():
     """Flight 2026-11-25 22:18: hovering low off-centre the Pixhawk drifted 15-20 cm/s and lost it."""
-    law, h, t = _strict_final(), 0.40, 0.3
+    law = _strict_final()
+    t = _commit(law, 0.3)
+    h = 0.40
     o = law.step((0.07, 0.0), h, t)
-    assert o["v_down"] == -law.p.reacquire_speed and "retry" in o["note"]
+    assert o["v_down"] == -law.p.reacquire_speed and "retry" in o["note"] and not law.committed
     for _ in range(40):                                         # even centred again: keeps climbing ...
         t += 0.05
         h += 0.005
@@ -322,21 +338,27 @@ def test_final_off_centre_climbs_to_retry():
     assert o["phase"] == "DESCEND" and h >= law.p.final_h + 0.05   # ... until above final_h
 
 
-def test_committed_hold_too_long_climbs_to_retry():
+def test_commit_inside_3cm_after_short_hold():
     law, t = _strict_final(), 0.3
-    for _ in range(15):                                         # centred and still: commits
-        law.step((0.005, 0.0), 0.40, t); t += 0.05
+    for _ in range(30):                                         # 2.8 cm, still once the rate settles: commits
+        law.step((0.028, 0.0), 0.43, t); t += 0.05
     assert law.committed
-    for _ in range(40):                                         # 3 cm: holds, then gives up and climbs
-        o = law.step((0.03, 0.0), 0.38, t); t += 0.05
+
+
+def test_committed_hold_too_long_climbs_to_retry_only_low():
+    law = _strict_final()
+    t = _commit(law, 0.3)
+    for _ in range(60):                                         # 4 cm at 0.40 m: just waits
+        o = law.step((0.04, 0.0), 0.40, t); t += 0.05
+    assert o["v_down"] == 0.0 and law.committed
+    for _ in range(40):                                         # 4 cm at 0.30 m: holds, gives up, climbs
+        o = law.step((0.04, 0.0), 0.30, t); t += 0.05
     assert o["v_down"] < 0 and not law.committed
 
 
 def test_blind_only_below_blind_h():
-    law, t = _strict_final(), 0.3
-    for _ in range(15):
-        law.step((0.005, 0.0), 0.40, t); t += 0.05
-    assert law.committed
+    law = _strict_final()
+    t = _commit(law, 0.3)
     assert law.step(None, 0.30, t)["v_down"] == 0.0             # lost at 0.30 m: brake, no blind
     law2, t = _strict_final(), 0.3
     for _ in range(15):

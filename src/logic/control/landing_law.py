@@ -71,7 +71,9 @@ class LandingParams:
     final_speed: float = 0.10       # m/s (0.07 until 2026-11-25 22:18: less time hovering near the ground)
     slow_band: float = 0.10         # TOUCHDOWN stage: already final_speed this far above final_h
                                     # (2026-11-25 19:22: arrived at 0.30 m at 15 cm/s, sank to 0.17)
-    final_pause_err: float = 0.025  # (0.03 until 2026-11-25 20:28: drifted to 3.4 cm before stopping) FINAL (even committed): wait, no descent, while |err| above this, m
+    final_pause_err: float = 0.03   # (0.025 until 2026-11-25 22:24: the Pixhawk wobbles +-4 cm with a ~2.5 s
+                                    # period on its own, so the predicted error almost never stayed under it)
+                                    # (0.03 until 2026-11-25 20:28: drifted to 3.4 cm before stopping) FINAL (even committed): wait, no descent, while |err| above this, m
                                     # (was 0.05: on 2026-11-25 it reached 4.4 cm without ever pausing)
                                     # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
     final_pause_min_h: float = 0.20 # ...but below this height keep descending if within blind_err, m
@@ -79,12 +81,17 @@ class LandingParams:
                                     # 5.9 cm in 0.3 s in ground effect, lost the marker; better to finish)
     commit_h: float = 0.45          # commit (centred and still) below this, m
                                     # (flight 2026-11-22: the marker left the frame at 0.22 m)
-    commit_err: float = 0.025       # TOUCHDOWN stage: commit only centred within this ...
-    commit_hold_s: float = 0.5      # ... for this long (flight 2026-11-24 21:53: committed at 1.9 cm,
+    commit_err: float = 0.03        # (0.025 until 2026-11-25 22:24, see final_pause_err)
+                                    # TOUCHDOWN stage: commit only centred within this ...
+    commit_hold_s: float = 0.2      # (0.5 until 2026-11-25 22:24: 0.5 s inside 2.5 cm happened once in 100 s)
+                                    # ... for this long (flight 2026-11-24 21:53: committed at 1.9 cm,
                                     # drifted to 4.3 cm, lost the marker at 0.22 m and went down blind)
     blind_h: float = 0.20           # committed and marker lost: blind descent only below this, m
-    abort_err: float = 0.05         # land stage FINAL: error above this -> climb above final_h and retry
-    final_hold_max_s: float = 1.5   # committed, holding height longer than this -> climb and retry
+    abort_err: float = 0.05         # land stage FINAL, committed: error above this -> climb above final_h and
+                                    # retry. Uncommitted it only holds height and centres (2026-11-25 22:24:
+                                    # climbing on every 5 cm swing at 0.45 m looped up/down for 100 s)
+    final_hold_max_s: float = 1.5   # committed below hold_retry_h, holding longer than this -> climb, retry
+    hold_retry_h: float = 0.35      # above this a committed hold just waits (hovering 0.35-0.45 m was fine)
                                     # (2026-11-25 22:18: each hold low ended drifting off and losing it)
     lead_s: float = 0.7             # FINAL commit / resume use the error predicted this far ahead
                                     # (2026-11-25 22:12: committed at 2.1 cm sliding 4 cm/s -> 5.4 cm; resumed
@@ -293,12 +300,12 @@ class LandingLaw:
             if self.strict_descent and not self.committed:
                 self.centred_since = (self.centred_since or now) if e_lead <= p.commit_err else None
             why = None
-            if self.strict_descent and not self.retry:
+            if self.strict_descent and self.committed and not self.retry:
                 if e > p.abort_err:
                     why = f"error {e * 100:.1f} cm > {p.abort_err * 100:.0f} cm"
                 elif self.committed and h_m < p.final_pause_min_h and e > p.blind_err:
                     why = f"error {e * 100:.1f} cm at {h_m:.2f} m"
-                elif (self.committed and self.hold_since is not None
+                elif (h_m < p.hold_retry_h and self.hold_since is not None
                         and now - self.hold_since > p.final_hold_max_s):
                     why = f"held {now - self.hold_since:.1f} s low"
                 if why:
@@ -332,8 +339,11 @@ class LandingLaw:
                 out["note"] = (f"centring: error {e * 100:.1f} cm, need <= {p.commit_err * 100:.1f} cm "
                                f"for {p.commit_hold_s:.1f} s")
             else:
-                lim = pause_err if (e > pause_err and not self.committed) else p.final_pause_err
-                out["note"] = f"waiting: error {e * 100:.1f} cm > {lim * 100:.1f} cm, not descending"
+                if e > pause_err and not self.committed:
+                    out["note"] = f"waiting: error {e * 100:.1f} cm > {pause_err * 100:.1f} cm, not descending"
+                else:
+                    out["note"] = (f"waiting: error {e * 100:.1f} cm (in {p.lead_s:.1f} s {e_lead * 100:.1f} cm) "
+                                   f"> {p.final_pause_err * 100:.1f} cm, not descending")
         out["phase"] = self.phase
         return self._round(out)
 
