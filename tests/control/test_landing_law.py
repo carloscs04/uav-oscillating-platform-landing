@@ -36,7 +36,7 @@ def test_full_descent():
     assert law.phase == "TOUCHDOWN", (law.phase, h)
     order = [p for i, p in enumerate(phases) if i == 0 or p != phases[i - 1]]
     assert order == ["ALIGN", "DESCEND", "FINAL", "TOUCHDOWN"], order
-    assert phases.count("ALIGN") * 0.05 >= 2.0          # waited align_hold_s before descending
+    assert phases.count("ALIGN") * 0.05 >= law.p.align_hold_s   # waited align_hold_s before descending
 
 
 def test_pause_when_error_grows():
@@ -111,8 +111,10 @@ def test_committed_blind_descent_and_touchdown_push():
         h -= o["v_down"] * 0.05
         t += 0.05
     assert law.committed
-    o = law.step((0.15, 0.0), h, t)                       # big error low: no pause any more
+    o = law.step((0.03, 0.0), h, t)                       # 3 cm low: no pause any more
     assert o["v_down"] > 0
+    o = law.step((0.15, 0.0), h, t + 0.01)                # beyond blind_err low: hold and correct
+    assert o["v_down"] == 0.0
     for i in range(100):                                  # pad out of view: keep going down
         o = law.step(None, h, t + 0.05 * (i + 1))
         h = max(0.05, h - o["v_down"] * 0.05)
@@ -206,10 +208,13 @@ def test_final_waits_for_pause_err_even_committed():
     assert o["phase"] == "FINAL" and law.committed and o["v_down"] > 0
     o = law.step((0.04, 0.0), 0.24, t); t += 0.05        # 4 cm off: wait, with a message
     assert o["v_down"] == 0.0 and "4.0 cm > 2.5 cm" in o["note"]
-    o = law.step((0.02, 0.0), 0.24, t); t += 0.05        # back inside 2.5 cm -> descends again
+    for _ in range(20):                                  # back inside 2.5 cm and still -> descends again
+        o = law.step((0.02, 0.0), 0.24, t); t += 0.05
     assert o["v_down"] > 0
-    o = law.step((0.07, 0.0), 0.14, t)                   # very low: keeps going down
+    o = law.step((0.03, 0.0), 0.14, t); t += 0.05        # very low, within blind_err: keeps going down
     assert o["v_down"] > 0
+    o = law.step((0.07, 0.0), 0.14, t)                   # very low but 7 cm off: hold and correct
+    assert o["v_down"] == 0.0
 
 
 def test_lost_off_centre_but_on_ground_touches_down_not_climbs():
@@ -263,6 +268,22 @@ def test_lost_low_climbs_early_to_see_it():
     out = law.step(None, 0.30, 0.9)
     assert out["phase"] == "FINAL" and out["v_down"] == -law.p.reacquire_speed
     assert law.step(None, 0.45, 1.5)["v_down"] == 0.0           # high enough: stop climbing
+
+
+def test_final_sliding_does_not_commit_or_resume():
+    """Flight 2026-11-25 22:12: committed at 2.1 cm while sliding 4 cm/s; resumed at 2.0 cm closing
+    at 7 cm/s and overshot to 6.9 cm. The predicted error (lead_s ahead) gates both."""
+    law2, t2, xs = LandingLaw(LandingParams(align_hold_s=0.0)), 0.0, 0.0
+    law2.strict_descent = True
+    law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
+    law2.step((0.0, 0.0), 0.6, t2); t2 += 0.05
+    for _ in range(12):                                  # 0.6 s at 1 -> 2 cm, sliding 3 cm/s
+        xs = min(0.02, xs + 0.0015)
+        law2.step((xs, 0.0), 0.29, t2); t2 += 0.05
+    assert not law2.committed                            # e <= 2.5 cm but e_lead > 2.5 cm
+    for _ in range(20):                                  # now still at 1 cm: commits
+        law2.step((0.01, 0.0), 0.29, t2); t2 += 0.05
+    assert law2.committed
 
 
 def test_slow_band_uses_calm_gains():
