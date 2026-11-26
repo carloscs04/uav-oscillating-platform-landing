@@ -54,6 +54,9 @@ class LandingParams:
     reacquire_dh: float = 0.10      # DESCEND/FINAL lost below final_h + this: after lost_hold_s climb at
     reacquire_speed: float = 0.10   # this until it is seen again (camera sees only +-7 cm at 0.28 m), m/s
     deadband: float = 0.02          # error below this -> no horizontal command, m
+    deadband_final: float = 0.008   # FINAL/TOUCHDOWN: P acts from here (2026-11-25 20:28: with the 2 cm
+                                    # deadband the error grew 0.3 -> 3.4 cm unchecked while descending
+                                    # 0.29 -> 0.18 m, lost the marker and finished blind)
     align_tol: float = 0.05         # "aligned" when |err| below this, m
     align_hold_s: float = 2.0       # ...for this long before descending
     align_timeout_s: float = 30.0   # ALIGN longer than this -> HOLD
@@ -63,7 +66,7 @@ class LandingParams:
     final_speed: float = 0.07       # m/s (was 0.10: more time to correct per cm of descent)
     slow_band: float = 0.10         # TOUCHDOWN stage: already final_speed this far above final_h
                                     # (2026-11-25 19:22: arrived at 0.30 m at 15 cm/s, sank to 0.17)
-    final_pause_err: float = 0.03   # FINAL (even committed): wait, no descent, while |err| above this, m
+    final_pause_err: float = 0.025  # (0.03 until 2026-11-25 20:28: drifted to 3.4 cm before stopping) FINAL (even committed): wait, no descent, while |err| above this, m
                                     # (was 0.05: on 2026-11-25 it reached 4.4 cm without ever pausing)
                                     # (flight 2026-11-24: committed at 5 cm, then blind-ish descent to 7 cm off)
     final_pause_min_h: float = 0.15 # ...but below this height keep descending (too close to hover), m
@@ -137,12 +140,13 @@ class LandingLaw:
 
     def _horizontal(self, f, r, low=False):
         e = math.hypot(f, r)
-        kp = 0.0 if e < self.p.deadband else (self.p.kp_final if low else self.p.kp)
+        db = self.p.deadband_final if low else self.p.deadband
+        kp = 0.0 if e < db else (self.p.kp_final if low else self.p.kp)
         kd = self.p.kd_final if low else self.p.kd
         vmax = self.p.v_max_final if low else self.p.v_max
         vf = kp * f + kd * self.rate[0]
         vr = kp * r + kd * self.rate[1]
-        if math.hypot(vf, vr) < 0.005:
+        if math.hypot(vf, vr) < (0.002 if low else 0.005):
             return 0.0, 0.0
         n = math.hypot(vf, vr)
         if n > vmax:

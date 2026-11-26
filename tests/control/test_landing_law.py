@@ -189,6 +189,14 @@ def test_final_lifted_back_above_goes_descend():
     assert out["phase"] == "DESCEND" and out["v_down"] > 0
 
 
+def test_final_corrects_small_errors():
+    """Flight 2026-11-25 20:28: the 2 cm deadband let a 0.3 -> 3.4 cm drift grow unchecked low down."""
+    law = LandingLaw(LandingParams(align_hold_s=0.0))
+    out = law._horizontal(0.015, 0.0, low=True)
+    assert out[0] > 0                                            # 1.5 cm in FINAL: P pulls back
+    assert law._horizontal(0.015, 0.0, low=False) == (0.0, 0.0)  # higher up: deadband as before
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:
