@@ -25,8 +25,8 @@ class PrecLandLogger:
     LAND = 9
     CLOSE_GRACE_S = 1.5
     HEADERS = ("t", "det", "id", "pad_ids", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z", "age_ms",
-               "fc_fwd", "fc_right", "fc_down", "fc_h", "roll", "pitch")
-    _VOLATILE = {"t", "fc_fwd", "fc_right", "fc_down", "fc_h"}
+               "fc_fwd", "fc_right", "fc_down", "fc_h", "flow_q", "roll", "pitch")
+    _VOLATILE = {"t", "fc_fwd", "fc_right", "fc_down", "fc_h", "flow_q"}
 
     def __init__(self, base_dir: Optional[str] = None,
                  mode_source: Optional[Callable[[], Optional[Tuple[bool, int]]]] = None,
@@ -126,7 +126,7 @@ class PrecLandLogger:
             "lt_z": r(pt.get("lt_z")) if det else "",
             "age_ms": round(1000 * float(pt["frame_age_s"])) if det and pt.get("frame_age_s") is not None else "",
             "fc_fwd": r(fc.get("fc_fwd")), "fc_right": r(fc.get("fc_right")),
-            "fc_down": r(fc.get("fc_down")), "fc_h": r(fc.get("fc_h")),
+            "fc_down": r(fc.get("fc_down")), "fc_h": r(fc.get("fc_h")), "flow_q": fc.get("flow_q", ""),
             "roll": r(pt.get("roll_deg"), 1), "pitch": r(pt.get("pitch_deg"), 1),
         }
         key = tuple(v for k, v in row.items() if k not in self._VOLATILE)
@@ -189,6 +189,11 @@ class PrecLandLogger:
             out.append(f"last seen (~touchdown error): h {last['h']} m, err {100 * last['err']:.1f} cm "
                        f"(fwd {100 * last['e_fwd']:+.1f}, right {100 * last['e_right']:+.1f} cm)"
                        if last["err"] != "" else f"last seen: h {last['h']} m (no pad point)")
+        for lo, hi in ((0.4, 9.0), (0.2, 0.4), (0.0, 0.2)):
+            q = [int(r["flow_q"]) for r in rows if r.get("flow_q", "") not in ("", None)
+                 and r["fc_h"] != "" and lo <= (r["h"] if r["h"] != "" else r["fc_h"]) < hi]
+            if q:
+                out.append(f"flow quality {lo:.1f}-{hi:.1f} m: mean {sum(q) / len(q):.0f}, min {min(q)}")
         low = [r for r in rows if r["h"] != "" and r["h"] < 0.2 and r["fc_fwd"] != ""]
         if low:
             r0 = low[-1]
