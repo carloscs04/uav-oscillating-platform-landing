@@ -247,6 +247,46 @@ class MAVLinkSensorFeed:
         self.flow_history.append((time.time(), flow["rate_x"], flow["rate_y"],
                                   flow["quality"], ground_dist_m, not airborne))
 
+    # ArduPilot precision landing (PLND_TYPE = 1, companion computer): LANDING_TARGET with the
+    # touchdown point in the BODY frame (position_valid = 1, MAV_FRAME_BODY_FRD). ArduPilot fuses
+    # it with its IMU (PLND_EST_TYPE = 1) and compensates the camera latency (PLND_LAG), so the
+    # Pixhawk's own fast position loop does the centring in LAND mode (the pilot selects LAND).
+    LANDING_TARGET_MAX_AGE_S = 0.15
+
+    def _send_landing_target(self, master: Any):
+        vs = self.vision_state
+        if vs is None or not hasattr(vs, "get_pixel_target"):
+            return
+        pt = vs.get_pixel_target()
+        if not pt.get("detected") or pt.get("lt_z") is None:
+            return
+        stamp = pt.get("stamp")
+        if stamp is None or stamp == getattr(self, "_lt_last_stamp", None):
+            return                                  # one message per camera measurement
+        age = time.monotonic() - float(stamp)
+        if age > self.LANDING_TARGET_MAX_AGE_S:
+            return
+        self._lt_last_stamp = stamp
+        x, y, z = float(pt["lt_x"]), float(pt["lt_y"]), float(pt["lt_z"])
+        dist = math.sqrt(x * x + y * y + z * z)
+        if dist <= 0.0:
+            return
+        ang_x, ang_y = math.atan2(y, z), math.atan2(-x, z)  # ArduPilot: los = (-tan(ay), tan(ax), 1)
+        with self._tx_lock:
+            master.mav.landing_target_send(
+                int((time.monotonic() - self._boot_time) * 1e6),
+                0,                                          # target_num
+                mavutil.mavlink.MAV_FRAME_BODY_FRD,
+                float(ang_x), float(ang_y), float(dist),
+                0.0, 0.0,                                   # size_x/size_y (unused)
+                x, y, z,
+                [1.0, 0.0, 0.0, 0.0],
+                mavutil.mavlink.LANDING_TARGET_TYPE_VISION_FIDUCIAL,
+                1,                                          # position_valid
+            )
+        self.landing_target_sent = getattr(self, "landing_target_sent", 0) + 1
+        self.landing_target_age_s = round(age, 3)
+
     def _send_vision_position_estimate(self, master: Any, yaw_rad: float = 0.0):
         time_usec = int((time.monotonic() - self._boot_time) * 1_000_000)
         with self._tx_lock:
@@ -300,6 +340,8 @@ class MAVLinkSensorFeed:
                     if flow is not None:
                         self._integrate_odometry(flow, lidar_m, yaw_rad)
                         self._send_optical_flow(master, flow, lidar_m)
+
+                    self._send_landing_target(master)
 
                     if self.SEND_EXTERNAL_NAV and self._loop_count % 2 == 0:
                         self._send_vision_position_estimate(master, yaw_rad)

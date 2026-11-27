@@ -16,7 +16,7 @@ from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.height_check import plane_height
 from src.logic.vision.optical_flow import OpticalFlowEstimator
-from src.logic.vision.pixel_target import pad_touchdown, pixel_target, tilt_compensate
+from src.logic.vision.pixel_target import body_target, pad_touchdown, pixel_target, tilt_compensate
 from src.logic.control.landing_law import LandingLaw, LandingParams
 from src.logic.vision.target_select import load_registry, select_target
 from src.logic.vision.tracker import TargetTracker
@@ -427,6 +427,7 @@ class CameraNode:
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),
                   "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
+        t.update(self._landing_target_fields(t, lidar))
         self.vision_state.update_pixel_target(t)
         self._shadow_step()
 
@@ -491,6 +492,23 @@ class CameraNode:
                                    self.model.dist_coeffs, roll, pitch, lidar)
                 if td is not None:
                     out.update({"pad_fwd_m": round(td[0], 4), "pad_right_m": round(td[1], 4)})
+        return out
+
+    def _landing_target_fields(self, t, lidar):
+        """Touchdown point in the BODY frame for ArduPilot precision landing (LANDING_TARGET,
+        sent by the sensor feed): the pad touchdown point when known (rotated back with the
+        attitude used to level it), else the marker itself."""
+        out = {"lt_x": None, "lt_y": None, "lt_z": None}
+        if not t.get("follow"):
+            return out
+        lt = None
+        if t.get("pad_fwd_m") is not None and t.get("h_vert_m") is not None and t.get("roll_deg") is not None:
+            lt = body_target(None, None, None, (t["pad_fwd_m"], t["pad_right_m"], t["h_vert_m"]),
+                             np.radians(t["roll_deg"]), np.radians(t["pitch_deg"]))
+        elif lidar is not None:
+            lt = body_target(t["nx"], t["ny"], lidar)
+        if lt is not None:
+            out.update({"lt_x": round(lt[0], 4), "lt_y": round(lt[1], 4), "lt_z": round(lt[2], 4)})
         return out
 
     def _pad_id(self, label):

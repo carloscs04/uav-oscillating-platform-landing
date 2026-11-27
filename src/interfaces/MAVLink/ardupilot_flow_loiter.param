@@ -104,3 +104,29 @@ PSC_NE_VEL_P,1.8
 # steady push of the table air (the Pi answers ~1 s late, only the Pixhawk can reject a gust). Worse -> back to 0.25
 PSC_NE_VEL_I,0.5
 PSC_NE_VEL_D,0.25
+
+# --- Precision landing (PLND) with the Pi camera, LAND mode (the pilot selects LAND) ---
+# 2026-11-26 00:31: the Pi's GUIDED velocity loop could not hold the pad: the Pixhawk drifted
+# 5 cm/s against 4 cm/s commands for >1 s, then overshot (+-10 cm). Now the Pi only sends
+# LANDING_TARGET (touchdown point, body frame, ~30 Hz) and ArduPilot fuses it with its IMU and
+# centres with its own position loop. PLND_* appear after PLND_ENABLED=1 + reboot: load this file
+# twice (or set PLND_ENABLED, reboot, load again).
+PLND_ENABLED,1
+# 1 = companion computer (MAVLink LANDING_TARGET)
+PLND_TYPE,1
+# 1 = Kalman filter target estimator (smooths the camera, predicts between frames)
+PLND_EST_TYPE,1
+# camera frame -> message latency, s (logged by the Pi as landing_target_age_s; tune 0.05-0.15)
+PLND_LAG,0.1
+# camera looks down
+PLND_ORIENT,25
+# bit 0 = moving landing target (estimate its velocity: the table may move)
+PLND_OPTIONS,1
+# 1 = target lost: climb back and retry (no blind descent off-centre)
+PLND_STRICT,1
+PLND_RET_MAX,4
+PLND_TIMEOUT,4
+# only correct towards targets within 0.5 m (pad, not a wrong marker far away)
+PLND_XY_DIST_MAX,0.5
+# final descent speed in LAND, cm/s (default 50; minimum 30): slower = more time to centre
+LAND_SPEED,30

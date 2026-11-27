@@ -84,6 +84,27 @@ def tilt_compensate(nx, ny, roll_rad, pitch_rad, lidar_range_m, cam_to_body=CAM_
     return float(lv[0] / lv[2] * h), float(lv[1] / lv[2] * h), h
 
 
+def body_target(nx, ny, lidar_range_m, level_point=None, roll_rad=0.0, pitch_rad=0.0, cam_to_body=CAM_TO_BODY):
+    """Touchdown point in the drone BODY frame (forward, right, down), metres, for MAVLink
+    LANDING_TARGET (position_valid=1, MAV_FRAME_BODY_FRD): ArduPilot precision landing rotates it
+    with its own attitude, so it must NOT be tilt-compensated.
+
+    level_point = (forward, right, height) in the level frame (pad touchdown point from
+    pad_touchdown + h): rotated back into the body with roll/pitch. Without it, the marker ray
+    (nx, ny) scaled by the lidar slant range (the lidar points along body down)."""
+    if level_point is not None:
+        cr, sr, cp, sp = np.cos(roll_rad), np.sin(roll_rad), np.cos(pitch_rad), np.sin(pitch_rad)
+        rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+        ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        b = (ry @ rx).T @ np.array(level_point, dtype=float)
+        return float(b[0]), float(b[1]), float(b[2])
+    if lidar_range_m is None or lidar_range_m <= 0:
+        return None
+    (a, b_), (c, d) = cam_to_body
+    r = float(lidar_range_m)
+    return float((a * nx + b_ * ny) * r), float((c * nx + d * ny) * r), r
+
+
 def _level_point(px, camera_matrix, dist_coeffs, roll_rad, pitch_rad, lidar_range_m):
     nx, ny = pixel_to_ray(px, camera_matrix, dist_coeffs)
     f, r, _ = tilt_compensate(nx, ny, roll_rad, pitch_rad, lidar_range_m)

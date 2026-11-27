@@ -28,6 +28,9 @@ PARAM_FILE = os.path.join(os.path.dirname(__file__), "ardupilot_flow_loiter.para
 # skips any parameter whose type in the file differs from the vehicle's.
 MAV_PARAM_TYPES = {
     "FLOW_FXSCALER": 4, "FLOW_FYSCALER": 4, "FLOW_ORIENT_YAW": 4,
+    "PLND_ENABLED": 2, "PLND_TYPE": 2, "PLND_EST_TYPE": 2, "PLND_LAG": 9, "PLND_ORIENT": 2,
+    "PLND_OPTIONS": 4, "PLND_STRICT": 2, "PLND_RET_MAX": 2, "PLND_TIMEOUT": 9, "PLND_XY_DIST_MAX": 9,
+    "LAND_SPEED": 4,
     "ARMING_CHECK": 6, "ARMING_SKIPCHK": 5,
     # AP_Float (metres) in ArduPilot 4.6+
     "RNGFND1_MIN": 9, "RNGFND1_MAX": 9, "RNGFND1_GNDCLR": 9,
