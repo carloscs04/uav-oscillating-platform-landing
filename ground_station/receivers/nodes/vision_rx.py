@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, Tuple
 
 from ground_station.utils.vision_logger import VisionExperimentLogger
 from ground_station.utils.pid_logger import PidTuningLogger
+from ground_station.utils.plnd_logger import PrecLandLogger
 
 
 class VisionReceiver(threading.Thread):
@@ -43,6 +44,9 @@ class VisionReceiver(threading.Thread):
         # compact GUIDED-only control log for tuning -> experiments/vision/pid/<date>/
         self.pid_logger = PidTuningLogger()
         atexit.register(self.pid_logger.close)
+        # LAND-mode precision-landing log -> experiments/flights/<date>/flight_*_plnd.csv
+        self.plnd_logger = PrecLandLogger()
+        atexit.register(self.plnd_logger.close)
 
         self.rpi_address: Optional[Tuple[str, int]] = None
         self.last_rpi_ip: Optional[str] = None
@@ -129,6 +133,7 @@ class VisionReceiver(threading.Thread):
                 try:
                     self.vision_logger.process_packets(packets_snapshot, fresh=fresh_keys)
                     self.pid_logger.process_packets(packets_snapshot, fresh=fresh_keys)
+                    self.plnd_logger.process_packets(packets_snapshot, fresh=fresh_keys)
                 except Exception as e:
                     if not getattr(self, "_logger_err_shown", False):
                         print(f"[GCS VISION_LOGGER_ERR] {type(e).__name__}: {e}")
