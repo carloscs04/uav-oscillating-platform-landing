@@ -16,6 +16,7 @@ from src.inputs.camera_driver.cameras import load_config, open_camera
 from src.logic.vision import ArucoDetector, CameraModel, marker_attitude_deg, marker_object_points
 from src.logic.vision.height_check import plane_height
 from src.logic.vision.optical_flow import OpticalFlowEstimator
+from src.logic.vision.pad_fusion import PadFusion
 from src.logic.vision.pixel_target import body_target, pad_touchdown, pixel_target, tilt_compensate
 from src.logic.control.landing_law import LandingLaw, LandingParams
 from src.logic.vision.target_select import load_registry, select_target
@@ -95,6 +96,12 @@ class CameraNode:
         same_dict = pad.get("dictionary", self.config["aruco"]["dictionary"]) == self.config["aruco"]["dictionary"]
         self.pad_centers = {int(m["id"]): tuple(float(v) for v in m["center_mm"])
                             for m in (pad.get("markers") or []) if same_dict and "center_mm" in m}
+        # All visible pad markers -> one touchdown point, handed over from the big marker to the
+        # small (touchdown) one by height, with no step when a marker appears or is lost.
+        sizes = {int(m["id"]): float(m.get("size_mm", 0)) for m in (pad.get("markers") or [])
+                 if int(m["id"]) in self.pad_centers}
+        self.pad_fusion = PadFusion(near_id=min(sizes, key=sizes.get), far_id=max(sizes, key=sizes.get)) \
+            if len(sizes) >= 2 else PadFusion()
         # Landing law in SHADOW mode: computed every frame, published, never sent to the Pixhawk.
         self.landing = LandingLaw(LandingParams.from_dict(self.config.get("landing_law")))
         self._known_seen = {}   # known label -> (centre px, side px, monotonic time last seen)
@@ -324,6 +331,7 @@ class CameraNode:
         idx, known = select_target([(c[0], c[1]) for c in fresh], self.registry, pp, self._target_label)
         chosen = fresh[idx] if idx is not None else None
         self._target_label = chosen[0] if chosen else None
+        self._pad_cands = [(c[0], c[1]) for c in fresh if self._pad_id(c[0]) is not None]
         rank = set(self.registry)
         items = [(label, c, ax, label in rank) for label, c, ax, _t in cands]
         self.vision_state.update_overlay(items, shape[1], shape[0], self._target_label, pp, f)
@@ -488,10 +496,19 @@ class CameraNode:
                 out.update({"fwd_m": round(f, 4), "right_m": round(r, 4), "h_vert_m": round(h, 4)})
             mid = self._pad_id(label)
             if f is not None and corners is not None and mid is not None:
-                td = pad_touchdown(corners, self.pad_centers[mid], self.model.camera_matrix,
-                                   self.model.dist_coeffs, roll, pitch, lidar)
+                # every pad marker seen in this frame (the chosen one at least)
+                cands = getattr(self, "_pad_cands", None) or [(label, corners)]
+                points = {}
+                for lab, c in cands:
+                    i = self._pad_id(lab)
+                    td = pad_touchdown(c, self.pad_centers[i], self.model.camera_matrix,
+                                       self.model.dist_coeffs, roll, pitch, lidar)
+                    if td is not None:
+                        points[i] = td
+                td = self.pad_fusion.update(points, h, time.monotonic()) if points else None
                 if td is not None:
-                    out.update({"pad_fwd_m": round(td[0], 4), "pad_right_m": round(td[1], 4)})
+                    out.update({"pad_fwd_m": round(td[0], 4), "pad_right_m": round(td[1], 4),
+                                "pad_ids": ",".join(str(i) for i in sorted(points))})
         return out
 
     def _landing_target_fields(self, t, lidar):

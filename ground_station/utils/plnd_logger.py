@@ -16,13 +16,14 @@ class PrecLandLogger:
        flight_<HH-MM-SS>_<codename>_plnd.csv + _plnd_summary.txt
     (separate from the big flight csv on purpose; no flight being recorded -> <date>/plnd_<HH-MM-SS>.csv).
 
-    Columns: h = camera/lidar height (m), e_fwd/e_right = touchdown point seen by the camera
+    Columns: id = chosen marker, pad_ids = pad markers averaged for the touchdown point,
+    h = camera/lidar height (m), e_fwd/e_right = touchdown point seen by the camera
     (m, + = ahead/right of the drone), err = its distance, lt_* = LANDING_TARGET sent (body FRD),
     fc_* = Pixhawk velocity in the body frame (m/s), fc_h = EKF height, roll/pitch (deg)."""
 
     LAND = 9
     CLOSE_GRACE_S = 1.5
-    HEADERS = ("t", "det", "id", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z",
+    HEADERS = ("t", "det", "id", "pad_ids", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z",
                "fc_fwd", "fc_right", "fc_down", "fc_h", "roll", "pitch")
     _VOLATILE = {"t", "fc_fwd", "fc_right", "fc_down", "fc_h"}
 
@@ -116,7 +117,8 @@ class PrecLandLogger:
         ef, er = (r(pt.get("pad_fwd_m")), r(pt.get("pad_right_m"))) if det else ("", "")
         row = {
             "t": round(now - self._t0, 2), "det": int(det),
-            "id": src.split("#")[-1] if "#" in src else "", "h": r(pt.get("h_m")),
+            "id": src.split("#")[-1] if "#" in src else "", "pad_ids": pt.get("pad_ids", "") if det else "",
+            "h": r(pt.get("h_m")),
             "e_fwd": ef, "e_right": er,
             "err": round(math.hypot(ef, er), 4) if ef != "" and er != "" else "",
             "lt_x": r(pt.get("lt_x")) if det else "", "lt_y": r(pt.get("lt_y")) if det else "",
