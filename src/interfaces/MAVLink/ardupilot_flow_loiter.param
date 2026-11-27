@@ -127,8 +127,9 @@ PLND_STRICT,1
 PLND_RET_MAX,4
 PLND_TIMEOUT,4
 # LAND does not descend while the target is more than this far off-centre (m): it
-# centres first, then descends (keeps tracking a moving pad). Was 0.5: touched down sliding.
-PLND_XY_DIST_MAX,0.05
+# centres first, then descends (keeps tracking a moving pad). Was 0.5: touched down sliding;
+# 0.05: it descended the last 30 cm with a steady 3.5 cm offset (2026-11-27 flights).
+PLND_XY_DIST_MAX,0.03
 # final descent speed in LAND (default 0.5 m/s, minimum 0.3): slower = more time to centre.
 # ArduCopter 4.7 renamed LAND_SPEED (cm/s) to LAND_SPD_MS (m/s); QGC refused LAND_SPEED on 4.7.3
 LAND_SPD_MS,0.3
