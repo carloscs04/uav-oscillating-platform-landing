@@ -18,7 +18,7 @@ Point = Tuple[float, float]
 
 
 class PadFusion:
-    def __init__(self, near_id: int = 20, far_id: int = 10, h_near: float = 0.30, h_far: float = 0.45,
+    def __init__(self, near_id: int = 20, far_id: int = 10, h_near: float = 0.60, h_far: float = 0.70,
                  other_weight: float = 0.3, tau_s: float = 0.5, max_gap_s: float = 0.3):
         self.near_id, self.far_id = near_id, far_id
         self.h_near, self.h_far = h_near, h_far
