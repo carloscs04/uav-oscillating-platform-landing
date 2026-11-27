@@ -12,8 +12,9 @@ class PrecLandLogger:
     """Precision-landing log (ArduPilot LAND mode + the Pi's LANDING_TARGET), written on the
     ground station. Replaces asking for the Pixhawk .bin: what the camera saw of the pad and
     how the drone moved, only while ARMED in LAND, one row per NEW vision frame.
-    -> experiments/flights/<YYYY-MM-DD>/flight_<HH-MM-SS>_plnd.csv + _plnd_summary.txt
-    (separate from the big flight csv on purpose).
+    -> the flight's folder: experiments/flights/<date>/<HH-MM-SS>_<codename>/
+       flight_<HH-MM-SS>_<codename>_plnd.csv + _plnd_summary.txt
+    (separate from the big flight csv on purpose; no flight being recorded -> <date>/plnd_<HH-MM-SS>.csv).
 
     Columns: h = camera/lidar height (m), e_fwd/e_right = touchdown point seen by the camera
     (m, + = ahead/right of the drone), err = its distance, lt_* = LANDING_TARGET sent (body FRD),
@@ -27,7 +28,8 @@ class PrecLandLogger:
 
     def __init__(self, base_dir: Optional[str] = None,
                  mode_source: Optional[Callable[[], Optional[Tuple[bool, int]]]] = None,
-                 fc_source: Optional[Callable[[], Dict[str, Any]]] = None):
+                 fc_source: Optional[Callable[[], Dict[str, Any]]] = None,
+                 session_source: Optional[Callable[[], Optional[Tuple[str, str]]]] = None):
         if base_dir is None:
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
             base_dir = os.path.join(repo_root, "experiments", "flights")
@@ -38,8 +40,12 @@ class PrecLandLogger:
         if fc_source is None:
             from ground_station.utils.pid_logger import PidTuningLogger
             fc_source = PidTuningLogger._mavlink_fc
+        if session_source is None:
+            from ground_station.utils.flight_logger import FlightExperimentLogger
+            session_source = lambda: FlightExperimentLogger.active_session
         self.mode_source = mode_source
         self.fc_source = fc_source
+        self.session_source = session_source
         self._lock = threading.Lock()
         self._file: Optional[TextIO] = None
         self._writer = None
@@ -69,9 +75,17 @@ class PrecLandLogger:
                 self._write_locked(packets, now)
 
     def _open_locked(self, now: float):
-        day_dir = os.path.join(self.base_dir, datetime.now().strftime("%Y-%m-%d"))
+        try:
+            session = self.session_source()
+        except Exception:
+            session = None
+        if session:
+            day_dir, name = session[0], f"{session[1]}_plnd"
+        else:
+            day_dir = os.path.join(self.base_dir, datetime.now().strftime("%Y-%m-%d"))
+            name = datetime.now().strftime("plnd_%H-%M-%S")
         os.makedirs(day_dir, exist_ok=True)
-        name, n = datetime.now().strftime("flight_%H-%M-%S_plnd"), 2
+        n = 2
         self._path = os.path.join(day_dir, f"{name}.csv")
         while os.path.exists(self._path):
             self._path, n = os.path.join(day_dir, f"{name}_{n}.csv"), n + 1

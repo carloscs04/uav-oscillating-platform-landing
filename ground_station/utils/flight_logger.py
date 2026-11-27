@@ -9,7 +9,13 @@ from typing import Any, Dict, Optional, TextIO
 
 
 class FlightExperimentLogger:
-    """Automatic flight telemetry recorder triggered exclusively while the vehicle is armed."""
+    """Automatic flight telemetry recorder triggered exclusively while the vehicle is armed.
+
+    One folder per flight: experiments/flights/<date>/<HH-MM-SS>_<codename>/ holding
+    flight_<HH-MM-SS>_<codename>.csv, _events.log and the other logs of that flight (_plnd*)."""
+
+    # (folder, file prefix) of the flight being recorded, for the other loggers (plnd)
+    active_session: Optional[tuple] = None
 
     FLIGHT_CODENAMES = [
         "falcon",
@@ -147,7 +153,7 @@ class FlightExperimentLogger:
 
     def __init__(self, base_dir: Optional[str] = None):
         if base_dir is None:
-            # <repo>/experiments/flights/<date>/ (next to experiments/vision/)
+            # <repo>/experiments/flights/<date>/<HH-MM-SS>_<codename>/ (next to experiments/vision/)
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
             base_dir = os.path.join(repo_root, "experiments", "flights")
 
@@ -214,8 +220,9 @@ class FlightExperimentLogger:
         time_tag = now.strftime("%H-%M-%S")
         codename = random.choice(self.FLIGHT_CODENAMES)
 
-        session_dir = os.path.join(self.base_dir, date_folder)
+        session_dir = os.path.join(self.base_dir, date_folder, f"{time_tag}_{codename}")
         os.makedirs(session_dir, exist_ok=True)
+        FlightExperimentLogger.active_session = (session_dir, f"flight_{time_tag}_{codename}")
 
         csv_path = os.path.join(session_dir, f"flight_{time_tag}_{codename}.csv")
         event_path = os.path.join(session_dir, f"flight_{time_tag}_{codename}_events.log")
@@ -274,6 +281,7 @@ class FlightExperimentLogger:
         )
 
         self._is_recording = False
+        FlightExperimentLogger.active_session = None
         self._csv_file = None
         self._csv_writer = None
         self._event_file = None

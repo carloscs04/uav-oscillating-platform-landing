@@ -39,7 +39,7 @@ class MavlinkReceiver(threading.Thread):
             "voltage_v": 0.0
         }
 
-        # Records experiments/flights/<date>/flight_*.csv while the Pixhawk is ARMED
+        # Records experiments/flights/<date>/<HH-MM-SS>_<codename>/ while the Pixhawk is ARMED
         self.flight_logger = FlightExperimentLogger()
         atexit.register(self.flight_logger.close)
 

@@ -44,7 +44,7 @@ class VisionReceiver(threading.Thread):
         # compact GUIDED-only control log for tuning -> experiments/vision/pid/<date>/
         self.pid_logger = PidTuningLogger()
         atexit.register(self.pid_logger.close)
-        # LAND-mode precision-landing log -> experiments/flights/<date>/flight_*_plnd.csv
+        # LAND-mode precision-landing log -> the flight's folder in experiments/flights/<date>/
         self.plnd_logger = PrecLandLogger()
         atexit.register(self.plnd_logger.close)
 

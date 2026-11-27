@@ -14,7 +14,9 @@ def run():
     tmp = tempfile.mkdtemp()
     state = {"v": (True, LOITER)}
     fc = {"h": 1.2}
+    sess = os.path.join(tmp, "2026-01-01", "10-00-00_falcon")
     log = PrecLandLogger(base_dir=tmp, mode_source=lambda: state["v"],
+                         session_source=lambda: (sess, "flight_10-00-00_falcon"),
                          fc_source=lambda: {"fc_fwd": 0.03, "fc_right": 0.0, "fc_down": 0.1, "fc_h": fc["h"]})
     t = 100.0
 
@@ -28,7 +30,7 @@ def run():
             log.process_packets(p, fresh={"pixel_target"}, now=t)
 
     feed(1.2, 0.05, n=5)                                  # LOITER: nothing
-    assert glob.glob(os.path.join(tmp, "*", "*.csv")) == []
+    assert glob.glob(os.path.join(tmp, "**", "*.csv"), recursive=True) == []
     state["v"] = (True, LAND)
     feed(1.2, 0.06, n=60)                                 # holding while centring
     for k in range(40):                                   # descend
@@ -42,8 +44,8 @@ def run():
     state["v"] = (False, LAND)
     log.process_packets({}, fresh=set(), now=t + 1.0)
     log.process_packets({}, fresh=set(), now=t + 3.0)     # grace over: closed
-    files = glob.glob(os.path.join(tmp, "*", "flight_*_plnd.csv"))
-    assert len(files) == 1, files
+    files = glob.glob(os.path.join(tmp, "**", "*_plnd.csv"), recursive=True)
+    assert files == [os.path.join(sess, "flight_10-00-00_falcon_plnd.csv")], files
     rows = list(csv.DictReader(open(files[0])))
     assert len(rows) == 101, len(rows)
     s = open(files[0][:-4] + "_summary.txt").read()

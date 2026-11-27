@@ -70,7 +70,8 @@ def test_prediction_follows_descent():
 def test_recorded_flights_no_false_rejects():
     """Every LOITER/GUIDED sample of the platform day (2026-11-23), with baro: nothing rejected."""
     root = Path(__file__).resolve().parents[2] / "experiments" / "flights" / "2026-11-23"
-    files = sorted(glob.glob(str(root / "*.csv")))
+    files = sorted(f for f in glob.glob(str(root / "**" / "flight_*.csv"), recursive=True)
+                   if not f.endswith("_plnd.csv"))
     if not files:
         print("  (no recorded flights here, skipped)")
         return
