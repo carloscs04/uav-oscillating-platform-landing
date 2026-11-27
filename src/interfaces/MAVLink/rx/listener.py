@@ -19,7 +19,7 @@ class MAVLinkRXListener:
         "PSC_NE_VEL_IMAX",
         # Precision landing (LAND mode with the Pi LANDING_TARGET)
         "PLND_ENABLED", "PLND_TYPE", "PLND_EST_TYPE", "PLND_LAG", "PLND_OPTIONS", "PLND_STRICT",
-        "PLND_XY_DIST_MAX", "LAND_SPEED",
+        "PLND_XY_DIST_MAX", "LAND_SPD_MS",
         # Attitude controller and level trim (recorded in the flight events log)
         "ATC_RAT_RLL_P",
         "ATC_RAT_RLL_I",

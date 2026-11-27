@@ -128,5 +128,6 @@ PLND_RET_MAX,4
 PLND_TIMEOUT,4
 # only correct towards targets within 0.5 m (pad, not a wrong marker far away)
 PLND_XY_DIST_MAX,0.5
-# final descent speed in LAND, cm/s (default 50; minimum 30): slower = more time to centre
-LAND_SPEED,30
+# final descent speed in LAND (default 0.5 m/s, minimum 0.3): slower = more time to centre.
+# ArduCopter 4.7 renamed LAND_SPEED (cm/s) to LAND_SPD_MS (m/s); QGC refused LAND_SPEED on 4.7.3
+LAND_SPD_MS,0.3
