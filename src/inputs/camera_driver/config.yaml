@@ -70,12 +70,12 @@ landing_pad:
   mat_mm: [762, 762]             # 30 x 30 in
   # Camera lens position relative to the drone centre (x right, y front). MEASURE IT.
   # The touchdown marker (ID 20) must sit here, so the camera is above it when landed;
-  # if you change this, move ID 20 to the same point and ID 10 100 mm to its left.
+  # if you change this, move ID 20 to the same point and keep ID 10 where it is relative to it.
   camera_offset_mm: [0, 0]
   markers:
     # id, black square side, white margin (cut line) around it, centre position
     - {id: 20, size_mm: 25,  margin_mm: 10, center_mm: [0, 0]}        # touchdown, 0.09-0.6 m
-    - {id: 10, size_mm: 100, margin_mm: 17, center_mm: [-100, 0]}     # main approach, 0.33-2.5 m
+    - {id: 10, size_mm: 100, margin_mm: 17, center_mm: [-126, 10]}    # main approach, 0.33-2.5 m (measured 2026-11-27)
     - {id: 31, size_mm: 50,  margin_mm: 10, center_mm: [-280, 280]}   # corners: steadier pose,
     - {id: 32, size_mm: 50,  margin_mm: 10, center_mm: [280, 280]}    # backup when ID 10 has glare
     - {id: 33, size_mm: 50,  margin_mm: 10, center_mm: [-280, -280]}  # or the drone is off-centre
