@@ -126,8 +126,12 @@ PLND_OPTIONS,1
 PLND_STRICT,1
 PLND_RET_MAX,4
 PLND_TIMEOUT,4
-# only correct towards targets within 0.5 m (pad, not a wrong marker far away)
-PLND_XY_DIST_MAX,0.5
+# LAND does not descend while the target is more than this far off-centre (m): it
+# centres first, then descends (keeps tracking a moving pad). Was 0.5: touched down sliding.
+PLND_XY_DIST_MAX,0.05
 # final descent speed in LAND (default 0.5 m/s, minimum 0.3): slower = more time to centre.
 # ArduCopter 4.7 renamed LAND_SPEED (cm/s) to LAND_SPD_MS (m/s); QGC refused LAND_SPEED on 4.7.3
 LAND_SPD_MS,0.3
+# battery low failsafe: warn only, do not switch mode (the pilot picks modes;
+# the critical failsafe BATT_FS_CRT_ACT is left as it is)
+BATT_FS_LOW_ACT,0
