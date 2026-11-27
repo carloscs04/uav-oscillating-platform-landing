@@ -194,8 +194,12 @@ class CameraNode:
             )
 
         K = getattr(model, "K", None)
+        if K is None:
+            K = getattr(model, "camera_matrix", None)
+        principal = None
         if K is not None:
-            fx, fy = float(K[0, 0]), float(K[1, 1])
+            fx, fy = float(K[0][0]), float(K[1][1])
+            principal = (float(K[0][2]), float(K[1][2]))
         else:
             fx = float(getattr(model, "fx", cam_cfg.get("nominal_focal_px", 500.0)))
             fy = float(getattr(model, "fy", fx))
@@ -208,6 +212,8 @@ class CameraNode:
             swap_xy=bool(flow_cfg.get("swap_xy", False)),
             invert_x=bool(flow_cfg.get("invert_x", False)),
             invert_y=bool(flow_cfg.get("invert_y", False)),
+            principal_px=principal,
+            remove_divergence=bool(flow_cfg.get("remove_divergence", True)),
         )
 
         acfg = self.config["aruco"]

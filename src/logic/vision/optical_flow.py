@@ -26,6 +26,8 @@ class OpticalFlowEstimator:
         max_flow_rad_s: float = 4.5,
         smoothing: float = 0.85,
         focal_scale: float = 1.0,
+        principal_px: Optional[Tuple[float, float]] = None,
+        remove_divergence: bool = True,
     ):
         self.native_w = max(1, int(native_resolution[0]))
         self.native_h = max(1, int(native_resolution[1]))
@@ -45,6 +47,12 @@ class OpticalFlowEstimator:
         self.min_quality = int(min_quality)
         self.max_flow_rad_s = float(max_flow_rad_s)
         self.smoothing = max(0.1, min(1.0, float(smoothing)))
+        # Optical centre in the work image: climbing/descending zooms the image about it.
+        if principal_px is not None:
+            self.cx_w, self.cy_w = float(principal_px[0]) * self.scale, float(principal_px[1]) * self.scale
+        else:
+            self.cx_w, self.cy_w = self.work_w / 2.0, self.work_h / 2.0
+        self.remove_divergence = bool(remove_divergence)
 
         self._prev_gray: Optional[np.ndarray] = None
         self._prev_pts: Optional[np.ndarray] = None
@@ -88,6 +96,31 @@ class OpticalFlowEstimator:
             "px_dx": 0.0,
             "px_dy": 0.0,
         }
+
+    @staticmethod
+    def translation_without_zoom(pts, deltas, cx, cy, min_spread_px: float = 6.0):
+        """Image motion at the optical centre, without the zoom (height change) and roll about it.
+
+        Each point moves d = t + s*(p - c) + r*perp(p - c): t = translation (what the flow sensor
+        must report), s = divergence (descending makes the image grow from c), r = yaw. A plain
+        mean is biased by s whenever the features are not spread evenly around c, as over the
+        landing pad, where the only features are on the markers (off to one side): descending at
+        0.2 m/s from 0.3 m then reads as several cm/s of sideways motion. Least squares on
+        (tx, ty, s, r); None (use the mean) if the points are too clustered to separate s from t."""
+        p = np.asarray(pts, np.float64).reshape(-1, 2) - (cx, cy)
+        d = np.asarray(deltas, np.float64).reshape(-1, 2)
+        n = len(p)
+        if n < 6 or float(np.sqrt(np.mean(np.sum((p - p.mean(axis=0)) ** 2, axis=1)))) < min_spread_px:
+            return None
+        A = np.zeros((2 * n, 4))
+        A[0::2, 0], A[0::2, 2], A[0::2, 3] = 1.0, p[:, 0], -p[:, 1]
+        A[1::2, 1], A[1::2, 2], A[1::2, 3] = 1.0, p[:, 1], p[:, 0]
+        b = d.reshape(-1)
+        try:
+            x, *_ = np.linalg.lstsq(A, b, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        return float(x[0]), float(x[1])
 
     def update(self, gray_frame: np.ndarray, stamp: float) -> Optional[dict]:
         """Processes a new grayscale frame and returns filtered angular optical flow metrics."""
@@ -149,6 +182,10 @@ class OpticalFlowEstimator:
         # Average over clean inliers gives sub-pixel precision superior to raw median
         dx_px = float(np.mean(deltas[inliers, 0]))
         dy_px = float(np.mean(deltas[inliers, 1]))
+        if self.remove_divergence:
+            fit = self.translation_without_zoom(good_old[inliers], deltas[inliers], self.cx_w, self.cy_w)
+            if fit is not None:
+                dx_px, dy_px = fit
 
         rad_x = dx_px / self.fx_scaled
         rad_y = dy_px / self.fy_scaled
