@@ -434,6 +434,7 @@ class CameraNode:
         t.update({"detected": True, "source": label, "known": bool(known),
                   "follow": bool(known or allowed is True), "approval": approval,
                   "stamp": seen_at, "age_s": round(time.monotonic() - seen_at, 3),
+                  "frame_age_s": round(time.monotonic() - getattr(self, "_frame_stamp", seen_at), 3),
                   "un": round(t["u_px"] / shape[1], 4), "vn": round(t["v_px"] / shape[0], 4)})
         t.update(self._landing_target_fields(t, lidar))
         self.vision_state.update_pixel_target(t)
@@ -666,6 +667,7 @@ class CameraNode:
                 if self.vision_enabled:
                     t0 = time.perf_counter()
                     try:
+                        self._frame_stamp = stamp      # frame read time: latency of the target
                         good = self.tracker.update(gray, stamp)
                         if getattr(self.vision_state, "scan_any", False):
                             self._scan_any(gray, stamp)

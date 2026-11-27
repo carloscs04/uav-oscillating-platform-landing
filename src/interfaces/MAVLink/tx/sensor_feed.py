@@ -87,12 +87,19 @@ class MAVLinkSensorFeed:
         self._running = True
         self._thread = threading.Thread(target=self._feed_loop, name="MAVLinkSensorFeed", daemon=True)
         self._thread.start()
+        # LANDING_TARGET goes out as soon as a camera measurement is published (checked every
+        # 5 ms), not on the 20 Hz flow tick: every frame (30 Hz) and ~25 ms less latency/jitter.
+        self._lt_thread = threading.Thread(target=self._lt_loop, name="LandingTargetTx", daemon=True)
+        self._lt_thread.start()
 
     def stop(self):
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        if getattr(self, "_lt_thread", None) is not None:
+            self._lt_thread.join(timeout=2.0)
+            self._lt_thread = None
         self.actual_rate_hz = 0.0
 
     def reset_bench_odometry(self):
@@ -253,6 +260,20 @@ class MAVLinkSensorFeed:
     # Pixhawk's own fast position loop does the centring in LAND mode (the pilot selects LAND).
     LANDING_TARGET_MAX_AGE_S = 0.15
 
+    LT_POLL_S = 0.005
+
+    def _lt_loop(self):
+        while self._running:
+            master = self.master
+            if master is not None:
+                try:
+                    self._send_landing_target(master)
+                except Exception as e:
+                    if not getattr(self, "_lt_err_logged", False):
+                        print(f"[SensorFeed LT ERR] {type(e).__name__}: {e}", flush=True)
+                        self._lt_err_logged = True
+            time.sleep(self.LT_POLL_S)
+
     def _send_landing_target(self, master: Any):
         vs = self.vision_state
         if vs is None or not hasattr(vs, "get_pixel_target"):
@@ -341,7 +362,8 @@ class MAVLinkSensorFeed:
                         self._integrate_odometry(flow, lidar_m, yaw_rad)
                         self._send_optical_flow(master, flow, lidar_m)
 
-                    self._send_landing_target(master)
+                    if getattr(self, "_lt_thread", None) is None:
+                        self._send_landing_target(master)   # no fast thread (tests, bench)
 
                     if self.SEND_EXTERNAL_NAV and self._loop_count % 2 == 0:
                         self._send_vision_position_estimate(master, yaw_rad)

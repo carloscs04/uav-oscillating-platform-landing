@@ -66,6 +66,33 @@ def test_sender_once_per_frame_and_fresh_only():
     assert len(m.mav.sent) == 1
 
 
+
+def test_fast_thread_sends_every_frame():
+    """The LANDING_TARGET thread sends each new 30 Hz frame within a few ms of publication."""
+    feed = MAVLinkSensorFeed()
+    m = _Master()
+    pt = {"detected": True, "lt_x": 0.01, "lt_y": 0.0, "lt_z": 0.5, "stamp": time.monotonic()}
+    feed.vision_state = _VS(pt)
+    feed.master = m
+    feed._running = True
+    import threading
+    th = threading.Thread(target=feed._lt_loop, daemon=True)
+    th.start()
+    lags = []
+    for _ in range(15):                       # 15 frames at 30 Hz
+        time.sleep(1 / 30)
+        n0 = len(m.mav.sent)
+        pt["stamp"] = time.monotonic()
+        t0 = time.monotonic()
+        while len(m.mav.sent) == n0 and time.monotonic() - t0 < 0.1:
+            time.sleep(0.001)
+        lags.append(time.monotonic() - t0)
+    feed._running = False
+    th.join(1.0)
+    assert len(m.mav.sent) >= 15, len(m.mav.sent)
+    assert max(lags) < 0.03, lags
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:

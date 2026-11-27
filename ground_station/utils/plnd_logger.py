@@ -19,11 +19,12 @@ class PrecLandLogger:
     Columns: id = chosen marker, pad_ids = pad markers averaged for the touchdown point,
     h = camera/lidar height (m), e_fwd/e_right = touchdown point seen by the camera
     (m, + = ahead/right of the drone), err = its distance, lt_* = LANDING_TARGET sent (body FRD),
+    age_ms = camera frame read -> measurement published (Pi processing latency),
     fc_* = Pixhawk velocity in the body frame (m/s), fc_h = EKF height, roll/pitch (deg)."""
 
     LAND = 9
     CLOSE_GRACE_S = 1.5
-    HEADERS = ("t", "det", "id", "pad_ids", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z",
+    HEADERS = ("t", "det", "id", "pad_ids", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z", "age_ms",
                "fc_fwd", "fc_right", "fc_down", "fc_h", "roll", "pitch")
     _VOLATILE = {"t", "fc_fwd", "fc_right", "fc_down", "fc_h"}
 
@@ -123,6 +124,7 @@ class PrecLandLogger:
             "err": round(math.hypot(ef, er), 4) if ef != "" and er != "" else "",
             "lt_x": r(pt.get("lt_x")) if det else "", "lt_y": r(pt.get("lt_y")) if det else "",
             "lt_z": r(pt.get("lt_z")) if det else "",
+            "age_ms": round(1000 * float(pt["frame_age_s"])) if det and pt.get("frame_age_s") is not None else "",
             "fc_fwd": r(fc.get("fc_fwd")), "fc_right": r(fc.get("fc_right")),
             "fc_down": r(fc.get("fc_down")), "fc_h": r(fc.get("fc_h")),
             "roll": r(pt.get("roll_deg"), 1), "pitch": r(pt.get("pitch_deg"), 1),
@@ -178,6 +180,10 @@ class PrecLandLogger:
             ex = f"{100 * max(errs):.1f}" if errs else "-"
             ms = f"{100 * sum(sp) / len(sp):.1f}" if sp else "-"
             out.append(f"{band:<12}  {em:>11}  {ex:>10}  {ms:>20}")
+        ages = sorted(r["age_ms"] for r in seen if r.get("age_ms", "") != "")
+        if ages:
+            out.append(f"Pi latency frame->target: median {ages[len(ages) // 2]} ms, "
+                       f"p90 {ages[int(0.9 * (len(ages) - 1))]} ms (+ camera exposure/USB, not measured)")
         last = seen[-1] if seen else None
         if last:
             out.append(f"last seen (~touchdown error): h {last['h']} m, err {100 * last['err']:.1f} cm "
