@@ -101,8 +101,10 @@ PSC_D_ACC_P,0.05
 # Keep D at 0.25 (it amplifies the camera-flow noise).
 # horizontal position gain (default 1.0): a 3 cm offset only asked 3 cm/s and was never
 # closed before touchdown in LAND (2026-11-27). 1.5: 0.2-0.4 m error 2.9 -> 1.9 cm.
-# 2.0 (next test): mid-height swings of +-5 cm still trip the 5 cm PLND gate and make it climb back.
-PSC_NE_POS_P,2.0
+# 2.0 (4 flights 02:29-02:43): no more climb-backs, but it overshoots below 0.3 m (0.9 cm at 0.22 m,
+# still moving 5-8 cm/s, touched 3.4-4.1 cm off vs 2.3-3.1 cm with 1.5).
+# 1.5 again, now with LAND_SPD_MS 0.2 (slower last 35 cm), to compare.
+PSC_NE_POS_P,1.5
 PSC_NE_VEL_P,1.8
 # 2026-11-25 23:32: P 1.8 helped (tracking corr 0.51 -> 0.62); I 0.25 -> 0.5 so the Pixhawk itself resists the
 # steady push of the table air (the Pi answers ~1 s late, only the Pixhawk can reject a gust). Worse -> back to 0.25
