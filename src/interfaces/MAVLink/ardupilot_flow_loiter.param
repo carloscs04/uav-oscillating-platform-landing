@@ -148,3 +148,6 @@ LAND_SPD_MS,0.2
 # battery low failsafe: warn only, do not switch mode (the pilot picks modes;
 # the critical failsafe BATT_FS_CRT_ACT is left as it is)
 BATT_FS_LOW_ACT,0
+# Lua scripting (2026-11-28): this Pixhawk 1 build has it; heap 44032 bytes by default.
+# Scripts go on the SD card in APM/scripts/ (src/interfaces/MAVLink/scripts/). Needs a reboot.
+SCR_ENABLE,1
