@@ -33,6 +33,9 @@ class VisionCLI(BaseNodeCLI):
         self.register_cmd("landshadow", self.cmd_landshadow,
                           "Landing mission: status | reset | start | arm <align|approach|touchdown|hold> (sends ONLY in GUIDED) | stop | disarm",
                           aliases=["lshadow"])
+        self.register_cmd("poshold", self.cmd_poshold,
+                          "POSITION HOLD in GUIDED (Pi position targets, Pixhawk position loop): "
+                          "poshold <30-150 cm> | +N / -N cm | off | status", aliases=["ph"])
         self.register_cmd("approach", self.cmd_approach,
                           "Align and descend to a height [35-100 cm or 0.35-1 m], default 35 cm")
         self.register_cmd("followunknown", self.cmd_followunknown,
@@ -205,6 +208,44 @@ class VisionCLI(BaseNodeCLI):
         else:
             self.log("Holding: stable until the next command.", "OK")
         return "LANDSHADOW_ARMED"
+
+    def cmd_poshold(self, args: List[str]) -> str:
+        """poshold 60 (cm) / 0.6 (m): centred over the pad at that height; +5 / -5: change it;
+        off: stop (holds with zero velocity until you leave GUIDED); no argument: status."""
+        gs = self.guided_sender
+        if gs is None:
+            self.log("No GUIDED sender on this machine.", "ERROR")
+            return "NO_SENDER"
+        if not args or args[0].lower() == "status":
+            st = gs.status()
+            self.log(f"POSHOLD {'ON' if gs.stage == 'pos' else 'off'} ({gs.mode_word()}) height "
+                     f"{gs.pos_h * 100:.0f} cm: {st.get('reason')}", "STATUS")
+            return "POSHOLD_STATUS"
+        text = args[0].lower()
+        if text in ("off", "stop"):
+            if gs.stage != "pos":
+                self.log("POSHOLD is not running.", "WARN")
+                return "POSHOLD_OFF"
+            gs.select("stop")
+            self.log("POSHOLD off: holding with zero velocity. Leave GUIDED with ch5 to take control.", "OK")
+            return "POSHOLD_OFF"
+        try:
+            if text[0] in "+-":
+                value = gs.pos_h + float(text.rstrip("cm")) / 100.0
+            elif text.endswith("cm"):
+                value = float(text[:-2]) / 100.0
+            else:
+                value = float(text.rstrip("m"))
+                value = value / 100.0 if value > 2.0 else value
+        except ValueError:
+            self.log("Usage: poshold <30-150 cm> | +N | -N | off | status", "ERROR")
+            return "POSHOLD_BAD_VALUE"
+        ok, msg = gs.select("pos", round(value, 3))
+        if not ok:
+            self.log(f"CANNOT RUN POSHOLD: {msg}.", "ERROR")
+            return "POSHOLD_REFUSED"
+        self.log(f"POSHOLD: centred over the pad at {gs.pos_h * 100:.0f} cm ({msg}).", "OK")
+        return "POSHOLD_ON"
 
     def cmd_approach(self, args: List[str]) -> str:
         """approach [distance]: 0.35-1 m or 35-100 cm; default 35 cm."""

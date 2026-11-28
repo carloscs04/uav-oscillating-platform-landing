@@ -84,6 +84,24 @@ class FlightCommands:
             0.0,
         )
 
+    def send_position_local(self, north: float, east: float, down: float, yaw_rad: float):
+        """Position setpoint in the EKF local frame (LOCAL_POSITION_NED, metres, + down) with an
+        explicit heading: the Pixhawk's own position loop flies to it (GUIDED). Yaw is sent, not
+        ignored, so WP_YAW_BEHAVIOR never turns the drone towards the target."""
+        if not self.master:
+            return
+        self.master.mav.set_position_target_local_ned_send(
+            0,
+            self.master.target_system,
+            self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            0b0000100111111000,  # position + yaw; velocity, acceleration, yaw rate ignored
+            float(north), float(east), float(down),
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
+            float(yaw_rad), 0.0,
+        )
+
     def send_velocity_body(self, v_fwd: float, v_right: float, v_down: float):
         """Velocity setpoint in the drone's frame (m/s): + forward, + right, + DOWN.
         MAV_FRAME_BODY_OFFSET_NED: ArduCopter rotates it by the current heading. Yaw and yaw

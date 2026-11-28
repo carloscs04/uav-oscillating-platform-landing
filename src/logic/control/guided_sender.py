@@ -23,6 +23,12 @@ Stages (what the law is allowed to do):
              (law in TOUCHDOWN, lidar below disarm_h and steady for disarm_after_s).
     stop     holds in GUIDED with zero velocity; the sticks do nothing until the pilot leaves
              GUIDED with channel 5.
+    pos      POSITION HOLD (2026-11-28): no velocities. The Pi sends a POSITION target in the
+             Pixhawk's EKF frame (LOCAL_NED): north/east = the pad (PadLocator: camera offset +
+             EKF position at the frame time, filtered), down = whatever keeps the measured height
+             above the pad at pos_h (moves at most pos_vz_max, so a rising platform is followed).
+             The Pixhawk's own position loop (the one LAND/LOITER use) does the control. Pad not
+             seen: keeps the last target. Heading held at the value when the stage started.
 
 Stage buttons work on their own (no START needed), only while armed, flying and in GUIDED.
 
@@ -41,10 +47,14 @@ import threading
 import time
 from dataclasses import dataclass, fields
 
+from src.logic.control.pad_locator import PadLocator
+
 GUIDED = 4                      # ArduCopter custom_mode
-STAGES = ("align", "descend", "land", "stop")
+STAGES = ("align", "descend", "land", "stop", "pos")
+POS_H_MIN_M, POS_H_MAX_M = 0.30, 1.50
 APPROACH_MIN_M, APPROACH_MAX_M = 0.35, 1.0
-STAGE_ALIASES = {"acercar": "descend", "approach": "descend", "touchdown": "land", "hold": "stop"}
+STAGE_ALIASES = {"acercar": "descend", "approach": "descend", "touchdown": "land", "hold": "stop",
+                 "poshold": "pos", "position": "pos"}
 
 
 @dataclass
@@ -77,6 +87,13 @@ class SenderParams:
     auto_arrive_m: float = 0.03 # arrived = lidar within this of the approach height, m
     auto_td_err: float = 0.025  # TOUCHDOWN starts only with the xy error at or below this, m
     auto_td_hold_s: float = 0.5 # ... continuously for this long, s
+    # POSITION HOLD stage (pos): Pi position targets, Pixhawk position loop
+    pos_h: float = 0.60         # default height above the pad, m
+    pos_vz_max: float = 0.15    # the height target moves at most this fast, m/s
+    pos_z_deadband: float = 0.01  # no height correction inside this band, m
+    pos_pad_max_age_s: float = 1.0  # pad estimate older than this: keep the last target
+    pos_max_offset_m: float = 0.50  # never put the xy target farther than this from the drone, m
+    pos_lpn_max_age_s: float = 0.5  # LOCAL_POSITION_NED / ATTITUDE older than this: brake
 
     @classmethod
     def from_dict(cls, d):
@@ -104,6 +121,9 @@ class GuidedSender:
         self.last = {"sent": False, "v_fwd": 0.0, "v_right": 0.0, "v_down": 0.0,
                      "reason": "disarmed", "t": None}
         self.sent_count = 0
+        self.pos_h = self.p.pos_h       # POSITION HOLD height above the pad, m
+        self._pos = None                # POSITION HOLD state: target n/e/d, yaw, last frame stamp
+        self.pad_locator = PadLocator()
         self.on_activate = None         # called when GUIDED starts (resets the law: its timers
         self._running = False           # must not run out while the pilot is still in LOITER)
         if start_thread:
@@ -197,6 +217,15 @@ class GuidedSender:
             if not APPROACH_MIN_M <= target <= APPROACH_MAX_M:
                 return False, f"approach height must be {APPROACH_MIN_M:.2f}-{APPROACH_MAX_M:.2f} m"
             self.approach_h = target
+        if name == "pos":
+            target = self.pos_h if approach_h is None else float(approach_h)
+            if not POS_H_MIN_M <= target <= POS_H_MAX_M:
+                return False, f"hold height must be {POS_H_MIN_M:.2f}-{POS_H_MAX_M:.2f} m"
+            self.pos_h = target
+            if self.stage == "pos":         # only the height changes: keep target and filter
+                return True, f"pos: height {target * 100:.0f} cm"
+            self._pos = None
+            self.pad_locator.reset()
         self._cancel_auto()
         return self.arm(stage)
 
@@ -269,6 +298,10 @@ class GuidedSender:
                 self.last.update(sent=False, reason="disarmed" if not stage else f"waiting: {why}")
             return None
 
+        if stage == "pos":
+            return self._pos_tick(now)
+        self._pos = None
+
         ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
         t = ls.get("t")
         if self.mission and t is not None and now - t <= self.p.law_max_age_s:
@@ -327,6 +360,66 @@ class GuidedSender:
             self.last = {"sent": True, "v_fwd": round(vf, 4), "v_right": round(vr, 4),
                          "v_down": round(vd, 4), "reason": reason, "t": now}
         return vf, vr, vd
+
+    def _pos_tick(self, now):
+        """POSITION HOLD: one LOCAL_NED position target to the Pixhawk (see the module doc)."""
+        p, st = self.p, self.mav.state
+        lpn, lpn_t = st.get_packet_with_time("LOCAL_POSITION_NED")
+        att, att_t = st.get_packet_with_time("ATTITUDE")
+        wall = time.time()
+        if (not lpn or not att or lpn_t is None or att_t is None
+                or wall - lpn_t > p.pos_lpn_max_age_s or wall - att_t > p.pos_lpn_max_age_s):
+            self.mav.send_velocity_body(0.0, 0.0, 0.0)
+            with self._lock:
+                self.last.update(sent=True, v_fwd=0.0, v_right=0.0, v_down=0.0,
+                                 reason="pos: no EKF position/attitude: brake", t=now)
+            return None
+        n, e, d = float(lpn["x"]), float(lpn["y"]), float(lpn["z"])
+        vn, ve = float(lpn.get("vx", 0.0)), float(lpn.get("vy", 0.0))
+        yaw = float(att["yaw"])
+        if self._pos is None:               # stage start: hold here, heading as it is
+            self._pos = {"n": n, "e": e, "d": d, "yaw": yaw, "stamp": None, "t_d": now}
+            self._log(f"POSITION HOLD: target here, height {self.pos_h * 100:.0f} cm above the pad", "WARN")
+        ps = self._pos
+
+        # xy: the pad, from each new camera frame
+        pt = self.vision_state.get_pixel_target() if self.vision_state else {}
+        stamp = pt.get("stamp")
+        if (pt.get("detected") and pt.get("follow") and pt.get("pad_fwd_m") is not None
+                and stamp is not None and stamp != ps["stamp"]):
+            ps["stamp"] = stamp
+            frame_mono = stamp + float(pt.get("age_s") or 0.0) - float(pt.get("frame_age_s") or 0.0)
+            frame_wall = wall - (time.monotonic() - frame_mono)
+            self.pad_locator.update(float(pt["pad_fwd_m"]), float(pt["pad_right_m"]), yaw,
+                                    (n, e), (vn, ve), lpn_t - frame_wall, now)
+        pad_ok = self.pad_locator.fresh(now, p.pos_pad_max_age_s)
+        if pad_ok:
+            tn, te = self.pad_locator.est
+            dn, de = tn - n, te - e
+            dist = math.hypot(dn, de)
+            if dist > p.pos_max_offset_m:   # never a far jump: walk there
+                tn, te = n + dn * p.pos_max_offset_m / dist, e + de * p.pos_max_offset_m / dist
+            ps["n"], ps["e"] = tn, te
+
+        # z: keep the measured height above the pad at pos_h (follows a moving platform)
+        ls = self.vision_state.get_landing_shadow() if self.vision_state else {}
+        h, h_t = ls.get("h_m"), ls.get("t")
+        dt = max(0.0, min(0.5, now - ps["t_d"]))
+        ps["t_d"] = now
+        if h is not None and h_t is not None and now - h_t <= self.p.law_max_age_s:
+            err = float(h) - self.pos_h      # + = too high -> target further down
+            if abs(err) > p.pos_z_deadband:
+                step = p.pos_vz_max * dt
+                ps["d"] += max(-step, min(step, d + err - ps["d"]))
+        self.mav.send_position_local(ps["n"], ps["e"], ps["d"], ps["yaw"])
+        with self._lock:
+            self.sent_count += 1
+            self.last = {"sent": True, "v_fwd": 0.0, "v_right": 0.0, "v_down": 0.0,
+                         "reason": (f"pos: target n={ps['n']:+.2f} e={ps['e']:+.2f} d={ps['d']:+.2f}"
+                                    f" ({'pad' if pad_ok else 'no pad: last target'})"
+                                    f" h={'--' if h is None else f'{float(h):.2f}'}/{self.pos_h:.2f}"),
+                         "t": now, "target_ned": (ps["n"], ps["e"], ps["d"]), "pad_ok": pad_ok}
+        return ps["n"], ps["e"], ps["d"]
 
     def _auto_tick(self, ls, now):
         """START MISSION sequence: advance to the next step when this one is done."""
