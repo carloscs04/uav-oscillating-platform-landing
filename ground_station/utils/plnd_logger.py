@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 class PrecLandLogger:
     """Precision-landing log (ArduPilot LAND mode + the Pi's LANDING_TARGET), written on the
     ground station. Replaces asking for the Pixhawk .bin: what the camera saw of the pad and
-    how the drone moved, only while ARMED in LAND, one row per NEW vision frame.
+    how the drone moved, only while ARMED in LAND or GUIDED, one row per NEW vision frame.
     -> the flight's folder: experiments/flights/<date>/<HH-MM-SS>_<codename>/
        flight_<HH-MM-SS>_<codename>_plnd.csv + _plnd_summary.txt
     (separate from the big flight csv on purpose; no flight being recorded -> <date>/plnd_<HH-MM-SS>.csv).
@@ -23,6 +23,7 @@ class PrecLandLogger:
     fc_* = Pixhawk velocity in the body frame (m/s), fc_h = EKF height, roll/pitch (deg)."""
 
     LAND = 9
+    GUIDED = 4      # also logged: POSITION HOLD (poshold) is judged with the same columns
     CLOSE_GRACE_S = 1.5
     HEADERS = ("t", "det", "id", "pad_ids", "h", "e_fwd", "e_right", "err", "lt_x", "lt_y", "lt_z", "age_ms",
                "fc_fwd", "fc_right", "fc_down", "fc_h", "flow_q", "roll", "pitch")
@@ -63,7 +64,7 @@ class PrecLandLogger:
             state = self.mode_source()
         except Exception:
             state = None
-        allowed = bool(state) and state[0] and state[1] == self.LAND
+        allowed = bool(state) and state[0] and state[1] in (self.LAND, self.GUIDED)
         with self._lock:
             if allowed:
                 self._left_since = None
