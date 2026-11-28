@@ -148,6 +148,7 @@ LAND_SPD_MS,0.2
 # battery low failsafe: warn only, do not switch mode (the pilot picks modes;
 # the critical failsafe BATT_FS_CRT_ACT is left as it is)
 BATT_FS_LOW_ACT,0
-# Lua scripting (2026-11-28): this Pixhawk 1 build has it; heap 44032 bytes by default.
-# Scripts go on the SD card in APM/scripts/ (src/interfaces/MAVLink/scripts/). Needs a reboot.
-SCR_ENABLE,1
+# Lua scripting: OFF. Tried 2026-11-28: with the default 44 KB heap the Pixhawk 1 reports
+# "PreArm: Scripting: out of memory" (blocks arming) and only ~35 KB RAM is free, so no script
+# fits. Landing control stays on the Pi (position targets) + ArduPilot PLND. Needs a reboot.
+SCR_ENABLE,0
