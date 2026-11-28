@@ -30,9 +30,14 @@ def hardware_target():
 def connect(uri: str, baud: int):
     master = mavutil.mavlink_connection(uri, baud=baud, source_system=255)
     print(f"waiting for heartbeat on {uri} ...")
-    hb = master.wait_heartbeat(timeout=10)
-    if hb is None:
-        sys.exit("no heartbeat: is uav-opl.service still running (port busy) or the cable loose?")
+    t_end = time.time() + 10
+    while True:   # the autopilot's heartbeat, not a sysid-0 / GCS one (that left target 0 = broadcast)
+        hb = master.recv_match(type="HEARTBEAT", blocking=True, timeout=max(0.1, t_end - time.time()))
+        if hb is None:
+            sys.exit("no heartbeat: is uav-opl.service still running (port busy) or the cable loose?")
+        if hb.get_srcSystem() != 0 and hb.autopilot != mavutil.mavlink.MAV_AUTOPILOT_INVALID:
+            master.target_system, master.target_component = hb.get_srcSystem(), hb.get_srcComponent()
+            break
     print(f"connected: system {master.target_system}, component {master.target_component}")
     return master
 
